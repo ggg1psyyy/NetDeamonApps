@@ -1,0 +1,22 @@
+PVControl.DataLoggerConfig:
+  DBLocation: "apps/DataLogger/energy_history.db"
+  TemperatureOutsideEntity: sensor.temperature_outside
+  TemperatureInsideEntity: sensor.temperatur_wohnen
+  AtmoPressureEntity: sensor.pirateweather_pressure
+  TemperatureWarmwaterEntity: sensor.wp_warmwasser_temperatur
+  CloudCoverEntity: sensor.pirateweather_cloud_coverage
+  HumidityEntity: sensor.pirateweather_humidity
+  BatterySoCEntity: sensor.solax_battery_capacity
+  PVYieldEntity: sensor.solax_today_s_solar_energy
+  PriceEnergyImportEntity: sensor.epex_spot_data_net_price
+  PriceEnergyExportEntity: sensor.oemag_marktpreis
+  HouseEnergyEntity: sensor.house_energy_consumption_day
+  ImportEnergyEntity: sensor.solax_today_s_import_energy
+  ExportEnergyEntity: sensor.solax_today_s_export_energy
+  BatteryChargeEntity: sensor.solax_battery_input_energy_today
+  BatteryDischargeEntity: sensor.solax_battery_output_energy_today
+  CarChargeEntity: sensor.esp_ct8_daily_energy_carport
+  CarSoCEntity: sensor.ioniq_ev_ev_battery_level
+  # CarDischargeEntity: 
+  HeatPumpEnergyEntity: sensor.wp_daily_energy_total
+  WarmwaterEnergyEntity: sensor.ww_energy_consumption_day

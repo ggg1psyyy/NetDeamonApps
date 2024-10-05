@@ -1,0 +1,39 @@
+PVControl.PVConfig:
+  # config entries marked with '***' are required
+
+  # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 
+  # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
+  CurrentImportPriceEntity: sensor.epex_spot_data_net_price
+  # Net price of exported energy
+  CurrentExportPriceEntity: sensor.oemag_marktpreis
+  # *** current house load (W)
+  CurrentHouseLoadEntity: sensor.solax_house_load
+  # *** current PV production (W)
+  CurrentPVPowerEntity: sensor.solax_pv_power_total
+  # *** current Battery charge/discharge (W/-W)
+  CurrentBatteryPowerEntity: sensor.solax_battery_power_charge
+  InverterEfficiency: 0.95
+  # total PV production today (kWh)
+  TodayPVEnergyEntity: sensor.solax_today_s_solar_energy
+  # Total PV production forecast for today (kWH)
+  ForecastPVEnergyTodayEntities: 
+    - sensor.energy_production_today_3
+    - sensor.energy_production_today_4
+  # Total PV production forecast for tomorrow (kWH)
+  ForecastPVEnergyTomorrowEntities: 
+    - sensor.energy_production_tomorrow_3
+    - sensor.energy_production_tomorrow_4
+  # *** Current SoC of battery (%)
+  BatterySoCEntity: sensor.solax_battery_capacity
+  # Max Capacity of battery (Wh) from sensor
+  BatteryCapacityEntity: sensor.solax_bms_battery_capacity
+  # Max Capacity of battery (Wh) direct value (if both are used, sensor has priority, but one of these is required)
+  # BatteryCapacityValue: 11520
+  # Max Charge currrent of battery (A) from sensor
+  MaxBatteryChargeCurrentEntity: number.solax_battery_charge_max_current
+  # Max Charge currrent of battery (A) direct value (if both are used, sensor has priority)
+  MaxBatteryChargeCurrrentValue: 30
+  # Min SoC to keep (%) from sensor
+  MinBatterySoCEntity: sensor.solax_battery_actual_min_soc
+  # Min SoC to keep (%) direct value (if both are used, sensor has priority)
+  #MinBatterySoCValue: 10
