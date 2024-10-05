@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+
+      {
+        "type": "coreclr",
+        "request": "launch",
+        "name": "Launch Program",
+        "program": "${workspaceFolder}/bin/Debug/net8.0/NetDeamonApps.dll",
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}/bin/Debug/net8.0/",
+        "env": {
+        "DOTNET_ENVIRONMENT": "Development" // Set the DOTNET_ENVIRONMENT variable here
+        }
+      }
+    ]
+  }
