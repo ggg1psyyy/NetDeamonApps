@@ -151,6 +151,24 @@ namespace PVControl
       }
       return list1.OrderBy(o => o.Key).ToDictionary();
     }
+    public static KeyValuePair<DateTime, int> FirstMinOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
+    {
+      var tempList = list;
+      if (start != default)
+        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
+      if (end != default)
+        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
+      return tempList.Where(l => l.Value == tempList.Min(t => t.Value)).FirstOrDefault();
+    }
+    public static KeyValuePair<DateTime, int> FirstMaxOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
+    {
+      var tempList = list;
+      if (start != default)
+        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
+      if (end != default)
+        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
+      return tempList.Where(l => l.Value == tempList.Max(t => t.Value)).FirstOrDefault();
+    }
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
   {

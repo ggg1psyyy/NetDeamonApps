@@ -14,6 +14,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
 using System.Collections;
+using LinqToDB.Mapping;
 
 namespace PVControl
 {
@@ -55,13 +56,16 @@ namespace PVControl
       _config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentImportPriceEntity));
       _config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentBatteryPowerEntity));
       PreferredMinBatterySoC = 30;
-      OverrideMinBattterySoC = false;
+      EnforcePreferredSoC = false;
       _energyUsagePerHourCache = [];
       _energyUsagePerWeekDayCache = [];
       _energyUsagePerDayOfYearCache = [];
       _priceListCache = [];
     }
-    public bool OverrideMinBattterySoC {  get; set; }
+    /// <summary>
+    /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
+    /// </summary>
+    public bool EnforcePreferredSoC {  get; set; }
     public int PreferredMinBatterySoC { get; set; }
 #pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
     private async Task UserStateChanged(Entity entity)
@@ -89,7 +93,9 @@ namespace PVControl
 
         else if (
           NeedToChargeFromExternal.Item1
+          // stay 2 minutes away from extremes, to make sure we have the same time as the provider
           && DateTime.Now > BestChargeTime.StartTime.AddMinutes(2) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-2)
+          // don't charge over 98% SoC as it get's really slow and inefficient
           && BatterySoc <= 98
           )
         {
@@ -107,30 +113,65 @@ namespace PVControl
     /// <summary>
     /// returns:
     /// * Do we need to charge until NextRelevantPVEnergy
-    /// * When do we reach minima
+    /// * When do we reach minimal Soc
     /// * what's the estimated SoC at this time
     /// </summary>
     public Tuple<bool, DateTime, int> NeedToChargeFromExternal
     {
       get
       {
+        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+        int setMinCharge = PreferredMinimalSoC;
+        DateTime now = DateTime.Now;
+
+        if (!EnforcePreferredSoC && PreferredMinimalSoC > AbsoluteMinimalSoC)
+        {
+          var prefMinSoC = estSoC.Where(e => e.Key >= now && e.Key < PriceList.Last().EndTime && e.Value <= PreferredMinimalSoC).FirstOrDefault();
+          // if we reach PreferredMinimalSoC we need to search for cheaper price windows, but never go under AbsoluteMinimalSoC
+          if (prefMinSoC.Key != default)
+          {
+            // get the first time we reach a minimum > AbsoluteMinimum
+            var socAfterPrefMinSoc = estSoC.Where(x => x.Key > prefMinSoC.Key && x.Key < PriceList.Last().EndTime);
+            var minSocAfterPref = prefMinSoC;
+            foreach (var s in socAfterPrefMinSoc)
+            {
+              if (s.Value <= minSocAfterPref.Value && s.Value < PreferredMinimalSoC && s.Value > AbsoluteMinimalSoC)
+                minSocAfterPref = s;
+              else
+                break;
+            }
+            // check if we reach 100% after via PV, if so we ignore the preferred minima completely
+            var maxAfter = estSoC.FirstMaxOrDefault(start: minSocAfterPref.Key);
+            var minAfter = estSoC.FirstMinOrDefault(start: minSocAfterPref.Key);
+            // if we reach at least 95% SoC via PV charge and never go down to AbsoluteMinimalSoC we don't need to charge
+            bool noNeedToCharge = maxAfter.Value > 95 && minAfter.Value > AbsoluteMinimalSoC && minAfter.Key > maxAfter.Key;
+            // now see if there is a cheaper price window between Preferred and Absolute MinSoC
+            if (minSocAfterPref.Key != prefMinSoC.Key && !noNeedToCharge)
+            {
+              var cheapestPref = SortPriceListByCheapestPeriod(now, prefMinSoC.Key).Select(p => p.Price).First();
+              var cheapestAbs = SortPriceListByCheapestPeriod(prefMinSoC.Key, minSocAfterPref.Key).Select(p => p.Price).First();
+              // if there is a cheaper window we will allow to go down to the estimated minima
+              if (cheapestAbs < cheapestPref)
+                setMinCharge = Math.Max(AbsoluteMinimalSoC, minSocAfterPref.Value);
+            }
+          }
+        }
         // while charging increase minCharge and maxCharge to prevent hysteresis
-        int minCharge = _currentMode == InverterModes.force_charge ? MinimalConfiguredSoC + 1 : MinimalConfiguredSoC;
+        int minCharge = _currentMode == InverterModes.force_charge ? setMinCharge + 1 : setMinCharge;
         // we don't want to charge more if we reach 100% SoC with PV
         int maxCharge = _currentMode == InverterModes.force_charge ? 100 : 98;
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
         // we need to make it at least to the next PV charge without going under minCharge
         DateTime relevantTime = PriceList.Last().EndTime > FirstRelevantPVEnergyTomorrow ? PriceList.Last().EndTime : FirstRelevantPVEnergyTomorrow;
-        int min = estSoC.Where(n => n.Key > DateTime.Now && n.Key <= relevantTime).Min(n => n.Value);
+        int min = estSoC.Where(n => n.Key > now && n.Key <= relevantTime).Min(n => n.Value);
         // if we still have PV yield today, check what SoC we will reach, otherwise max can never be greater than current SoC
-        int max = DateTime.Now < LastRelevantPVEnergyToday ? estSoC.Where(n => n.Key > DateTime.Now && n.Key <= LastRelevantPVEnergyToday).Max(n => n.Value) : BatterySoc;
+        int max = now < LastRelevantPVEnergyToday ? estSoC.Where(n => n.Key > now && n.Key <= LastRelevantPVEnergyToday).Max(n => n.Value) : BatterySoc;
         // charge to Max if in absolut cheapest period when we never reach 100% SoC today or tomorrow with PV only and if we have at least 12h price preview
-        if (PriceList.Where(p => p.StartTime > DateTime.Now).Count() > 12)
-          if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > DateTime.Now).Min(p => p.Price) && max < 99 && estSoC.Where(e => e.Key.Date == DateTime.Now.Date.AddDays(1)).Max(e => e.Value) < 99)
+        if (PriceList.Where(p => p.StartTime > now).Count() > 12)
+          if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > now).Min(p => p.Price) && max < 99 && estSoC.Where(e => e.Key.Date == now.Date.AddDays(1)).Max(e => e.Value) < 99)
             minCharge = 100;
         // We need to force charge if we estimate to fall below minCharge and can't reach 100% before that
         bool needCharge = min < minCharge && max < maxCharge;
-        return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > DateTime.Now && n.Key <= relevantTime && n.Value == min).First().Key, min);
+        return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value == min).First().Key, min);
       }
     }
     /// <summary>
@@ -145,14 +186,20 @@ namespace PVControl
     }
     /// <summary>
     /// Minimal SoC of battery which may not be used normally
+    /// if override is active, we try not to go below, but allow if it's cheaper to wait, but we can never go under AbsoluteMinimalSoC (Inverter set limit)
     /// </summary>
-    public int MinimalConfiguredSoC
+    public int PreferredMinimalSoC
     {
       get
       {
-        if (OverrideMinBattterySoC) 
-          return PreferredMinBatterySoC;
-
+        // Override can never be lower than AbsoluteMinimalSoC
+        return EnforcePreferredSoC ? Math.Max(PreferredMinBatterySoC, AbsoluteMinimalSoC): AbsoluteMinimalSoC;
+      }
+    }
+    public int AbsoluteMinimalSoC
+    {
+      get
+      {
         int minAllowedSoC = _config.MinBatterySoCValue ?? 0;
         if (_config.MinBatterySoCEntity is not null && _config.MinBatterySoCEntity.TryGetStateValue<int>(out int minSoc))
           minAllowedSoC = minSoc;
@@ -218,53 +265,6 @@ namespace PVControl
         return GetPVForecastForPeriod(DateTime.Now, DateTime.Now.Date.AddHours(23).AddMinutes(59).AddSeconds(59));
       }
     }
-    /// <summary>
-    /// Estimated SoC of battery at end of relevant PV Yield
-    /// </summary>
-    public int EstimatedSoCAtLastRelevantPVChargeToday
-    {
-      get
-      {
-        int soc = CalculateBatterySoCAtEnergy(EstimateBatteryEnergyAtTime(LastRelevantPVEnergyToday));
-        return Math.Min(soc, 100);
-      }
-    }
-    public int EstimatedEnergyAvailableAtLastRelevantPVChargeToday
-    {
-      get
-      {
-        return EstimateBatteryEnergyAtTime(LastRelevantPVEnergyToday);
-      }
-    }
-    public int EstimatedSoCAtLastRelevantPVChargeTomorrow
-    {
-      get
-      {
-        int soc = CalculateBatterySoCAtEnergy(EstimatedEnergyAvailableAtLastRelevantPVChargeTomorrow);
-        return Math.Min(soc, 100);
-      }
-    }
-    public int EstimatedEnergyAvailableAtLastRelevantPVChargeTomorrow
-    {
-      get
-      {
-        return EstimateBatteryEnergyAtTime(LastRelevantPVEnergyTomorrow);
-      }
-    }
-    public int EstimatedEnergyRemainingAtFirstRelevantPVCharge
-    {
-      get
-      {
-        return EstimateBatteryEnergyAtTime(FirstRelevantPVEnergyToday);
-      }
-    }
-    public int EstimatedEnergyRemainingAtFirstRelevantPVChargeTomorrow
-    {
-      get
-      {
-        return EstimateBatteryEnergyAtTime(FirstRelevantPVEnergyTomorrow);
-      }
-    }
     public float CurrentEnergyImportPrice
     {
       get
@@ -280,7 +280,7 @@ namespace PVControl
       }
     }
     /// <summary>
-    /// Currently usable energy in battery (only down to <see cref="HouseEnergy.MinimalConfiguredSoC"/>) in Wh
+    /// Currently usable energy in battery (only down to <see cref="HouseEnergy.PreferredMinimalSoC"/>) in Wh
     /// </summary>
     public int UsableBatteryEnergy
     {
@@ -293,7 +293,7 @@ namespace PVControl
     {
       get
       {
-        return CalculateBatteryEnergyAtSoC(MinimalConfiguredSoC,0);
+        return CalculateBatteryEnergyAtSoC(PreferredMinimalSoC,0);
       }
     }
     public int EstimateBatteryEnergyAtTime(DateTime time)
@@ -341,7 +341,7 @@ namespace PVControl
         else if (AverageBatteryChargeDischargePower > 0)
           return (int)CalculateChargingDurationWh(BatterySoc, 100, AverageBatteryChargeDischargePower);
         else if (AverageBatteryChargeDischargePower < 0)
-          return (int)CalculateChargingDurationWh(BatterySoc, MinimalConfiguredSoC, AverageBatteryChargeDischargePower);
+          return (int)CalculateChargingDurationWh(BatterySoc, PreferredMinimalSoC, AverageBatteryChargeDischargePower);
         else
           return 0;
       }
@@ -491,7 +491,7 @@ namespace PVControl
     public int CalculateBatteryEnergyAtSoC(int soc, int minSoC = -1)
     {
       float s = (float)soc / 100;
-      float ms = minSoC < 0 ? (float)MinimalConfiguredSoC / 100 : (float)minSoC / 100;
+      float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
       float e = ((float)BatteryCapacity * s - (float)BatteryCapacity * ms);// * InverterEfficiency;
       return (int) e;
     }
@@ -501,7 +501,7 @@ namespace PVControl
     }
     private int CalculateSoCNeededForEnergy(int energy, int minSoC = -1)
     {
-      float ms = minSoC < 0 ? (float)MinimalConfiguredSoC / 100 : (float)minSoC / 100;
+      float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
       int socNeeded = (int)(((float)energy / ((float)BatteryCapacity * InverterEfficiency) + ms) * 100);
       return socNeeded;
     }
@@ -510,7 +510,10 @@ namespace PVControl
       if (hours == 0)
         hours = 1;
 
-      var prices = PriceList.Where(p => p.EndTime > start &&  p.EndTime <= end);
+      if (start.Hour == end.Hour)
+        return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
+
+      var prices = PriceList.Where(p => p.EndTime >= start &&  p.EndTime <= end);
       List<EpexPriceTableEntry> result = [];
 
       if (hours <= 0 || hours > prices.Count())

@@ -71,7 +71,7 @@ namespace PVControl
     private Entity _info_EstimatedMinSoCTodayEntity;
     private Entity _info_EstimatedMinSoCTomorrowEntity;
     private Entity _prefBatterySoCEntity;
-    private Entity _overrideMinBatterySoc;
+    private Entity _enforcePreferredSocEntity;
     private Entity _info_chargeTodayEntity;
     private Entity _info_dischargeTodayEntity;
     private Entity _info_chargeTomorrowEntity;
@@ -96,19 +96,14 @@ namespace PVControl
         throw new Exception("Error initializing configuration");
 
       _house = new HouseEnergy(_config);
-#if DEBUG
-      //_house.OverrideMinBattterySoC = true;
-      //_house.PreferredMinBatterySoC = 90;
-      var X = _house.CurrentEnergyImportPrice;
-      var Y = _house.NeedToChargeFromExternal;
-#endif
+
       _modeEntity = new Entity(_context, "sensor.pv_control_mode");
       _battery_StatusEntity = new Entity(_context, "sensor.pv_control_battery_status");
       _battery_RemainingTimeEntity = new Entity(_context, "sensor.pv_control_battery_remainingtime");
       _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
       _needToChargeFromGridTodayEntity = new Entity(_context, "binary_sensor.pv_control_need_to_charge_from_grid_today");
       _prefBatterySoCEntity = new Entity(_context, "input_number.pv_control_preferredbatterycharge");
-      _overrideMinBatterySoc = new Entity(_context, "input_boolean.pv_control_overrideminimumsoc");
+      _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforcepreferredsoc");
       _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
       _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
       _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
@@ -118,6 +113,14 @@ namespace PVControl
       _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
       _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
 
+#if DEBUG
+      _house.EnforcePreferredSoC = true;
+      _house.PreferredMinBatterySoC = 60;
+      var X = _house.CurrentEnergyImportPrice;
+      var Y = _house.NeedToChargeFromExternal;
+      var Z = _house.BestChargeTime;
+#endif
+
       _logger.LogInformation("Finished PVControl constructor");
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
@@ -126,9 +129,9 @@ namespace PVControl
       if (await RegisterSensors(cancellationToken))
       {
         _prefBatterySoCEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_prefBatterySoCEntity));
-        _overrideMinBatterySoc?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_overrideMinBatterySoc));
+        _enforcePreferredSocEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_enforcePreferredSocEntity));
         await UserStateChanged(_prefBatterySoCEntity);
-        await UserStateChanged(_overrideMinBatterySoc);
+        await UserStateChanged(_enforcePreferredSocEntity);
 #if DEBUG
         await ScheduledOperations();
         //_scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
@@ -153,9 +156,9 @@ namespace PVControl
         if (entity.TryGetStateValue<int>(out int value))
           _house.PreferredMinBatterySoC = value;
       }
-      if (entity.EntityId == _overrideMinBatterySoc.EntityId && entity.State is not null)
+      if (entity.EntityId == _enforcePreferredSocEntity.EntityId && entity.State is not null)
       {
-        _house.OverrideMinBattterySoC = entity.IsOn();
+        _house.EnforcePreferredSoC = entity.IsOn();
       }
     }
     private async Task ScheduledOperations()
@@ -195,7 +198,7 @@ namespace PVControl
       await _entityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingEnergy = new
       {
-        min_allowed_SoC = _house.MinimalConfiguredSoC.ToString() + "%",
+        min_allowed_SoC = _house.PreferredMinimalSoC.ToString() + "%",
         remaining_energy_at_min_battery_soc = _house.ReserveBatteryEnergy.ToString(CultureInfo.InvariantCulture) + " Wh",
         remaining_energy_to_zero_soc = _house.CalculateBatteryEnergyAtSoC(_house.BatterySoc, 0).ToString(CultureInfo.InvariantCulture) + " Wh",
         battery_capacity = _house.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
@@ -206,7 +209,7 @@ namespace PVControl
       await _entityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
       var attr_Charge = new
       {
-        minimal_SoC_allowed = _house.MinimalConfiguredSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        minimal_SoC_allowed = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
         minimal_estimated_SoC = needToCharge.Item3.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = needToCharge.Item2.ToISO8601(),
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
@@ -343,15 +346,16 @@ namespace PVControl
       {
         var identifiers = new[] { "pv_control" };
         var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.1 };
-
-        if (_overrideMinBatterySoc?.State is null)
+        //await _connection.DeleteInputBooleanHelperAsync("pv_control_enforcepreferredsoc", cancellationToken);
+        if (_enforcePreferredSocEntity?.State is null)
         {
           await _connection.CreateInputBooleanHelperAsync(
-            name: "PV_Control OverrideMinimumSoC",
+            name: "PV_Control Enforce Preferred SoC",
             cancelToken: cancellationToken
             );
-          _overrideMinBatterySoc = new Entity(_context, "input_boolean.pv_control_overrideminimumsoc");
+          _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforcepreferredsoc");
         }
+        //await _connection.DeleteInputNumberHelperAsync("pv_control_preferredbatterycharge", cancellationToken);
         if (_prefBatterySoCEntity?.State is null)
         {
           await _connection.CreateInputNumberHelperAsync(
@@ -366,7 +370,6 @@ namespace PVControl
             );
           _prefBatterySoCEntity = new Entity(_context, "input_number.pv_control_preferredbatterycharge");
         }
-        //await _connection.DeleteInputNumberHelperAsync("pv_control_preferredbatterycharge", cancellationToken);
         if (_modeEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_mode", new EntityCreationOptions
