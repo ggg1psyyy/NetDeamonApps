@@ -103,7 +103,7 @@ namespace PVControl
       _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
       _needToChargeFromGridTodayEntity = new Entity(_context, "binary_sensor.pv_control_need_to_charge_from_grid_today");
       _prefBatterySoCEntity = new Entity(_context, "input_number.pv_control_preferredbatterycharge");
-      _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforcepreferredsoc");
+      _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforce_preferred_soc");
       _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
       _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
       _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
@@ -115,7 +115,7 @@ namespace PVControl
 
 #if DEBUG
       _house.EnforcePreferredSoC = true;
-      _house.PreferredMinBatterySoC = 60;
+      _house.PreferredMinBatterySoC = 70;
       var X = _house.CurrentEnergyImportPrice;
       var Y = _house.NeedToChargeFromExternal;
       var Z = _house.BestChargeTime;
@@ -209,7 +209,8 @@ namespace PVControl
       await _entityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
       var attr_Charge = new
       {
-        minimal_SoC_allowed = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        minimal_SoC_allowed = _house.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        preferred_SoC = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
         minimal_estimated_SoC = needToCharge.Item3.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = needToCharge.Item2.ToISO8601(),
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",

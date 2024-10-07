@@ -140,7 +140,6 @@ namespace PVControl
               else
                 break;
             }
-            // check if we reach 100% after via PV, if so we ignore the preferred minima completely
             var maxAfter = estSoC.FirstMaxOrDefault(start: minSocAfterPref.Key);
             var minAfter = estSoC.FirstMinOrDefault(start: minSocAfterPref.Key);
             // if we reach at least 95% SoC via PV charge and never go down to AbsoluteMinimalSoC we don't need to charge
@@ -192,8 +191,8 @@ namespace PVControl
     {
       get
       {
-        // Override can never be lower than AbsoluteMinimalSoC
-        return EnforcePreferredSoC ? Math.Max(PreferredMinBatterySoC, AbsoluteMinimalSoC): AbsoluteMinimalSoC;
+        // Preferred can never be lower than AbsoluteMinimalSoC
+        return Math.Max(PreferredMinBatterySoC, AbsoluteMinimalSoC);
       }
     }
     public int AbsoluteMinimalSoC
