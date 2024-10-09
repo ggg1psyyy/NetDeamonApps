@@ -72,6 +72,9 @@ namespace PVControl
     private Entity _info_EstimatedMinSoCTomorrowEntity;
     private Entity _prefBatterySoCEntity;
     private Entity _enforcePreferredSocEntity;
+    private Entity _forceChargeEntity;
+    private Entity _forceChargeTargetSoCEntity;
+    private Entity _forceChargeMaxPriceEntity;
     private Entity _info_chargeTodayEntity;
     private Entity _info_dischargeTodayEntity;
     private Entity _info_chargeTomorrowEntity;
@@ -112,10 +115,16 @@ namespace PVControl
       _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
       _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
       _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
+      _forceChargeEntity = new Entity(_context, "input_boolean.pv_control_force_charge_at_cheapest_period");
+      _forceChargeMaxPriceEntity = new Entity(_context, "input_number.pv_control_max_price_for_forcecharge");
+      _forceChargeTargetSoCEntity = new Entity(_context, "input_number.pv_control_forcecharge_target_soc");
 
 #if DEBUG
       _house.EnforcePreferredSoC = true;
       _house.PreferredMinBatterySoC = 70;
+      _house.ForceCharge = true;
+      _house.ForceChargeMaxPrice = 2;
+      _house.ForceChargeTargetSoC = 90;
       var X = _house.CurrentEnergyImportPrice;
       var Y = _house.NeedToChargeFromExternal;
       var Z = _house.BestChargeTime;
@@ -130,8 +139,14 @@ namespace PVControl
       {
         _prefBatterySoCEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_prefBatterySoCEntity));
         _enforcePreferredSocEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_enforcePreferredSocEntity));
+        _forceChargeEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeEntity));
+        _forceChargeMaxPriceEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeMaxPriceEntity));
+        _forceChargeTargetSoCEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeTargetSoCEntity));
         await UserStateChanged(_prefBatterySoCEntity);
         await UserStateChanged(_enforcePreferredSocEntity);
+        await UserStateChanged(_forceChargeEntity);
+        await UserStateChanged(_forceChargeMaxPriceEntity);
+        await UserStateChanged(_forceChargeTargetSoCEntity);
 #if DEBUG
         await ScheduledOperations();
         //_scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
@@ -159,6 +174,20 @@ namespace PVControl
       if (entity.EntityId == _enforcePreferredSocEntity.EntityId && entity.State is not null)
       {
         _house.EnforcePreferredSoC = entity.IsOn();
+      }
+      if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
+      {
+        _house.ForceCharge = entity.IsOn();
+      }
+      if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
+      {
+        if (entity.TryGetStateValue<int>(out int value))
+          _house.ForceChargeMaxPrice = value;
+      }
+      if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
+      {
+        if (entity.TryGetStateValue<int>(out int value))
+          _house.ForceChargeTargetSoC = value;
       }
     }
     private async Task ScheduledOperations()
@@ -347,7 +376,44 @@ namespace PVControl
       {
         var identifiers = new[] { "pv_control" };
         var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.1 };
+        // pv_control_force_charge_at_cheapest_period
         //await _connection.DeleteInputBooleanHelperAsync("pv_control_enforcepreferredsoc", cancellationToken);
+        if (_forceChargeEntity?.State is null)
+        {
+          await _connection.CreateInputBooleanHelperAsync(
+            name: "PV_Control Force charge at cheapest period",
+            cancelToken: cancellationToken
+            );
+          _forceChargeEntity = new Entity(_context, "input_boolean.pv_control_force_charge_at_cheapest_period");
+        }
+        if (_forceChargeMaxPriceEntity?.State is null)
+        {
+          await _connection.CreateInputNumberHelperAsync(
+            name: "PV_Control Max price for forcecharge",
+            min: 0,
+            max: 25,
+            step: 1,
+            initial: 0,
+            unitOfMeasurement: "ct",
+            mode: "slider",
+            cancelToken: cancellationToken
+            );
+          _forceChargeMaxPriceEntity = new Entity(_context, "input_number.pv_control_max_price_for_forcecharge");
+        }
+        if (_forceChargeTargetSoCEntity?.State is null)
+        {
+          await _connection.CreateInputNumberHelperAsync(
+            name: "PV_Control Forcecharge target SoC",
+            min: 0,
+            max: 95,
+            step: 5,
+            initial: 50,
+            unitOfMeasurement: "%",
+            mode: "slider",
+            cancelToken: cancellationToken
+            );
+          _forceChargeTargetSoCEntity = new Entity(_context, "input_number.pv_control_forcecharge_target_soc");
+        }
         if (_enforcePreferredSocEntity?.State is null)
         {
           await _connection.CreateInputBooleanHelperAsync(
@@ -356,7 +422,7 @@ namespace PVControl
             );
           _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforcepreferredsoc");
         }
-        //await _connection.DeleteInputNumberHelperAsync("pv_control_preferredbatterycharge", cancellationToken);
+        //await _connection.DeleteInputNumberHelperAsync("pv_control_max_price_for_forcecharge", cancellationToken);
         if (_prefBatterySoCEntity?.State is null)
         {
           await _connection.CreateInputNumberHelperAsync(

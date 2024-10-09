@@ -67,6 +67,9 @@ namespace PVControl
     /// </summary>
     public bool EnforcePreferredSoC {  get; set; }
     public int PreferredMinBatterySoC { get; set; }
+    public bool ForceCharge {  get; set; }
+    public int ForceChargeMaxPrice { get; set; }
+    public int ForceChargeTargetSoC { get; set; }
 #pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
     private async Task UserStateChanged(Entity entity)
 #pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
@@ -120,10 +123,22 @@ namespace PVControl
     {
       get
       {
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
-        int setMinCharge = PreferredMinimalSoC;
         DateTime now = DateTime.Now;
 
+        // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
+        var cheapestHourToday = SortPriceListByCheapestPeriod(now.Date, now.Date.AddDays(1)).First();
+        // ForceCharge is only allowed to max. 95%
+        ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
+        // hysteresis prevention
+        int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC+2 : ForceChargeTargetSoC;
+        if (ForceCharge && BatterySoc < forceChargeTo && cheapestHourToday.Price < ForceChargeMaxPrice && now > cheapestHourToday.StartTime && now < cheapestHourToday.EndTime)
+        {
+          return new Tuple<bool, DateTime, int>(true, now, BatterySoc);
+        }
+
+        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+        int setMinCharge = PreferredMinimalSoC;
+        
         if (!EnforcePreferredSoC && PreferredMinimalSoC > AbsoluteMinimalSoC)
         {
           var prefMinSoC = estSoC.Where(e => e.Key >= now && e.Key < PriceList.Last().EndTime && e.Value <= PreferredMinimalSoC).FirstOrDefault();
@@ -509,7 +524,7 @@ namespace PVControl
       if (hours == 0)
         hours = 1;
 
-      if (start.Hour == end.Hour)
+      if (start.Hour == end.Hour && start.Date == end.Date)
         return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
 
       var prices = PriceList.Where(p => p.EndTime >= start &&  p.EndTime <= end);
