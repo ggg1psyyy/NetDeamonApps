@@ -1,25 +1,13 @@
-﻿using Microsoft.AspNetCore.Mvc.Formatters;
-using Microsoft.Extensions.Options;
-using NetDaemon.Client;
+﻿using NetDaemon.Client;
 using NetDaemon.Client.HomeAssistant.Extensions;
 using NetDaemon.Extensions.MqttEntityManager;
-using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
-using NetDaemon.HassModel.Integration;
-using PVControl;
-using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reactive.Concurrency;
-using System.Reflection;
-using System.Runtime.Intrinsics.Arm;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Transactions;
 
 //#pragma warning disable CS1998
 namespace PVControl

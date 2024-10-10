@@ -1,20 +1,10 @@
 ﻿using LinqToDB;
-using NetDaemon.AppModel;
 using NetDaemon.HassModel.Entities;
-using PVControl;
-using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Hosting;
-using System.Collections;
-using LinqToDB.Mapping;
 
 namespace PVControl
 {
