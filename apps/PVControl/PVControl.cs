@@ -1,6 +1,7 @@
 ﻿using NetDaemon.Client;
 using NetDaemon.Client.HomeAssistant.Extensions;
 using NetDaemon.Extensions.MqttEntityManager;
+using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Globalization;
@@ -137,7 +138,7 @@ namespace PVControl
         await UserStateChanged(_forceChargeTargetSoCEntity);
 #if DEBUG
         await ScheduledOperations();
-        //_scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
+        //_scheduler.ScheduleCron("*/1 * * * *", async () => await ScheduledOperations(), false);
 #else
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
@@ -191,6 +192,7 @@ namespace PVControl
         next_charge_window_start = nextCheapest.StartTime.ToISO8601(),
         next_charge_window_end = nextCheapest.EndTime.ToISO8601(),
         price = nextCheapest.Price.ToString(CultureInfo.InvariantCulture),
+        charge_Reason = _house.ForceChargeReason.ToString(),
       };
       await _entityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
 

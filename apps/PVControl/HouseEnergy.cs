@@ -32,6 +32,13 @@ namespace PVControl
       discharging,
       unknown,
     }
+    public enum ForceChargeReasons
+    {
+      None,
+      GoingUnderPreferredMinima,
+      ForcedChargeAtMinimumPrice,
+      ImportPriceUnderExportPrice,
+    }
     private readonly PVConfig _config;
     private readonly FixedSizeQueue<int> _battChargeFIFO;
     /// <summary>
@@ -78,9 +85,10 @@ namespace PVControl
     {
       get
       {
-        if (CurrentEnergyImportPrice < CurrentEnergyExportPrice * -1)
+        if (CurrentEnergyImportPrice < CurrentEnergyExportPrice * -1 && CurrentEnergyImportPrice < 0)
         {
           _currentMode = InverterModes.grid_only;
+          ForceChargeReason = ForceChargeReasons.ImportPriceUnderExportPrice;
           return InverterModes.grid_only;
         }
 
@@ -98,6 +106,7 @@ namespace PVControl
 
         else
         {
+          ForceChargeReason = ForceChargeReasons.None;
           _currentMode = InverterModes.normal;
           return InverterModes.normal;
         }
@@ -119,10 +128,12 @@ namespace PVControl
         var cheapestHourToday = SortPriceListByCheapestPeriod(now.Date, now.Date.AddDays(1)).First();
         // ForceCharge is only allowed to max. 95%
         ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
+        ForceChargeReason = ForceChargeReasons.None;
         // hysteresis prevention
         int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC+2 : ForceChargeTargetSoC;
         if (ForceCharge && BatterySoc < forceChargeTo && cheapestHourToday.Price < ForceChargeMaxPrice && now > cheapestHourToday.StartTime && now < cheapestHourToday.EndTime)
         {
+          ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
           return new Tuple<bool, DateTime, int>(true, now, BatterySoc);
         }
 
@@ -175,9 +186,12 @@ namespace PVControl
             minCharge = 100;
         // We need to force charge if we estimate to fall below minCharge and can't reach 100% before that
         bool needCharge = min < minCharge && max < maxCharge;
+        if (needCharge)
+          ForceChargeReason = ForceChargeReasons.GoingUnderPreferredMinima;
         return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value == min).First().Key, min);
       }
     }
+    public ForceChargeReasons ForceChargeReason { get; private set; }
     /// <summary>
     /// Current State of Charge of the house battery in %
     /// </summary>
