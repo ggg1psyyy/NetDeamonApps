@@ -434,22 +434,22 @@ namespace PVControl
         return _energyUsagePerHourCache;
       }
     }
-    private Dictionary<int, int> DayOfWeekAverageEnergyUsage
-    {
-      get
-      {
-        UpdateCaches();
-        return _energyUsagePerWeekDayCache;
-      }
-    }
-    private Dictionary<int, int> DayOfYearAverageEnergyUsage
-    {
-      get
-      {
-        UpdateCaches();
-        return _energyUsagePerDayOfYearCache;
-      }
-    }
+    //private Dictionary<int, int> DayOfWeekAverageEnergyUsage
+    //{
+    //  get
+    //  {
+    //    UpdateCaches();
+    //    return _energyUsagePerWeekDayCache;
+    //  }
+    //}
+    //private Dictionary<int, int> DayOfYearAverageEnergyUsage
+    //{
+    //  get
+    //  {
+    //    UpdateCaches();
+    //    return _energyUsagePerDayOfYearCache;
+    //  }
+    //}
     #region Caches for DB Access
     public void UpdateCaches()
     {
@@ -522,12 +522,12 @@ namespace PVControl
     {
       return (int)(energy * 100 / BatteryCapacity);
     }
-    private int CalculateSoCNeededForEnergy(int energy, int minSoC = -1)
-    {
-      float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
-      int socNeeded = (int)(((float)energy / ((float)BatteryCapacity * InverterEfficiency) + ms) * 100);
-      return socNeeded;
-    }
+    //private int CalculateSoCNeededForEnergy(int energy, int minSoC = -1)
+    //{
+    //  float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
+    //  int socNeeded = (int)(((float)energy / ((float)BatteryCapacity * InverterEfficiency) + ms) * 100);
+    //  return socNeeded;
+    //}
     private List<EpexPriceTableEntry> SortPriceListByCheapestPeriod(DateTime start, DateTime end, int hours=1)
     {
       if (hours == 0)
@@ -690,7 +690,7 @@ namespace PVControl
       DateTime now = DateTime.Now;
       float scaling = 20.0f;
       var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new { Date = h.Timestamp, Value = h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / scaling) }).ToList();
-      float weightedSum = weights.Sum(w => (float)w.Value * w.Weight);
+      float weightedSum = weights.Sum(w => w.Value is null ? 0 : (float)w.Value * w.Weight);
       float sumOfWeights = weights.Sum(w => w.Weight);
       float weightedAverage = weightedSum / sumOfWeights;
       return (int)Math.Round(weightedAverage, 0);

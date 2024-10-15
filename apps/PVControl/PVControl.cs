@@ -45,8 +45,6 @@ namespace PVControl
     private readonly ILogger<PVControl> _logger;
     private readonly PVConfig _config;
     private readonly IScheduler _scheduler;
-    private readonly IHomeAssistantConnection _connection;
-    private readonly IHomeAssistantApiManager _apiManager;
     
     private readonly HouseEnergy _house;
     #region Created Entities
@@ -71,7 +69,7 @@ namespace PVControl
     private Entity _overrideModeEntity;
     #endregion
 
-    public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger, IHomeAssistantConnection connection, IHomeAssistantApiManager apiManager)
+    public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
       _context = ha;
@@ -79,8 +77,6 @@ namespace PVControl
       _logger = logger;
       _config = config.Value;
       _scheduler = scheduler;
-      _connection = connection;
-      _apiManager = apiManager;
       
       if (String.IsNullOrWhiteSpace(_config.DBLocation))
         _config.DBLocation = "apps/DataLogger/energy_history.db";
@@ -95,8 +91,8 @@ namespace PVControl
       _battery_RemainingTimeEntity = new Entity(_context, "sensor.pv_control_battery_remainingtime");
       _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
       _needToChargeFromGridTodayEntity = new Entity(_context, "binary_sensor.pv_control_need_to_charge_from_grid_today");
-      _prefBatterySoCEntity = new Entity(_context, "input_number.pv_control_preferredbatterycharge");
-      _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforce_preferred_soc");
+      _prefBatterySoCEntity = new Entity(_context, "number.pv_control_preferredbatterycharge");
+      _enforcePreferredSocEntity = new Entity(_context, "switch.pv_control_enforce_preferred_soc");
       _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
       _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
       _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
@@ -105,9 +101,9 @@ namespace PVControl
       _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
       _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
       _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
-      _forceChargeEntity = new Entity(_context, "input_boolean.pv_control_force_charge_at_cheapest_period");
-      _forceChargeMaxPriceEntity = new Entity(_context, "input_number.pv_control_max_price_for_forcecharge");
-      _forceChargeTargetSoCEntity = new Entity(_context, "input_number.pv_control_forcecharge_target_soc");
+      _forceChargeEntity = new Entity(_context, "switch.pv_control_force_charge_at_cheapest_period");
+      _forceChargeMaxPriceEntity = new Entity(_context, "number.pv_control_max_price_for_forcecharge");
+      _forceChargeTargetSoCEntity = new Entity(_context, "number.pv_control_forcecharge_target_soc");
       _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
 
 #if DEBUG
@@ -126,23 +122,29 @@ namespace PVControl
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
       //await _entityManager.RemoveAsync("sensor.car_charger_battery");
-      if (await RegisterSensors(cancellationToken))
+      if (await RegisterSensors())
       {
-        _prefBatterySoCEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_prefBatterySoCEntity));
-        _enforcePreferredSocEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_enforcePreferredSocEntity));
-        _forceChargeEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeEntity));
-        _forceChargeMaxPriceEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeMaxPriceEntity));
-        _forceChargeTargetSoCEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_forceChargeTargetSoCEntity));
+        (await _entityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
+        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
+        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
+        (await _entityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
+        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
         (await _entityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
-        await UserStateChanged(_prefBatterySoCEntity);
-        await UserStateChanged(_enforcePreferredSocEntity);
-        await UserStateChanged(_forceChargeEntity);
-        await UserStateChanged(_forceChargeMaxPriceEntity);
-        await UserStateChanged(_forceChargeTargetSoCEntity);
-        //await UserStateChanged(_overrideModeEntity);
+
+        if (_prefBatterySoCEntity.State != null)
+          await UserStateChanged(_enforcePreferredSocEntity, _prefBatterySoCEntity.State);
+        if (_forceChargeMaxPriceEntity.State != null)
+          await UserStateChanged(_forceChargeMaxPriceEntity, _forceChargeMaxPriceEntity.State);
+        if (_forceChargeTargetSoCEntity.State != null)
+          await UserStateChanged(_forceChargeTargetSoCEntity, _forceChargeTargetSoCEntity.State);
+        if (_enforcePreferredSocEntity.State != null)
+          await UserStateChanged(_enforcePreferredSocEntity, _enforcePreferredSocEntity.State);
+        if (_forceChargeEntity.State != null)
+          await UserStateChanged(_forceChargeEntity, _forceChargeEntity.State);
+        if (_overrideModeEntity.State != null)
+          await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 #if DEBUG
-        await ScheduledOperations();
-        //_scheduler.ScheduleCron("*/1 * * * *", async () => await ScheduledOperations(), false);
+        _scheduler.ScheduleCron("0 */1 * * *", async () => await ScheduledOperations(), false);
 #else
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
@@ -152,52 +154,46 @@ namespace PVControl
         _logger.LogError("Error registering sensors");
       }
     }
-#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
-    private async Task UserStateChanged(Entity? entity, String newState = "")
-#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
+    private async Task UserStateChanged(Entity? entity, String newState)
     {
       if (entity == null)
         return;
 
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
-        if (entity.State == "unknown" &&  (String.IsNullOrEmpty(newState) || newState == "unknown"))
-        {
-          await _entityManager.SetStateAsync(entity.EntityId, HouseEnergy.InverterModes.automatic.ToString());
-        }
         if (Enum.TryParse(newState, out HouseEnergy.InverterModes modeselect))
-        {
           _house.OverrideMode = modeselect;
-          await _entityManager.SetStateAsync(entity.EntityId, modeselect.ToString());
-        }
         else
-        {
           _house.OverrideMode = HouseEnergy.InverterModes.automatic;
-          await _entityManager.SetStateAsync(entity.EntityId, HouseEnergy.InverterModes.automatic.ToString());
-        }
+        await _entityManager.SetStateAsync(entity.EntityId, _house.OverrideMode.ToString());
       }
       if (entity.EntityId == _prefBatterySoCEntity.EntityId)
       {
-        if (entity.TryGetStateValue<int>(out int value))
+        if (int.TryParse(newState, out int value))
           _house.PreferredMinBatterySoC = value;
+        await _entityManager.SetStateAsync(entity.EntityId, _house.PreferredMinBatterySoC.ToString());
       }
       if (entity.EntityId == _enforcePreferredSocEntity.EntityId && entity.State is not null)
       {
-        _house.EnforcePreferredSoC = entity.IsOn();
+        _house.EnforcePreferredSoC = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        await _entityManager.SetStateAsync(entity.EntityId, _house.EnforcePreferredSoC ? "ON" : "OFF");
       }
       if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
       {
-        _house.ForceCharge = entity.IsOn();
+        _house.ForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceCharge ? "ON" : "OFF");
       }
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
-        if (entity.TryGetStateValue<int>(out int value))
+        if (int.TryParse(newState, out int value))
           _house.ForceChargeMaxPrice = value;
+        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString());
       }
       if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
       {
-        if (entity.TryGetStateValue<int>(out int value))
+        if (int.TryParse(newState, out int value))
           _house.ForceChargeTargetSoC = value;
+        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
       await ScheduledOperations();
     }
@@ -382,14 +378,12 @@ namespace PVControl
 
       return checkResult;
     }
-    private async Task<bool> RegisterSensors(CancellationToken cancellationToken)
+    private async Task<bool> RegisterSensors()
     {
       try
       {
         var identifiers = new[] { "pv_control" };
         var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.1 };
-
-        //await _entityManager.RemoveAsync("select.pv_control_mode_override");
 
         if (_overrideModeEntity?.State is null)
         {
@@ -407,74 +401,102 @@ namespace PVControl
           _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
           await _entityManager.SetStateAsync(_overrideModeEntity.EntityId, HouseEnergy.InverterModes.automatic.ToString());
         }
-        //await _connection.DeleteInputBooleanHelperAsync("pv_control_enforcepreferredsoc", cancellationToken);
-        //if (_automaticModeEntity?.State is null)
-        //{
-        //  await _connection.CreateInputBooleanHelperAsync(
-        //    name: "PV_Control Automatic Mode",
-        //    cancelToken: cancellationToken
-        //    );
-        //  _automaticModeEntity = new Entity(_context, "input_boolean.pv_control_automatic_mode");
-        //}
+
         if (_forceChargeEntity?.State is null)
         {
-          await _connection.CreateInputBooleanHelperAsync(
-            name: "PV_Control Force charge at cheapest period",
-            cancelToken: cancellationToken
-            );
-          _forceChargeEntity = new Entity(_context, "input_boolean.pv_control_force_charge_at_cheapest_period");
+          await _entityManager.CreateAsync("switch.pv_control_force_charge_at_cheapest_period", new EntityCreationOptions
+          {
+            Name = "Force charge at cheapest price",
+            DeviceClass = "switch",
+            Persist = true,
+          }, new
+          {
+            icon = "mdi:transmission-tower",
+            device
+          }).ConfigureAwait(false);
+          _forceChargeEntity = new Entity(_context, "switch.pv_control_force_charge_at_cheapest_period");
+          await _entityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
         }
-        if (_forceChargeMaxPriceEntity?.State is null)
-        {
-          await _connection.CreateInputNumberHelperAsync(
-            name: "PV_Control Max price for forcecharge",
-            min: 0,
-            max: 25,
-            step: 1,
-            initial: 0,
-            unitOfMeasurement: "ct",
-            mode: "slider",
-            cancelToken: cancellationToken
-            );
-          _forceChargeMaxPriceEntity = new Entity(_context, "input_number.pv_control_max_price_for_forcecharge");
-        }
-        if (_forceChargeTargetSoCEntity?.State is null)
-        {
-          await _connection.CreateInputNumberHelperAsync(
-            name: "PV_Control Forcecharge target SoC",
-            min: 0,
-            max: 95,
-            step: 5,
-            initial: 50,
-            unitOfMeasurement: "%",
-            mode: "slider",
-            cancelToken: cancellationToken
-            );
-          _forceChargeTargetSoCEntity = new Entity(_context, "input_number.pv_control_forcecharge_target_soc");
-        }
+
         if (_enforcePreferredSocEntity?.State is null)
         {
-          await _connection.CreateInputBooleanHelperAsync(
-            name: "PV_Control Enforce Preferred SoC",
-            cancelToken: cancellationToken
-            );
-          _enforcePreferredSocEntity = new Entity(_context, "input_boolean.pv_control_enforcepreferredsoc");
+          await _entityManager.CreateAsync("switch.pv_control_enforce_preferred_soc", new EntityCreationOptions
+          {
+            Name = "Enforce the preferred SoC",
+            DeviceClass = "switch",
+            Persist = true,
+          }, new
+          {
+            icon = "mdi:battery-plus-variant",
+            device
+          }).ConfigureAwait(false);
+          _enforcePreferredSocEntity = new Entity(_context, "switch.pv_control_enforce_preferred_soc");
+          await _entityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
         }
-        //await _connection.DeleteInputNumberHelperAsync("pv_control_max_price_for_forcecharge", cancellationToken);
+
+        if (_forceChargeMaxPriceEntity?.State is null)
+        {
+          await _entityManager.CreateAsync("number.pv_control_max_price_for_forcecharge", new EntityCreationOptions
+          {
+            Name = "Max price for force charge",
+            Persist = true,
+          }, new
+          {
+            icon = "mdi:currency-eur",
+            min = 0,
+            max = 25,
+            step = 1,
+            initial = 0,
+            unitOfMeasurement = "ct",
+            mode = "slider",
+            device
+          }).ConfigureAwait(false);
+          _forceChargeMaxPriceEntity = new Entity(_context, "number.pv_control_max_price_for_forcecharge");
+          await _entityManager.SetStateAsync(_forceChargeMaxPriceEntity.EntityId, "0");
+        }
+
+        if (_forceChargeTargetSoCEntity?.State is null)
+        {
+          await _entityManager.CreateAsync("number.pv_control_forcecharge_target_soc", new EntityCreationOptions
+          {
+            Name = "Force charge target SoC",
+            Persist = true,
+          }, new
+          {
+            icon = "mdi:battery-alert",
+            min = 0,
+            max = 95,
+            step = 5,
+            initial = 50,
+            unitOfMeasurement = "%",
+            mode = "slider",
+            device
+          }).ConfigureAwait(false);
+          _forceChargeTargetSoCEntity = new Entity(_context, "number.pv_control_forcecharge_target_soc");
+          await _entityManager.SetStateAsync(_forceChargeTargetSoCEntity.EntityId, "50");
+        }
+
         if (_prefBatterySoCEntity?.State is null)
         {
-          await _connection.CreateInputNumberHelperAsync(
-            name: "PV_Control PreferredBatteryCharge",
-            min: 10,
-            max: 100,
-            step: 5,
-            initial: 30,
-            unitOfMeasurement: "%",
-            mode: "slider",
-            cancelToken: cancellationToken
-            );
-          _prefBatterySoCEntity = new Entity(_context, "input_number.pv_control_preferredbatterycharge");
+          await _entityManager.CreateAsync("number.pv_control_preferredbatterycharge", new EntityCreationOptions
+          {
+            Name = "Preferred min SoC",
+            Persist = true,
+          }, new
+          {
+            icon = "mdi:battery-unknown",
+            min = 10,
+            max = 100,
+            step = 5,
+            initial = 30,
+            unitOfMeasurement = "%",
+            mode = "slider",
+            device
+          }).ConfigureAwait(false);
+          _prefBatterySoCEntity = new Entity(_context, "number.pv_control_preferredbatterycharge");
+          await _entityManager.SetStateAsync(_prefBatterySoCEntity.EntityId, "30");
         }
+
         if (_modeEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_mode", new EntityCreationOptions
@@ -489,6 +511,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _modeEntity = new Entity(_context, "sensor.pv_control_mode");
         }
+
         if (_battery_StatusEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_battery_status", new EntityCreationOptions
@@ -503,6 +526,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _battery_StatusEntity = new Entity(_context, "sensor.pv_control_battery_status");
         }
+
         if (_battery_RemainingTimeEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_battery_remainingtime", new EntityCreationOptions
@@ -517,6 +541,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _battery_RemainingTimeEntity = new Entity(_context, "sensor.pv_control_battery_remainingtime");
         }
+
         if (_needToChargeFromGridTodayEntity?.State is null)
         {
           await _entityManager.CreateAsync("binary_sensor.pv_control_need_to_charge_from_grid_today", new EntityCreationOptions
@@ -529,6 +554,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _needToChargeFromGridTodayEntity = new Entity(_context, "sensor.pv_control_need_to_charge_from_grid_today");
         }
+
         if (_battery_RemainingEnergyEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_battery_remainingenergy", new EntityCreationOptions
@@ -543,6 +569,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
         }
+
         if (_info_EstimatedMaxSoCTodayEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_max_soc_today", new EntityCreationOptions
@@ -557,6 +584,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
         }
+
         if (_info_EstimatedMinSoCTodayEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_min_soc_today", new EntityCreationOptions
@@ -571,6 +599,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
         }
+
         if (_info_EstimatedMaxSoCTomorrowEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_max_soc_tomorrow", new EntityCreationOptions
@@ -585,6 +614,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
         }
+
         if (_info_EstimatedMinSoCTomorrowEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_min_soc_tomorrow", new EntityCreationOptions
@@ -599,6 +629,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_EstimatedMinSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_min_soc_tomorrow");
         }
+
         if (_info_chargeTodayEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_estimated_remaining_charge_today", new EntityCreationOptions
@@ -613,6 +644,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_chargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_charge_today");
         }
+
         if (_info_chargeTomorrowEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_estimated_charge_tomorrow", new EntityCreationOptions
@@ -627,6 +659,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
         }
+
         if (_info_dischargeTodayEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_estimated_remaining_discharge_today", new EntityCreationOptions
@@ -641,6 +674,7 @@ namespace PVControl
           }).ConfigureAwait(false);
           _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
         }
+
         if (_info_dischargeTomorrowEntity?.State is null)
         {
           await _entityManager.CreateAsync("sensor.pv_control_estimated_discharge_tomorrow", new EntityCreationOptions
@@ -656,12 +690,6 @@ namespace PVControl
           _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
         }
         //await _entityManager.RemoveAsync("sensor.pv_control_estimated_remaining_discharge_tomorrow");
-        //await _entityManager.RemoveAsync("sensor.pv_control_estimated_remaining_charge_tomorrow");
-        //await _entityManager.RemoveAsync("sensor.pv_control_battery_status");
-        //await _entityManager.RemoveAsync("binary_sensor.pv_control_need_to_charge_from_grid_today");
-        //await _entityManager.RemoveAsync("sensor.pv_control_battery_remainingenergy");
-        //await _entityManager.RemoveAsync("sensor.pv_control_battery_remainingtime");
-        //await _entityManager.RemoveAsync("sensor.pv_control_mode");
 
         return true;
       }
