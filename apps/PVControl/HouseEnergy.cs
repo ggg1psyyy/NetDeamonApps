@@ -21,9 +21,10 @@ namespace PVControl
     }
     public enum InverterModes
     {
-      normal = 0,
-      force_charge = 1,
-      grid_only = 2,
+      automatic,
+      normal,
+      force_charge,
+      grid_only,
     }
     public enum BatteryStatuses
     {
@@ -39,6 +40,7 @@ namespace PVControl
       GoingUnderAbsoluteMinima,
       ForcedChargeAtMinimumPrice,
       ImportPriceUnderExportPrice,
+      UserMode,
     }
     private readonly PVConfig _config;
     private readonly FixedSizeQueue<int> _battChargeFIFO;
@@ -60,12 +62,13 @@ namespace PVControl
       _energyUsagePerDayOfYearCache = [];
       _priceListCache = [];
     }
+    public bool ForceCharge { get; set; }
     /// <summary>
     /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
     /// </summary>
     public bool EnforcePreferredSoC {  get; set; }
     public int PreferredMinBatterySoC { get; set; }
-    public bool ForceCharge {  get; set; }
+    public InverterModes OverrideMode{  get; set; }
     public int ForceChargeMaxPrice { get; set; }
     public int ForceChargeTargetSoC { get; set; }
 #pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
@@ -86,6 +89,13 @@ namespace PVControl
     {
       get
       {
+        if (OverrideMode != InverterModes.automatic)
+        {
+          ForceChargeReason = ForceChargeReasons.UserMode;
+          _currentMode = OverrideMode;
+          return OverrideMode;
+        }
+
         if (CurrentEnergyImportPrice < CurrentEnergyExportPrice * -1 && CurrentEnergyImportPrice < 0)
         {
           _currentMode = InverterModes.grid_only;
@@ -104,7 +114,6 @@ namespace PVControl
           _currentMode = InverterModes.force_charge;
           return InverterModes.force_charge;
         }
-
         else
         {
           ForceChargeReason = ForceChargeReasons.None;
@@ -182,7 +191,12 @@ namespace PVControl
         return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value <= minCharge).First().Key, minCharge);
       }
     }
-    public ForceChargeReasons ForceChargeReason { get; private set; }
+    private ForceChargeReasons _forceChargeReason;
+    public ForceChargeReasons ForceChargeReason 
+    { 
+      get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode; 
+      private set => _forceChargeReason = value; 
+    }
     /// <summary>
     /// Current State of Charge of the house battery in %
     /// </summary>
