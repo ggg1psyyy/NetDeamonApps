@@ -123,21 +123,24 @@ namespace PVControl
       get
       {
         DateTime now = DateTime.Now;
+        ForceChargeReason = ForceChargeReasons.None;
+        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
 
         // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
         var cheapestHourToday = SortPriceListByCheapestPeriod(now.Date, now.Date.AddDays(1)).First();
+        // and only so far that we reach 100% via PV today
+        var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
         // ForceCharge is only allowed to max. 95%
         ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
-        ForceChargeReason = ForceChargeReasons.None;
+
         // hysteresis prevention
         int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC+2 : ForceChargeTargetSoC;
-        if (ForceCharge && BatterySoc < forceChargeTo && cheapestHourToday.Price < ForceChargeMaxPrice && now > cheapestHourToday.StartTime && now < cheapestHourToday.EndTime)
+        if (ForceCharge && BatterySoc < forceChargeTo && cheapestHourToday.Price < ForceChargeMaxPrice && maxSoCToday.Value < 100 && now > cheapestHourToday.StartTime && now < cheapestHourToday.EndTime)
         {
           ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
           return new Tuple<bool, DateTime, int>(true, now, BatterySoc);
         }
 
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
         int setMinCharge = PreferredMinimalSoC;
         
         if (!EnforcePreferredSoC && PreferredMinimalSoC > AbsoluteMinimalSoC)
@@ -682,21 +685,13 @@ namespace PVControl
     private int GetHourlyHouseEnergyUsageHistory(int hour)
     {
       using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(String.Format("Data Source={0}", _config.DBLocation)));
-#pragma warning disable CS8629 // Nullable value type may be null.
-      var hourlies = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new KeyValuePair<DateTime, int>(h.Timestamp, (int)h.Houseenergy)).ToDictionary();
-#pragma warning restore CS8629 // Nullable value type may be null.
       DateTime now = DateTime.Now;
-      double sum = 0;
-      double weightSum = 0;
-
-      foreach (var pair in hourlies)
-      {
-        double weight = Math.Exp((now - pair.Key).TotalDays); // weight is based on the recency of the timestamp
-        sum += pair.Value * weight;
-        weightSum += weight;
-      }
-
-      return (int)(sum / weightSum);
+      float scaling = 20.0f;
+      var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new { Date = h.Timestamp, Value = h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / scaling) }).ToList();
+      float weightedSum = weights.Sum(w => (float)w.Value * w.Weight);
+      float sumOfWeights = weights.Sum(w => w.Weight);
+      float weightedAverage = weightedSum / sumOfWeights;
+      return (int)Math.Round(weightedAverage, 0);
     }
     private int GetWeekDayyHouseEnergyUsageHistory(DayOfWeek dayOfWeek)
     {
