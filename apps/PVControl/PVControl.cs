@@ -178,6 +178,7 @@ namespace PVControl
         if (entity.TryGetStateValue<int>(out int value))
           _house.ForceChargeTargetSoC = value;
       }
+      await ScheduledOperations();
     }
     private async Task ScheduledOperations()
     {
