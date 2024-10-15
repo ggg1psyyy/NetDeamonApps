@@ -36,6 +36,7 @@ namespace PVControl
     {
       None,
       GoingUnderPreferredMinima,
+      GoingUnderAbsoluteMinima,
       ForcedChargeAtMinimumPrice,
       ImportPriceUnderExportPrice,
     }
@@ -145,33 +146,20 @@ namespace PVControl
         
         if (!EnforcePreferredSoC && PreferredMinimalSoC > AbsoluteMinimalSoC)
         {
-          var prefMinSoC = estSoC.Where(e => e.Key >= now && e.Key < PriceList.Last().EndTime && e.Value <= PreferredMinimalSoC).FirstOrDefault();
-          // if we reach PreferredMinimalSoC we need to search for cheaper price windows, but never go under AbsoluteMinimalSoC
-          if (prefMinSoC.Key != default)
+          // first check if we even reach AbsoluteMinima
+          var minReached = estSoC.FirstMinOrDefault(start: now);
+          // now check if we go over PreferredMinima afterwards
+          var maxReached = estSoC.FirstMaxOrDefault(start: minReached.Key);
+
+          if (minReached.Value > AbsoluteMinimalSoC && maxReached.Value > PreferredMinimalSoC)
+          // we never go under AbsoluteMin and over PreferredMin later, so no need to force_charge
           {
-            // get the first time we reach a minimum > AbsoluteMinimum
-            var socAfterPrefMinSoc = estSoC.Where(x => x.Key > prefMinSoC.Key && x.Key < PriceList.Last().EndTime);
-            var minSocAfterPref = prefMinSoC;
-            foreach (var s in socAfterPrefMinSoc)
-            {
-              if (s.Value <= minSocAfterPref.Value && s.Value < PreferredMinimalSoC && s.Value > AbsoluteMinimalSoC)
-                minSocAfterPref = s;
-              else
-                break;
-            }
-            var maxAfter = estSoC.FirstMaxOrDefault(start: minSocAfterPref.Key);
-            var minAfter = estSoC.FirstMinOrDefault(start: minSocAfterPref.Key);
-            // if we reach at least 95% SoC via PV charge and never go down to AbsoluteMinimalSoC we don't need to charge
-            bool noNeedToCharge = maxAfter.Value > 95 && minAfter.Value > AbsoluteMinimalSoC && minAfter.Key > maxAfter.Key;
-            // now see if there is a cheaper price window between Preferred and Absolute MinSoC
-            if (minSocAfterPref.Key != prefMinSoC.Key && !noNeedToCharge)
-            {
-              var cheapestPref = SortPriceListByCheapestPeriod(now, prefMinSoC.Key).Select(p => p.Price).First();
-              var cheapestAbs = SortPriceListByCheapestPeriod(prefMinSoC.Key, minSocAfterPref.Key).Select(p => p.Price).First();
-              // if there is a cheaper window we will allow to go down to the estimated minima
-              if (cheapestAbs < cheapestPref)
-                setMinCharge = Math.Max(AbsoluteMinimalSoC, minSocAfterPref.Value);
-            }
+            setMinCharge = Math.Max(AbsoluteMinimalSoC, minReached.Value);
+          }
+          else
+          // otherwise we just set it to AbsoluteMinima
+          {
+            setMinCharge = AbsoluteMinimalSoC;
           }
         }
         // while charging increase minCharge and maxCharge to prevent hysteresis
@@ -190,8 +178,8 @@ namespace PVControl
         // We need to force charge if we estimate to fall below minCharge and can't reach 100% before that
         bool needCharge = min < minCharge && max < maxCharge;
         if (needCharge)
-          ForceChargeReason = ForceChargeReasons.GoingUnderPreferredMinima;
-        return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value == min).First().Key, min);
+          ForceChargeReason = minCharge < PreferredMinimalSoC ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
+        return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value <= minCharge).First().Key, minCharge);
       }
     }
     public ForceChargeReasons ForceChargeReason { get; private set; }
@@ -534,7 +522,7 @@ namespace PVControl
       if (start.Hour == end.Hour && start.Date == end.Date)
         return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
 
-      var prices = PriceList.Where(p => p.EndTime >= start &&  p.EndTime <= end);
+      var prices = PriceList.Where(p => p.EndTime >= start &&  p.StartTime <= end);
       List<EpexPriceTableEntry> result = [];
 
       if (hours <= 0 || hours > prices.Count())
