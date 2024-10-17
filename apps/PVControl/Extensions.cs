@@ -163,6 +163,45 @@ namespace PVControl
         tempList = tempList.Where(l => l.Key <= end).ToDictionary();
       return tempList.Where(l => l.Value == tempList.Max(t => t.Value)).FirstOrDefault();
     }
+    public static KeyValuePair<DateTime, int> FirstUnderOrDefault(this Dictionary<DateTime, int> list, int underValue, DateTime start = default, DateTime end = default)
+    {
+      var tempList = list;
+      if (start != default)
+        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
+      if (end != default)
+        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
+      return tempList.Where(l => l.Value <= underValue).FirstOrDefault();
+    }
+    public static KeyValuePair<DateTime, int> GetEntryAtTime(this Dictionary<DateTime, int> list, DateTime time)
+    {
+      if (list.TryGetValue(time.RoundToNearestQuarterHour(), out var entry))
+        return new KeyValuePair<DateTime, int>(time.RoundToNearestQuarterHour(), entry);
+      else
+        return new KeyValuePair<DateTime, int>(default, 0);
+    }
+    public static DateTime RoundToNearestQuarterHour(this DateTime time)
+    {
+      int minutes = time.Minute;
+      int remainder = minutes % 15;
+
+      // Round to the nearest 15 minutes
+      if (remainder < 8)
+      {
+        minutes -= remainder; // Round down
+      }
+      else
+      {
+        minutes += (15 - remainder); // Round up
+      }
+
+      if (minutes >= 60)
+      {
+        minutes -= 60;
+        return new DateTime(time.Year, time.Month, time.Day, time.Hour + 1, minutes, 0);
+      }
+      else
+        return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes, 0);
+    }
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
   {

@@ -1,4 +1,5 @@
 ﻿using LinqToDB;
+using Microsoft.AspNetCore.Routing;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,6 +42,12 @@ namespace PVControl
       ForcedChargeAtMinimumPrice,
       ImportPriceUnderExportPrice,
       UserMode,
+    }
+    public enum RunHeavyLoadsStatus
+    {
+      Yes,
+      No,
+      IfNecessary,
     }
     private readonly PVConfig _config;
     private readonly FixedSizeQueue<int> _battChargeFIFO;
@@ -122,9 +129,11 @@ namespace PVControl
         }
       }
     }
+    private Tuple<bool, DateTime, int>? _needToChargeFromExternalCache;
+    private DateTime _lastCalculatedNeedToCharge;
     /// <summary>
     /// returns:
-    /// * Do we need to charge until NextRelevantPVEnergy
+    /// * Do we need to charge from grid
     /// * When do we reach minimal Soc
     /// * what's the estimated SoC at this time
     /// </summary>
@@ -133,62 +142,63 @@ namespace PVControl
       get
       {
         DateTime now = DateTime.Now;
+#if !DEBUG
+        // cache the result for 5 seconds, so that it's only calulated once per run
+        if (_lastCalculatedNeedToCharge != default && _needToChargeFromExternalCache != null && (now - _lastCalculatedNeedToCharge).TotalSeconds < 5)
+        {
+          return _needToChargeFromExternalCache;
+        }
+#endif
         ForceChargeReason = ForceChargeReasons.None;
         var estSoC = EstimatedBatterySoCTodayAndTomorrow;
 
-        // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
-        var cheapestHourToday = SortPriceListByCheapestPeriod(now.Date, now.Date.AddDays(1)).First();
-        // and only so far that we reach 100% via PV today
-        var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
-        // ForceCharge is only allowed to max. 95%
-        ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
-
-        // hysteresis prevention
-        int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC+2 : ForceChargeTargetSoC;
-        if (ForceCharge && BatterySoc < forceChargeTo && cheapestHourToday.Price < ForceChargeMaxPrice && maxSoCToday.Value < 100 && now > cheapestHourToday.StartTime && now < cheapestHourToday.EndTime)
-        {
-          ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
-          return new Tuple<bool, DateTime, int>(true, now, BatterySoc);
-        }
-
-        int setMinCharge = PreferredMinimalSoC;
-        
-        if (!EnforcePreferredSoC && PreferredMinimalSoC > AbsoluteMinimalSoC)
-        {
-          // first check if we even reach AbsoluteMinima
-          var minReached = estSoC.FirstMinOrDefault(start: now);
-          // now check if we go over PreferredMinima afterwards
-          var maxReached = estSoC.FirstMaxOrDefault(start: minReached.Key);
-
-          if (minReached.Value > AbsoluteMinimalSoC && maxReached.Value > PreferredMinimalSoC)
-          // we never go under AbsoluteMin and over PreferredMin later, so no need to force_charge
+        if (ForceCharge)
+        { 
+          // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
+          // and only so far that we reach 100% via PV today
+          var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
+          // keep a wiggle room of 1 hour to prevent higher loads than predicted to oszilate the charging if pv max reached is very near the end of the day
+          var minsToLastPV = (LastRelevantPVEnergyToday - maxSoCToday.Key).TotalMinutes;
+          bool wiggle = (_currentMode == InverterModes.force_charge ? minsToLastPV <= 60 : minsToLastPV <= 0) || maxSoCToday.Value < 100;
+          // ForceCharge is only allowed to max. 95%
+          ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
+          // hysteresis prevention
+          int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC + 2 : ForceChargeTargetSoC;
+          if (BatterySoc < forceChargeTo && CheapestWindowToday.Price < ForceChargeMaxPrice && wiggle && IsNowCheapestWindowToday)
           {
-            setMinCharge = Math.Max(AbsoluteMinimalSoC, minReached.Value);
-          }
-          else
-          // otherwise we just set it to AbsoluteMinima
-          {
-            setMinCharge = AbsoluteMinimalSoC;
+            ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
+            _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(true, now, BatterySoc);
+            _lastCalculatedNeedToCharge = now;
+            return _needToChargeFromExternalCache;
           }
         }
-        // while charging increase minCharge and maxCharge to prevent hysteresis
-        int minCharge = _currentMode == InverterModes.force_charge ? setMinCharge + 1 : setMinCharge;
-        // we don't want to charge more if we reach 100% SoC with PV
-        int maxCharge = _currentMode == InverterModes.force_charge ? 100 : 98;
-        // we need to make it at least to the next PV charge without going under minCharge
-        DateTime relevantTime = PriceList.Last().EndTime > FirstRelevantPVEnergyTomorrow ? PriceList.Last().EndTime : FirstRelevantPVEnergyTomorrow;
-        int min = estSoC.Where(n => n.Key > now && n.Key <= relevantTime).Min(n => n.Value);
-        // if we still have PV yield today, check what SoC we will reach, otherwise max can never be greater than current SoC
-        int max = now < LastRelevantPVEnergyToday ? estSoC.Where(n => n.Key > now && n.Key <= LastRelevantPVEnergyToday).Max(n => n.Value) : BatterySoc;
+
+        int minCharge = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
+        if (_currentMode == InverterModes.force_charge)
+          // while charging increase minCharge to prevent hysteresis
+          minCharge++;
+
+        // when do we reach mincharge
+        var minReached = estSoC.FirstUnderOrDefault(minCharge, start: now);
+        if (minReached.Key == default)
+          // we don't reach minima, so what's the lowest
+          minReached = estSoC.FirstMinOrDefault(start: now);
+
+        // what's the next max
+        var maxReached = estSoC.FirstMaxOrDefault(start: now);
+
         // charge to Max if in absolut cheapest period when we never reach 100% SoC today or tomorrow with PV only and if we have at least 12h price preview
         if (PriceList.Where(p => p.StartTime > now).Count() > 12)
-          if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > now).Min(p => p.Price) && max < 99 && estSoC.Where(e => e.Key.Date == now.Date.AddDays(1)).Max(e => e.Value) < 99)
+          if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > now).Min(p => p.Price) && maxReached.Value < 99 && estSoC.Where(e => e.Key.Date == now.Date.AddDays(1)).Max(e => e.Value) < 99)
             minCharge = 100;
-        // We need to force charge if we estimate to fall below minCharge and can't reach 100% before that
-        bool needCharge = min < minCharge && max < maxCharge;
+
+        // We need to force charge if we estimate to fall to minCharge
+        bool needCharge = minReached.Value <= minCharge;
         if (needCharge)
           ForceChargeReason = minCharge < PreferredMinimalSoC ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
-        return new Tuple<bool, DateTime, int>(needCharge, estSoC.Where(n => n.Key > now && n.Key <= relevantTime && n.Value <= minCharge).First().Key, minCharge);
+        _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key, minReached.Value);
+        _lastCalculatedNeedToCharge = now;
+        return _needToChargeFromExternalCache;
       }
     }
     private ForceChargeReasons _forceChargeReason;
@@ -196,6 +206,34 @@ namespace PVControl
     { 
       get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode; 
       private set => _forceChargeReason = value; 
+    }
+    /// <summary>
+    /// Tells if it's a good time to run heavy loads now
+    /// </summary>
+    public RunHeavyLoadsStatus RunHeavyLoadsNow
+    {
+      get
+      {
+        var now = DateTime.Now;
+        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+
+        // as long as we still reach over 97% SoC via PV today it's always ok
+        var maxSocRestOfToday = estSoC.FirstMaxOrDefault(now, now.AddDays(1).Date);
+        if (maxSocRestOfToday.Value > 97)
+          return RunHeavyLoadsStatus.Yes;
+
+        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
+        if (_currentMode == InverterModes.force_charge)
+          return RunHeavyLoadsStatus.IfNecessary;
+
+        // if we still keep the SoC over PreferredMin we don't forbid it
+        var minSocTilTomorrowFirstPV = estSoC.FirstMinOrDefault(now, FirstRelevantPVEnergyTomorrow);
+        if (minSocTilTomorrowFirstPV.Value > PreferredMinimalSoC)
+          return RunHeavyLoadsStatus.IfNecessary;
+
+        // otherwise nope
+        return RunHeavyLoadsStatus.No;
+      }
     }
     /// <summary>
     /// Current State of Charge of the house battery in %
@@ -226,7 +264,8 @@ namespace PVControl
         int minAllowedSoC = _config.MinBatterySoCValue ?? 0;
         if (_config.MinBatterySoCEntity is not null && _config.MinBatterySoCEntity.TryGetStateValue<int>(out int minSoc))
           minAllowedSoC = minSoc;
-        return minAllowedSoC;
+        // add 2% to prevent inverter from shutting off early and needing to import probably expensive energy
+        return minAllowedSoC + 2;
       }
     }
     private float InverterEfficiency
@@ -303,20 +342,20 @@ namespace PVControl
       }
     }
     /// <summary>
-    /// Currently usable energy in battery (only down to <see cref="HouseEnergy.PreferredMinimalSoC"/>) in Wh
+    /// Currently usable energy in battery down to <see cref="HouseEnergy.AbsoluteMinimalSoC"/> or <see cref="HouseEnergy.PreferredMinimalSoC"/> depending on <see cref="HouseEnergy.EnforcePreferredSoC"/> in Wh
     /// </summary>
     public int UsableBatteryEnergy
     {
       get
       {
-        return CalculateBatteryEnergyAtSoC(BatterySoc);
+        return CalculateBatteryEnergyAtSoC(BatterySoc, EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC);
       }
     }
     public int ReserveBatteryEnergy
     {
       get
       {
-        return CalculateBatteryEnergyAtSoC(PreferredMinimalSoC,0);
+        return CalculateBatteryEnergyAtSoC(EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC, 0);
       }
     }
     public int EstimateBatteryEnergyAtTime(DateTime time)
@@ -575,6 +614,38 @@ namespace PVControl
         return _priceListCache;
       }
     }
+    public EpexPriceTableEntry CheapestWindowToday
+    {
+      get
+      {
+        return SortPriceListByCheapestPeriod(DateTime.Now.Date, DateTime.Now.Date.AddDays(1)).First();
+      }
+    }
+    public EpexPriceTableEntry CheapestWindowTotal
+    {
+      get
+      {
+        return PriceList.OrderBy(p => p.Price).First();
+      }
+    }
+    public bool IsNowCheapestWindowToday
+    {
+      get
+      {
+        var cheapest = CheapestWindowToday;
+        var now = DateTime.Now;
+        return now > cheapest.StartTime && now < cheapest.EndTime;
+      }
+    }
+    public bool IsNowCheapestWindowTotal
+    {
+      get
+      {
+        var cheapest = CheapestWindowTotal;
+        var now = DateTime.Now;
+        return now > cheapest.StartTime && now < cheapest.EndTime;
+      }
+    }
     public Dictionary<DateTime, int> PVForecastTodayAndTomorrow
     {
       get
@@ -644,6 +715,17 @@ namespace PVControl
           result.Add(kvp.Key, CalculateBatterySoCAtEnergy(kvp.Value));
         }
         return result;
+      }
+    }
+    private Dictionary<DateTime, int> _dailyPrediction;
+    public Dictionary<DateTime, int> DailyBatterySoCPredictionTodayAndTomorrow
+    {
+      get
+      {
+        if (_dailyPrediction is null || (DateTime.Now.Hour == 0 && DateTime.Now.Minute == 0))
+          _dailyPrediction = EstimatedBatterySoCTodayAndTomorrow;
+
+        return _dailyPrediction;
       }
     }
     private static Dictionary<DateTime, int> GetPVForecastFromEntities(List<Entity>? entities)
