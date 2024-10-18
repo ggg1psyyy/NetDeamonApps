@@ -108,7 +108,7 @@ namespace PVControl
       _forceChargeMaxPriceEntity = new Entity(_context, "number.pv_control_max_price_for_forcecharge");
       _forceChargeTargetSoCEntity = new Entity(_context, "number.pv_control_forcecharge_target_soc");
       _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
-      //_RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
+      _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
 
 #if DEBUG
       //_house.EnforcePreferredSoC = true;
