@@ -183,24 +183,7 @@ namespace PVControl
     {
       int minutes = time.Minute;
       int remainder = minutes % 15;
-
-      // Round to the nearest 15 minutes
-      if (remainder < 8)
-      {
-        minutes -= remainder; // Round down
-      }
-      else
-      {
-        minutes += (15 - remainder); // Round up
-      }
-
-      if (minutes >= 60)
-      {
-        minutes -= 60;
-        return new DateTime(time.Year, time.Month, time.Day, time.Hour + 1, minutes, 0);
-      }
-      else
-        return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes, 0);
+      return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes-remainder, 0);
     }
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
