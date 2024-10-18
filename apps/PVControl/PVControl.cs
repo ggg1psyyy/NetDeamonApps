@@ -209,6 +209,7 @@ namespace PVControl
       await _entityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       DateTime now = DateTime.Now;
 
+      #region Mode
       var nextCheapest = _house.BestChargeTime;
       var attr_Mode = new
       {
@@ -218,9 +219,11 @@ namespace PVControl
         charge_Reason = _house.ForceChargeReason.ToString(),
       };
       await _entityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
-
+      #endregion
+      #region RunHeavyLoads
       await _entityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
-
+      #endregion
+      #region Remaining battery
       await _entityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingTime = new
       {
@@ -230,7 +233,8 @@ namespace PVControl
         status = _house.BatteryStatus.ToString(),
       };
       await _entityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
-
+      #endregion
+      #region Battery status
       await _entityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.BatteryStatus.ToString());
       var attr_batStatus = new
       {
@@ -238,7 +242,8 @@ namespace PVControl
         current_SoC = _house.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
       await _entityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
-
+      #endregion
+      #region Remaining energy
       await _entityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingEnergy = new
       {
@@ -248,7 +253,8 @@ namespace PVControl
         battery_capacity = _house.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
       };
       await _entityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
-
+      #endregion
+      #region NeedToCharge
       var needToCharge = _house.NeedToChargeFromExternal;
       await _entityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
       var attr_Charge = new
@@ -260,7 +266,8 @@ namespace PVControl
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
       };
       await _entityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
-
+      #endregion
+      #region Prediction
       var curPredSoc = _house.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredSoc.Key != default)
       {
@@ -272,7 +279,8 @@ namespace PVControl
         };
         await _entityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
       }
-
+      #endregion
+      #region SoC estimates
       var est_soc_today = _house.EstimatedBatterySoCTodayAndTomorrow.Where(s => s.Key.Date == now.Date && s.Key >= now).ToDictionary();
       var est_soc_tomorrow = _house.EstimatedBatterySoCTodayAndTomorrow.Where(s => s.Key.Date == now.AddDays(1).Date).ToDictionary();
 
@@ -317,7 +325,8 @@ namespace PVControl
         };
         await _entityManager.SetAttributesAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, attr_Max_SoC_Tomorrow);
       }
-
+      #endregion
+      #region charge/discharge forecasts
       var charge = _house.PVForecastTodayAndTomorrow;
       var chargeToday = charge.Where(c => c.Key >= now && c.Key.Date == now.Date).ToDictionary();
       var chargeTomorrow = charge.Where(c => c.Key.Date == now.Date.AddDays(1)).ToDictionary();
@@ -362,7 +371,7 @@ namespace PVControl
         };
         await _entityManager.SetAttributesAsync(_info_dischargeTomorrowEntity.EntityId, attr_dischargeTomorrow);
       }
-
+      #endregion
       _logger.LogDebug("Leave Schedule");
     }
     private bool CheckConfiguration()
