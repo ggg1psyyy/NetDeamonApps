@@ -67,6 +67,9 @@ namespace PVControl
       _energyUsagePerHourCache = [];
       _energyUsagePerWeekDayCache = [];
       _energyUsagePerDayOfYearCache = [];
+      _dailySoCPrediction = [];
+      _dailyChargePrediction = [];
+      _dailyDischargePrediction = [];
       _priceListCache = [];
     }
     public bool ForceCharge { get; set; }
@@ -721,7 +724,7 @@ namespace PVControl
     private void UpdateSnapshots()
     {
       DateTime now = DateTime.Now;
-      if (_dailySoCPrediction is null || _dailyChargePrediction is null || _dailyDischargePrediction is null || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
+      if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
       {
         _dailySoCPrediction = EstimatedBatterySoCTodayAndTomorrow;
         _dailyChargePrediction = PVForecastTodayAndTomorrow.GetRunningSumsDaily();
