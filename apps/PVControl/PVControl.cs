@@ -716,7 +716,7 @@ namespace PVControl
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_predicted_charge", new EntityCreationOptions
           {
-            Name = "Predicted Charge Now",
+            Name = "Predicted Charge Until Now",
             DeviceClass = "Energy",
           }, new
           {
@@ -731,7 +731,7 @@ namespace PVControl
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_predicted_discharge", new EntityCreationOptions
           {
-            Name = "Predicted Discharge Now",
+            Name = "Predicted Discharge Until Now",
             DeviceClass = "Energy",
           }, new
           {
