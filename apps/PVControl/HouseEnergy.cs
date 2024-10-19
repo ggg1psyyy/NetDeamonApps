@@ -10,44 +10,6 @@ namespace PVControl
 {
   public class HouseEnergy
   {
-    public struct EpexPriceTableEntry(DateTime startTime, DateTime endTime, float price)
-    {
-      [JsonPropertyName("start_time")]
-      public DateTime StartTime { get; set; } = startTime;
-      [JsonPropertyName("end_time")]
-      public DateTime EndTime { get; set; } = endTime;
-      [JsonPropertyName("price_ct_per_kwh")]
-      public float Price { get; set; } = price;
-    }
-    public enum InverterModes
-    {
-      automatic,
-      normal,
-      force_charge,
-      grid_only,
-    }
-    public enum BatteryStatuses
-    {
-      idle,
-      charging,
-      discharging,
-      unknown,
-    }
-    public enum ForceChargeReasons
-    {
-      None,
-      GoingUnderPreferredMinima,
-      GoingUnderAbsoluteMinima,
-      ForcedChargeAtMinimumPrice,
-      ImportPriceUnderExportPrice,
-      UserMode,
-    }
-    public enum RunHeavyLoadsStatus
-    {
-      Yes,
-      No,
-      IfNecessary,
-    }
     private readonly PVConfig _config;
     private readonly FixedSizeQueue<int> _battChargeFIFO;
     /// <summary>

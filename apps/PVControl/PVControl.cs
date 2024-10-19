@@ -168,10 +168,10 @@ namespace PVControl
 
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
-        if (Enum.TryParse(newState, out HouseEnergy.InverterModes modeselect))
+        if (Enum.TryParse(newState, out InverterModes modeselect))
           _house.OverrideMode = modeselect;
         else
-          _house.OverrideMode = HouseEnergy.InverterModes.automatic;
+          _house.OverrideMode = InverterModes.automatic;
         await _entityManager.SetStateAsync(entity.EntityId, _house.OverrideMode.ToString());
       }
       if (entity.EntityId == _prefBatterySoCEntity.EntityId)
@@ -450,11 +450,11 @@ namespace PVControl
           }, new
           {
             icon = "mdi:form-select",
-            options = Enum.GetNames(typeof(HouseEnergy.InverterModes)),
+            options = Enum.GetNames(typeof(InverterModes)),
             device
           }).ConfigureAwait(false);
           _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
-          await _entityManager.SetStateAsync(_overrideModeEntity.EntityId, HouseEnergy.InverterModes.automatic.ToString());
+          await _entityManager.SetStateAsync(_overrideModeEntity.EntityId, InverterModes.automatic.ToString());
         }
 
         if (_forceChargeEntity?.State is null)
@@ -561,7 +561,7 @@ namespace PVControl
           }, new
           {
             icon = "mdi:form-select",
-            options = Enum.GetNames(typeof(HouseEnergy.InverterModes)),
+            options = Enum.GetNames(typeof(InverterModes)),
             device
           }).ConfigureAwait(false);
           _modeEntity = new Entity(_context, "sensor.pv_control_mode");
@@ -576,7 +576,7 @@ namespace PVControl
           }, new
           {
             icon = "mdi:ev-station",
-            options = Enum.GetNames(typeof(HouseEnergy.RunHeavyLoadsStatus)),
+            options = Enum.GetNames(typeof(RunHeavyLoadsStatus)),
             device
           }).ConfigureAwait(false);
           _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
@@ -591,7 +591,7 @@ namespace PVControl
           }, new
           {
             icon = "mdi:battery-charging",
-            options = Enum.GetNames(typeof(HouseEnergy.BatteryStatuses)),
+            options = Enum.GetNames(typeof(BatteryStatuses)),
             device
           }).ConfigureAwait(false);
           _battery_StatusEntity = new Entity(_context, "sensor.pv_control_battery_status");
