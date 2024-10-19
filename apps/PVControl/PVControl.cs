@@ -279,26 +279,31 @@ namespace PVControl
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
+          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, soc = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
       }
-      var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.Where(p => p.Key <= now);
-      if (curPredCharge is not null)
+      var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.GetEntryAtTime(now);
+      if (curPredCharge.Key != default)
       {
-        await _entityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Sum(p => p.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
+          current_entry_time = curPredCharge.Key.ToISO8601(),
+          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyChargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, charge = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_PredictedChargeEntity.EntityId, attr_pred_charge);
       }
-      var curPredDischarge = _house.DailyDischargePredictionTodayAndTomorrow.Where(p => p.Key <= now);
-      if (curPredDischarge is not null)
+      var curPredDischarge = _house.DailyDischargePredictionTodayAndTomorrow.GetEntryAtTime(now);
+      if (curPredDischarge.Key != default)
       {
-        await _entityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Sum(p => p.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
+          current_entry_time = curPredDischarge.Key.ToISO8601(),
+          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyDischargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, discharge = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);

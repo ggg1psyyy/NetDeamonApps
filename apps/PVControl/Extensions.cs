@@ -179,6 +179,17 @@ namespace PVControl
       else
         return new KeyValuePair<DateTime, int>(default, 0);
     }
+    public static Dictionary<DateTime, int> GetRunningSumsDaily(this Dictionary<DateTime, int> list)
+    {
+      return list.Aggregate(new Dictionary<DateTime, int>(), (acc, x) =>
+      {
+        if (acc.Count == 0 || (x.Key.Date != acc.Last().Key.Date))
+          acc.Add(x.Key, x.Value);
+        else
+          acc.Add(x.Key, acc.Last().Value + x.Value);
+        return acc;
+      });
+    }
     public static DateTime RoundToNearestQuarterHour(this DateTime time)
     {
       int minutes = time.Minute;

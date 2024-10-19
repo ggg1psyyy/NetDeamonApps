@@ -717,16 +717,16 @@ namespace PVControl
         return result;
       }
     }
-    private DateTime _lastSnapshotUpdate = default;
+    public DateTime LastSnapshotUpdate { get; private set; } = default;
     private void UpdateSnapshots()
     {
       DateTime now = DateTime.Now;
-      if (_dailySoCPrediction is null || _dailyChargePrediction is null || _dailyDischargePrediction is null || (now.Hour == 0 && now.Minute == 1) || (now - _lastSnapshotUpdate).TotalMinutes > 24*60)
+      if (_dailySoCPrediction is null || _dailyChargePrediction is null || _dailyDischargePrediction is null || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
       {
         _dailySoCPrediction = EstimatedBatterySoCTodayAndTomorrow;
-        _dailyChargePrediction = PVForecastTodayAndTomorrow;
-        _dailyDischargePrediction = EstimatedEnergyUsageTodayAndTomorrow;
-        _lastSnapshotUpdate = now;
+        _dailyChargePrediction = PVForecastTodayAndTomorrow.GetRunningSumsDaily();
+        _dailyDischargePrediction = EstimatedEnergyUsageTodayAndTomorrow.GetRunningSumsDaily();
+        LastSnapshotUpdate = now;
       }
     }
     private Dictionary<DateTime, int> _dailySoCPrediction;
