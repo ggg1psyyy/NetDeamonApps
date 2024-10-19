@@ -79,8 +79,7 @@ namespace PVControl
   {
     public static async Task<Tuple<bool, List<SensorData>>> GetEntityHistoryAsync(this IHomeAssistantApiManager apiManager, Entity entity, DateTime startDateTime, CancellationToken cancellationToken, bool getMinimal = false, bool getAttributes = false, DateTime? endDateTime = null)
     {
-      if (entity is null)
-        throw new ArgumentNullException(nameof(entity));
+      ArgumentNullException.ThrowIfNull(entity);
 
       string apiPath = string.Format("history/period/{1}?filter_entity_id={0}{2}{3}{4}",
         entity.EntityId,
