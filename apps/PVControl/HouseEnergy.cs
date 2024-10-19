@@ -1,5 +1,4 @@
 ﻿using LinqToDB;
-using Microsoft.AspNetCore.Routing;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Linq;

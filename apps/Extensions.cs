@@ -39,28 +39,28 @@ namespace PVControl
   }
   public static class Extensions
   {
-    public static async Task<Tuple<bool, List<SensorData>>> GetEntityHistoryAsync(this IHomeAssistantApiManager apiManager, Entity entity, DateTime startDateTime, CancellationToken cancellationToken, bool getMinimal=false, bool getAttributes = false, DateTime? endDateTime = null)
+    public static async Task<Tuple<bool, List<SensorData>>> GetEntityHistoryAsync(this IHomeAssistantApiManager apiManager, Entity entity, DateTime startDateTime, CancellationToken cancellationToken, bool getMinimal = false, bool getAttributes = false, DateTime? endDateTime = null)
     {
       if (entity is null)
         throw new ArgumentNullException(nameof(entity));
 
-      string apiPath = String.Format("history/period/{1}?filter_entity_id={0}{2}{3}{4}", 
-        entity.EntityId, 
+      string apiPath = string.Format("history/period/{1}?filter_entity_id={0}{2}{3}{4}",
+        entity.EntityId,
         startDateTime.ToISO8601(),
-        getAttributes ? "": "&no_attributes",
+        getAttributes ? "" : "&no_attributes",
         getMinimal ? "&minimal_response" : "",
         endDateTime != null ? "&end_time=" + HttpUtility.UrlEncode(endDateTime?.ToISO8601()) : ""
         );
       try
       {
         var result = await apiManager.GetApiCallAsync<JsonElement>(apiPath, cancellationToken);
-        var list = JsonSerializer.Deserialize<List<List<SensorData>>>(result);
-        if (list is not null  && list.Count > 0) 
+        var list = result.Deserialize<List<List<SensorData>>>();
+        if (list is not null && list.Count > 0)
           return new Tuple<bool, List<SensorData>>(true, list.First());
         else
           return new Tuple<bool, List<SensorData>>(false, []);
       }
-      catch 
+      catch
       {
         return new Tuple<bool, List<SensorData>>(false, []);
       }
@@ -114,7 +114,7 @@ namespace PVControl
         else
           return false;
       }
-      else if (typeof(T) == typeof(String))
+      else if (typeof(T) == typeof(string))
       {
         dynamic result = entity.State.ToString();
         resultValue = (T)result;
@@ -183,7 +183,7 @@ namespace PVControl
     {
       return list.Aggregate(new Dictionary<DateTime, int>(), (acc, x) =>
       {
-        if (acc.Count == 0 || (x.Key.Date != acc.Last().Key.Date))
+        if (acc.Count == 0 || x.Key.Date != acc.Last().Key.Date)
           acc.Add(x.Key, x.Value);
         else
           acc.Add(x.Key, acc.Last().Value + x.Value);
@@ -194,7 +194,7 @@ namespace PVControl
     {
       int minutes = time.Minute;
       int remainder = minutes % 15;
-      return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes-remainder, 0);
+      return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes - remainder, 0);
     }
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
@@ -203,9 +203,9 @@ namespace PVControl
 
     public new void Enqueue(T item)
     {
-      if (base.Count >= _capacity)
+      if (Count >= _capacity)
       {
-        base.Dequeue();
+        Dequeue();
       }
       base.Enqueue(item);
     }

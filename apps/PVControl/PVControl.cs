@@ -1,6 +1,4 @@
-﻿using NetDaemon.Client;
-using NetDaemon.Client.HomeAssistant.Extensions;
-using NetDaemon.Extensions.MqttEntityManager;
+﻿using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
