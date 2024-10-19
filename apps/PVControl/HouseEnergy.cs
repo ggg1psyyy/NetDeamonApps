@@ -717,15 +717,43 @@ namespace PVControl
         return result;
       }
     }
-    private Dictionary<DateTime, int> _dailyPrediction;
+    private DateTime _lastSnapshotUpdate = default;
+    private void UpdateSnapshots()
+    {
+      DateTime now = DateTime.Now;
+      if (_dailySoCPrediction is null || _dailyChargePrediction is null || _dailyDischargePrediction is null || (now.Hour == 0 && now.Minute == 1) || (now - _lastSnapshotUpdate).TotalMinutes > 24*60)
+      {
+        _dailySoCPrediction = EstimatedBatterySoCTodayAndTomorrow;
+        _dailyChargePrediction = PVForecastTodayAndTomorrow;
+        _dailyDischargePrediction = EstimatedEnergyUsageTodayAndTomorrow;
+        _lastSnapshotUpdate = now;
+      }
+    }
+    private Dictionary<DateTime, int> _dailySoCPrediction;
     public Dictionary<DateTime, int> DailyBatterySoCPredictionTodayAndTomorrow
     {
       get
       {
-        if (_dailyPrediction is null || (DateTime.Now.Hour == 0 && DateTime.Now.Minute == 0))
-          _dailyPrediction = EstimatedBatterySoCTodayAndTomorrow;
-
-        return _dailyPrediction;
+        UpdateSnapshots();
+        return _dailySoCPrediction;
+      }
+    }
+    private Dictionary<DateTime, int> _dailyChargePrediction;
+    public Dictionary<DateTime, int> DailyChargePredictionTodayAndTomorrow
+    {
+      get
+      {
+        UpdateSnapshots();
+        return _dailyChargePrediction;
+      }
+    }
+    private Dictionary<DateTime, int> _dailyDischargePrediction;
+    public Dictionary<DateTime, int> DailyDischargePredictionTodayAndTomorrow
+    {
+      get
+      {
+        UpdateSnapshots();
+        return _dailyDischargePrediction;
       }
     }
     private static Dictionary<DateTime, int> GetPVForecastFromEntities(List<Entity>? entities)

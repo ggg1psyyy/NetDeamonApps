@@ -67,6 +67,8 @@ namespace PVControl
     private Entity _info_chargeTomorrowEntity;
     private Entity _info_dischargeTomorrowEntity;
     private Entity _info_PredictedSoCEntity;
+    private Entity _info_PredictedChargeEntity;
+    private Entity _info_PredictedDischargeEntity;
     private Entity _overrideModeEntity;
     private Entity _RunHeavyLoadsNowEntity;
     #endregion
@@ -100,6 +102,8 @@ namespace PVControl
       _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
       _info_EstimatedMinSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_min_soc_tomorrow");
       _info_PredictedSoCEntity = new Entity(_context, "sensor.pv_control_info_predicted_soc");
+      _info_PredictedDischargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_discharge");
+      _info_PredictedChargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_charge");
       _info_chargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_charge_today");
       _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
       _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
@@ -278,6 +282,26 @@ namespace PVControl
           data = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, soc = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
+      }
+      var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.Where(p => p.Key <= now);
+      if (curPredCharge is not null)
+      {
+        await _entityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Sum(p => p.Value).ToString(CultureInfo.InvariantCulture));
+        var attr_pred_charge = new
+        {
+          data = _house.DailyChargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, charge = s.Value }),
+        };
+        await _entityManager.SetAttributesAsync(_info_PredictedChargeEntity.EntityId, attr_pred_charge);
+      }
+      var curPredDischarge = _house.DailyDischargePredictionTodayAndTomorrow.Where(p => p.Key <= now);
+      if (curPredDischarge is not null)
+      {
+        await _entityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Sum(p => p.Value).ToString(CultureInfo.InvariantCulture));
+        var attr_pred_charge = new
+        {
+          data = _house.DailyDischargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, discharge = s.Value }),
+        };
+        await _entityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);
       }
       #endregion
       #region SoC estimates
@@ -677,7 +701,7 @@ namespace PVControl
         {
           await _entityManager.CreateAsync("sensor.pv_control_info_predicted_soc", new EntityCreationOptions
           {
-            Name = "Predicted SoC",
+            Name = "Predicted SoC Now",
             DeviceClass = "Battery",
           }, new
           {
@@ -686,6 +710,36 @@ namespace PVControl
             device
           }).ConfigureAwait(false);
           _info_PredictedSoCEntity = new Entity(_context, "sensor.pv_control_info_predicted_soc");
+        }
+
+        if (_info_PredictedChargeEntity?.State is null)
+        {
+          await _entityManager.CreateAsync("sensor.pv_control_info_predicted_charge", new EntityCreationOptions
+          {
+            Name = "Predicted Charge Now",
+            DeviceClass = "Energy",
+          }, new
+          {
+            unit_of_measurement = "Wh",
+            icon = "mdi:solar-power-variant",
+            device
+          }).ConfigureAwait(false);
+          _info_PredictedChargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_charge");
+        }
+
+        if (_info_PredictedDischargeEntity?.State is null)
+        {
+          await _entityManager.CreateAsync("sensor.pv_control_info_predicted_discharge", new EntityCreationOptions
+          {
+            Name = "Predicted Discharge Now",
+            DeviceClass = "Energy",
+          }, new
+          {
+            unit_of_measurement = "Wh",
+            icon = "mdi:home-lightbulb-outline",
+            device
+          }).ConfigureAwait(false);
+          _info_PredictedDischargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_discharge");
         }
 
         if (_info_chargeTodayEntity?.State is null)
