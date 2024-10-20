@@ -49,6 +49,12 @@ namespace PVControl
     No,
     IfNecessary,
   }
+  public enum PVPeriods
+  {
+    BeforePV, 
+    InPVPeriod,
+    AfterPV,
+  }
   public struct SensorData
   {
     [JsonPropertyName("entity_id")]

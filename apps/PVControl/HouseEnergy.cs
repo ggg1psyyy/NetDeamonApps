@@ -178,23 +178,31 @@ namespace PVControl
     {
       get
       {
-        var now = DateTime.Now;
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
-
-        // as long as we still reach over 97% SoC via PV today it's always ok
-        var maxSocRestOfToday = estSoC.FirstMaxOrDefault(now, now.AddDays(1).Date);
-        if (maxSocRestOfToday.Value > 97)
-          return RunHeavyLoadsStatus.Yes;
-
         // if we're already force_charging we're sure to be in a cheap window so it should be allowed
         if (_currentMode == InverterModes.force_charge)
-          return RunHeavyLoadsStatus.IfNecessary;
+        {
+          if (IsNowCheapestWindowTotal)
+            return RunHeavyLoadsStatus.Yes;
+          else
+            return RunHeavyLoadsStatus.IfNecessary;
+        }
+        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+        var now = DateTime.Now;
 
-        // if we still keep the SoC over PreferredMin we don't forbid it
-        var minSocTilTomorrowFirstPV = estSoC.FirstMinOrDefault(now, FirstRelevantPVEnergyTomorrow);
-        if (minSocTilTomorrowFirstPV.Value > PreferredMinimalSoC)
+        // in PVperiod
+        if (CurrentPVPeriod == PVPeriods.InPVPeriod)
+        {
+          // as long as we still reach over 97% SoC via PV it's always ok
+          var maxSocRestOfToday = estSoC.FirstMaxOrDefault(now, LastRelevantPVEnergyToday);
+          if (maxSocRestOfToday.Value > 97)
+            return RunHeavyLoadsStatus.Yes;
+        }
+        // we allow it as long as we don't go under PreferredSoC
+        var firstPV = CurrentPVPeriod == PVPeriods.BeforePV ? FirstRelevantPVEnergyToday : FirstRelevantPVEnergyTomorrow;
+        var minSocTilFirstPV = estSoC.FirstMinOrDefault(now, firstPV);
+        if (minSocTilFirstPV.Value > PreferredMinimalSoC)
           return RunHeavyLoadsStatus.IfNecessary;
-
+        
         // otherwise nope
         return RunHeavyLoadsStatus.No;
       }
@@ -608,6 +616,19 @@ namespace PVControl
         var cheapest = CheapestWindowTotal;
         var now = DateTime.Now;
         return now > cheapest.StartTime && now < cheapest.EndTime;
+      }
+    }
+    public PVPeriods CurrentPVPeriod
+    {
+      get
+      {
+        var now = DateTime.Now;
+        if (now < FirstRelevantPVEnergyToday)
+          return PVPeriods.BeforePV;
+        else if (now > LastRelevantPVEnergyToday)
+          return PVPeriods.AfterPV;
+        else
+          return PVPeriods.InPVPeriod;
       }
     }
     public Dictionary<DateTime, int> PVForecastTodayAndTomorrow
