@@ -3,7 +3,6 @@ using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
 namespace PVControl
@@ -16,18 +15,32 @@ namespace PVControl
     /// Default Efficiency if not set in config
     /// </summary>
     private readonly float _defaultInverterEfficiency = 0.9f;
+    public Prediction Prediction_Load
+    { get; private set; }
+    public Prediction Prediction_PV
+    { get; private set; }
+    public Prediction Prediction_NetEnergy
+    { get; private set; }
+    public Prediction Prediction_BatterySoC
+    { get; private set; }
 
     public HouseEnergy(PVConfig config)
     { 
       _config = config;
       _battChargeFIFO = new FixedSizeQueue<int>(12);
+      if (string.IsNullOrEmpty(_config.DBLocation))
+        throw new NullReferenceException("No DBLocation available");
+      Prediction_Load = new HourlyWeightedAverageLoadPrediction(_config.DBLocation);
+      if (_config.ForecastPVEnergyTodayEntities is null || _config.ForecastPVEnergyTomorrowEntities is null)
+        throw new NullReferenceException("PV Forecast entities are not available");
+      Prediction_PV  = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load);
+      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, BatterySoc, BatteryCapacity);
+
       _config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentImportPriceEntity));
       _config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentBatteryPowerEntity));
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
-      _energyUsagePerHourCache = [];
-      _energyUsagePerWeekDayCache = [];
-      _energyUsagePerDayOfYearCache = [];
       _dailySoCPrediction = [];
       _dailyChargePrediction = [];
       _dailyDischargePrediction = [];
@@ -108,13 +121,13 @@ namespace PVControl
         DateTime now = DateTime.Now;
 #if !DEBUG
         // cache the result for 5 seconds, so that it's only calulated once per run
-        if (_lastCalculatedNeedToCharge != default && _needToChargeFromExternalCache != null && (now - _lastCalculatedNeedToCharge).TotalSeconds < 5)
+        if (_lastCalculatedNeedToCharge != default && _needToChargeFromExternalCache != null && Math.Abs((now - _lastCalculatedNeedToCharge).TotalSeconds) < 5)
         {
           return _needToChargeFromExternalCache;
         }
 #endif
         ForceChargeReason = ForceChargeReasons.None;
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+        var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
 
         if (ForceCharge)
         { 
@@ -186,7 +199,7 @@ namespace PVControl
           else
             return RunHeavyLoadsStatus.IfNecessary;
         }
-        var estSoC = EstimatedBatterySoCTodayAndTomorrow;
+        var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
         var now = DateTime.Now;
 
         // in PVperiod
@@ -292,13 +305,6 @@ namespace PVControl
     /// <summary>
     /// remaining PV yield forecast for today in WH
     /// </summary>
-    public int PVEnergyForecastRemainingToday
-    {
-      get
-      {
-        return GetPVForecastForPeriod(DateTime.Now, DateTime.Now.Date.AddHours(23).AddMinutes(59).AddSeconds(59));
-      }
-    }
     public float CurrentEnergyImportPrice
     {
       get
@@ -330,15 +336,11 @@ namespace PVControl
         return CalculateBatteryEnergyAtSoC(EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC, 0);
       }
     }
-    public int EstimateBatteryEnergyAtTime(DateTime time)
-    {      
-      return EstimatedBatteryEnergyTodayAndTomorrow.OrderBy(k => Math.Abs((k.Key - time).Ticks)).First().Value;
-    }
     public DateTime FirstRelevantPVEnergyToday
     {
       get
       {
-        var result = EstimatedNetEnergyTodayAndTomorrow.Where(f => f.Key.Date == DateTime.Now.Date && f.Value > 50).Select(f => f.Key).FirstOrDefault();
+        var result = Prediction_NetEnergy.Today.Where(f => f.Value > 50).Select(f => f.Key).FirstOrDefault();
         return result != default ? result : DateTime.Now.Date.AddDays(2).AddMinutes(-1);
       }
     }
@@ -346,7 +348,7 @@ namespace PVControl
     {
       get
       {
-        var result = EstimatedNetEnergyTodayAndTomorrow.Where(f => f.Key.Date == DateTime.Now.Date.AddDays(1) && f.Value > 50).Select(f => f.Key).FirstOrDefault();
+        var result = Prediction_NetEnergy.Tomorrow.Where(f => f.Value > 50).Select(f => f.Key).FirstOrDefault();
         return result != default ? result : DateTime.Now.Date.AddDays(2).AddMinutes(-1);
       }
     }
@@ -354,7 +356,7 @@ namespace PVControl
     {
       get
       {
-        var result = EstimatedNetEnergyTodayAndTomorrow.Where(f => f.Key.Date == DateTime.Now.Date && f.Value > 50).Select(f => f.Key).LastOrDefault();
+        var result = Prediction_NetEnergy.Today.Where(f => f.Value > 50).Select(f => f.Key).LastOrDefault();
         return result != default ? result : DateTime.Now.Date.AddDays(2).AddMinutes(-1);
       }
     }
@@ -362,7 +364,7 @@ namespace PVControl
     {
       get
       {
-        var result = EstimatedNetEnergyTodayAndTomorrow.Where(f => f.Key.Date == DateTime.Now.Date.AddDays(1) && f.Value > 50).Select(f => f.Key).LastOrDefault();
+        var result = Prediction_NetEnergy.Tomorrow.Where(f => f.Value > 50).Select(f => f.Key).LastOrDefault();
         return result != default ? result : DateTime.Now.Date.AddDays(2).AddMinutes(-1);
       }
     }
@@ -425,88 +427,6 @@ namespace PVControl
        return PriceList.Where(p => p.EndTime > DateTime.Now).OrderBy(p => p.Price).First();
       }
     }
-    public int GetPVForecastForPeriod(DateTime start, DateTime end)
-    {
-      return PVForecastTodayAndTomorrow.Where(fc => fc.Key >= start && fc.Key <= end).Select(fc => fc.Value).Sum();
-    }
-    public int GetEnergyUsageForPeriod(DateTime start, DateTime end)
-    {
-      return EstimatedEnergyUsageTodayAndTomorrow.Where(fc => fc.Key >= start && fc.Key <= end).Select(fc => fc.Value).Sum();
-    }
-    public int GetNetEnergyForPeriod(DateTime start, DateTime end)
-    {
-      return EstimatedNetEnergyTodayAndTomorrow.Where(fc => fc.Key >= start && fc.Key <= end).Select(fc => fc.Value).Sum();
-    }
-    private Dictionary<int, int> HourlyAverageEnergyUsage
-    {
-      get
-      {
-        UpdateCaches();
-        return _energyUsagePerHourCache;
-      }
-    }
-    //private Dictionary<int, int> DayOfWeekAverageEnergyUsage
-    //{
-    //  get
-    //  {
-    //    UpdateCaches();
-    //    return _energyUsagePerWeekDayCache;
-    //  }
-    //}
-    //private Dictionary<int, int> DayOfYearAverageEnergyUsage
-    //{
-    //  get
-    //  {
-    //    UpdateCaches();
-    //    return _energyUsagePerDayOfYearCache;
-    //  }
-    //}
-    #region Caches for DB Access
-    public void UpdateCaches()
-    {
-      if (_energyUsagePerHourCache == null || _energyUsagePerHourCache.Count == 0 || _lastUsagePerHourCacheUpdate < DateTime.Now.AddDays(-1))
-      {
-        UpdateHourlyEnergyUsageCache();
-      }
-      if (_energyUsagePerWeekDayCache == null || _energyUsagePerWeekDayCache.Count == 0 || _lastUsagePerWeekDayCacheUpdate < DateTime.Now.AddDays(-7))
-      {
-        UpdateWeekDayEnergyUsageCache();
-      }
-      if (_energyUsagePerDayOfYearCache == null || _energyUsagePerDayOfYearCache.Count == 0 || _lastUsagePerDayOfYearCacheUpdate < DateTime.Now.AddDays(-7))
-      {
-        UpdateDayOfYearEnergyUsageCache();
-      }
-    }
-    private Dictionary<int, int> _energyUsagePerHourCache;
-    private DateTime _lastUsagePerHourCacheUpdate = DateTime.Now;
-    private void UpdateHourlyEnergyUsageCache()
-    {
-      _energyUsagePerHourCache = [];
-      for (int i = 0; i < 24; i++)
-        _energyUsagePerHourCache.Add(i, GetHourlyHouseEnergyUsageHistory(i));
-      _lastUsagePerHourCacheUpdate = DateTime.Now;
-    }
-
-    private Dictionary<int, int> _energyUsagePerWeekDayCache;
-    private DateTime _lastUsagePerWeekDayCacheUpdate = DateTime.Now;
-    private void UpdateWeekDayEnergyUsageCache()
-    {
-      _energyUsagePerWeekDayCache = [];
-      for (int i = 0; i < 7; i++)
-        _energyUsagePerWeekDayCache.Add(i, GetWeekDayyHouseEnergyUsageHistory((DayOfWeek)i));
-      _lastUsagePerWeekDayCacheUpdate = DateTime.Now;
-    }
-
-    private Dictionary<int, int> _energyUsagePerDayOfYearCache;
-    private DateTime _lastUsagePerDayOfYearCacheUpdate = DateTime.Now;
-    private void UpdateDayOfYearEnergyUsageCache()
-    {
-      _energyUsagePerDayOfYearCache = [];
-      for (int i = 0; i < 366; i++)
-        _energyUsagePerDayOfYearCache.Add(i, GetDayOfYearyHouseEnergyUsageHistory(i));
-      _lastUsagePerDayOfYearCacheUpdate = DateTime.Now;
-    }
-    #endregion
     private int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)
     {
       float sS = (float)startSoC / 100;
@@ -526,19 +446,9 @@ namespace PVControl
     {
       float s = (float)soc / 100;
       float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
-      float e = ((float)BatteryCapacity * s - (float)BatteryCapacity * ms);// * InverterEfficiency;
+      float e = ((float)BatteryCapacity * s - (float)BatteryCapacity * ms);
       return (int) e;
     }
-    public int CalculateBatterySoCAtEnergy(int energy)
-    {
-      return (int)(energy * 100 / BatteryCapacity);
-    }
-    //private int CalculateSoCNeededForEnergy(int energy, int minSoC = -1)
-    //{
-    //  float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
-    //  int socNeeded = (int)(((float)energy / ((float)BatteryCapacity * InverterEfficiency) + ms) * 100);
-    //  return socNeeded;
-    //}
     private List<EpexPriceTableEntry> SortPriceListByCheapestPeriod(DateTime start, DateTime end, int hours=1)
     {
       if (hours == 0)
@@ -631,86 +541,24 @@ namespace PVControl
           return PVPeriods.InPVPeriod;
       }
     }
-    public Dictionary<DateTime, int> PVForecastTodayAndTomorrow
+    public void UpdatePredictions()
     {
-      get
-      {
-        Dictionary<DateTime, int> completeForecast = [];
-        completeForecast = completeForecast.CombineForecastLists(GetPVForecastFromEntities(_config.ForecastPVEnergyTodayEntities));
-        completeForecast = completeForecast.CombineForecastLists(GetPVForecastFromEntities(_config.ForecastPVEnergyTomorrowEntities));
-        return completeForecast;
-      }
+      if (DateTime.Now.Hour == 0 && Math.Abs((DateTime.Now - Prediction_Load.LastDataUpdate).TotalMinutes) > 60)
+        Prediction_Load.UpdateData();
+      Prediction_PV.UpdateData();
+      Prediction_NetEnergy.UpdateData();
+      Prediction_BatterySoC.UpdateData();
     }
-    public Dictionary<DateTime, int> EstimatedEnergyUsageTodayAndTomorrow
-    {
-      get
-      {
-        Dictionary<DateTime, int> result = [];
-        foreach (var kvp in PVForecastTodayAndTomorrow)
-        {
-          result.Add(kvp.Key, HourlyAverageEnergyUsage[kvp.Key.Hour] / 4);
-        }
-        return result;
-      }
-    }
-    public Dictionary<DateTime, int> EstimatedNetEnergyTodayAndTomorrow
-    {
-      get
-      {
-        Dictionary<DateTime, int> result = [];
-        var estUsage = EstimatedEnergyUsageTodayAndTomorrow;
-        foreach (var kvp in PVForecastTodayAndTomorrow)
-        {
-          if (estUsage.TryGetValue(kvp.Key, out int value))
-            result.Add(kvp.Key, kvp.Value - value);
-        }
-        return result;
-      }
-    }
-    public Dictionary<DateTime, int> EstimatedBatteryEnergyTodayAndTomorrow
-    {
-      get
-      {
-        Dictionary<DateTime, int> result = EstimatedNetEnergyTodayAndTomorrow;
-
-        int curEnergy = CalculateBatteryEnergyAtSoC(BatterySoc, 0);
-        int curIndex = EstimatedNetEnergyTodayAndTomorrow.Keys.ToList().IndexOf(EstimatedNetEnergyTodayAndTomorrow.Keys.FirstOrDefault(k => k >= DateTime.Now));
-        
-        for (int i=curIndex; i<result.Count; i++)
-        {
-          result[result.ElementAt(i).Key] = Math.Min(curEnergy + result[result.ElementAt(i).Key], BatteryCapacity);
-          curEnergy = result[result.ElementAt(i).Key];
-        }
-        curEnergy = CalculateBatteryEnergyAtSoC(BatterySoc, 0);
-        for (int i = curIndex-1; i >= 0; i--)
-        {
-          result[result.ElementAt(i).Key] = Math.Min(curEnergy - result[result.ElementAt(i).Key], BatteryCapacity);
-          curEnergy = result[result.ElementAt(i).Key];
-        }
-        return result;
-      }
-    }
-    public Dictionary<DateTime, int> EstimatedBatterySoCTodayAndTomorrow
-    {
-      get
-      {
-        Dictionary<DateTime, int> result = [];
-        foreach (var kvp in EstimatedBatteryEnergyTodayAndTomorrow)
-        {
-          result.Add(kvp.Key, CalculateBatterySoCAtEnergy(kvp.Value));
-        }
-        return result;
-      }
-    }
+    #region daily snapshot for comparing
     public DateTime LastSnapshotUpdate { get; private set; } = default;
     private void UpdateSnapshots()
     {
       DateTime now = DateTime.Now;
       if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
       {
-        _dailySoCPrediction = EstimatedBatterySoCTodayAndTomorrow;
-        _dailyChargePrediction = PVForecastTodayAndTomorrow.GetRunningSumsDaily();
-        _dailyDischargePrediction = EstimatedEnergyUsageTodayAndTomorrow.GetRunningSumsDaily();
+        _dailySoCPrediction = Prediction_BatterySoC.TodayAndTomorrow;
+        _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
+        _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();
         LastSnapshotUpdate = now;
       }
     }
@@ -741,70 +589,6 @@ namespace PVControl
         return _dailyDischargePrediction;
       }
     }
-    private static Dictionary<DateTime, int> GetPVForecastFromEntities(List<Entity>? entities)
-    {
-      Dictionary<DateTime, int> completeForecast = [];
-      if (entities != null && entities.Count > 0)
-      {
-        foreach (Entity entity in entities)
-        {
-          completeForecast = completeForecast.CombineForecastLists(GetForecastDetailsFromPower(entity));
-        }
-      }
-      return completeForecast;
-    }
-    private static Dictionary<DateTime, int> GetForecastDetailsFromPower(Entity entity)
-    {
-      try
-      {
-        var result = entity.EntityState?.AttributesJson?.GetProperty("watts").Deserialize<Dictionary<DateTime, int>>()?.OrderBy(t => t.Key).ToDictionary();
-        if (result != null)
-        {
-          float interval = 0.25f;
-          for (int i = 0; i < result.Count; i++)
-          {
-            var r = result.ElementAt(i).Key;
-            if (result[r] == 0)
-              continue;
-            if (i < result.Count - 1)
-            {
-              var r_next = result.ElementAt(i + 1).Key;
-              interval = (float)(r_next - r).TotalHours;
-            }
-            result[r] = (int)(result[r] * interval);
-          }
-          return result;
-        }
-      }
-      catch { }
-      return [];
-    }
-    private int GetHourlyHouseEnergyUsageHistory(int hour)
-    {
-      using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(String.Format("Data Source={0}", _config.DBLocation)));
-      DateTime now = DateTime.Now;
-      float scaling = 20.0f;
-      var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new { Date = h.Timestamp, Value = h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / scaling) }).ToList();
-      float weightedSum = weights.Sum(w => w.Value is null ? 0 : (float)w.Value * w.Weight);
-      float sumOfWeights = weights.Sum(w => w.Weight);
-      float weightedAverage = weightedSum / sumOfWeights;
-      return (int)Math.Round(weightedAverage, 0);
-    }
-    private int GetWeekDayyHouseEnergyUsageHistory(DayOfWeek dayOfWeek)
-    {
-      using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(String.Format("Data Source={0}", _config.DBLocation)));
-      var dailies = db.Dailies.Where(h => h.Timestamp.DayOfWeek == dayOfWeek && h.Houseenergy != null).Select(s => s.Houseenergy);
-#pragma warning disable CS8629 // Nullable value type may be null.
-      return dailies.Any() ? (int)dailies.Average() : 0;
-#pragma warning restore CS8629 // Nullable value type may be null.
-    }
-    private int GetDayOfYearyHouseEnergyUsageHistory(int dayOfYear)
-    {
-      using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(String.Format("Data Source={0}", _config.DBLocation)));
-      var dailies = db.Dailies.Where(h => h.Timestamp.DayOfYear == dayOfYear && h.Houseenergy != null).Select(s => s.Houseenergy);
-#pragma warning disable CS8629 // Nullable value type may be null.
-      return dailies.Any() ? (int)dailies.Average() : 0;
-#pragma warning restore CS8629 // Nullable value type may be null.
-    }
+    #endregion
   }
 }

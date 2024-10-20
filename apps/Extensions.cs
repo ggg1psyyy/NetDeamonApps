@@ -233,11 +233,31 @@ namespace PVControl
         return acc;
       });
     }
+    public static int GetSum(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
+    {
+      if (start == default) start = DateTime.MinValue;
+      if (end == default) end = DateTime.MaxValue;
+      return list.Where(t => t.Key >= start && t.Key <= end).Sum(s => s.Value);
+    }
+    public static int GetAverage(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
+    {
+      if (start == default) start = DateTime.MinValue;
+      if (end == default) end = DateTime.MaxValue;
+      return (int)Math.Round(list.Where(t => t.Key >= start && t.Key <= end).Average(s => s.Value), 0);
+    }
     public static DateTime RoundToNearestQuarterHour(this DateTime time)
     {
       int minutes = time.Minute;
       int remainder = minutes % 15;
       return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes - remainder, 0);
+    }
+    public static void ClearAndCreateEmptyPredictionData(this Dictionary<DateTime, int> data)
+    {
+      data.Clear();
+      for (var time = DateTime.Now.Date; time < DateTime.Now.AddDays(2).Date; time = time.AddMinutes(15))
+      {
+        data.Add(time, 0);
+      }
     }
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct

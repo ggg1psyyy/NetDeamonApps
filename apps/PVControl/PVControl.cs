@@ -207,10 +207,11 @@ namespace PVControl
     private async Task ScheduledOperations()
     {
       _logger.LogDebug("Entering Schedule");
-
-      await _entityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       DateTime now = DateTime.Now;
-
+      _logger.LogDebug("Updating Predictions");
+      _house.UpdatePredictions();
+      _logger.LogDebug("Finished Updating Predictions");
+      await _entityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       #region Mode
       var nextCheapest = _house.BestChargeTime;
       var attr_Mode = new
@@ -308,8 +309,8 @@ namespace PVControl
       }
       #endregion
       #region SoC estimates
-      var est_soc_today = _house.EstimatedBatterySoCTodayAndTomorrow.Where(s => s.Key.Date == now.Date && s.Key >= now).ToDictionary();
-      var est_soc_tomorrow = _house.EstimatedBatterySoCTodayAndTomorrow.Where(s => s.Key.Date == now.AddDays(1).Date).ToDictionary();
+      var est_soc_today = _house.Prediction_BatterySoC.Today.Where(s => s.Key >= now).ToDictionary();
+      var est_soc_tomorrow = _house.Prediction_BatterySoC.Tomorrow;
 
       if (est_soc_today.Count > 0)
       {
@@ -354,25 +355,23 @@ namespace PVControl
       }
       #endregion
       #region charge/discharge forecasts
-      var charge = _house.PVForecastTodayAndTomorrow;
-      var chargeToday = charge.Where(c => c.Key >= now && c.Key.Date == now.Date).ToDictionary();
-      var chargeTomorrow = charge.Where(c => c.Key.Date == now.Date.AddDays(1)).ToDictionary();
-      var discharge = _house.EstimatedEnergyUsageTodayAndTomorrow;
-      var dischargeToday = discharge.Where(c => c.Key >= now && c.Key.Date == now.Date).ToDictionary();
-      var dischargeTomorrow = discharge.Where(c => c.Key.Date == now.Date.AddDays(1)).ToDictionary();
+      var chargeToday = _house.Prediction_PV.Today;
+      var chargeTomorrow = _house.Prediction_PV.Tomorrow;
+      var dischargeToday = _house.Prediction_Load.Today;
+      var dischargeTomorrow = _house.Prediction_Load.Tomorrow;
 
       if (chargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.Sum(c => c.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.GetSum(start:now).ToString(CultureInfo.InvariantCulture));
         var attr_chargeToday = new
         {
-          data = charge.Where(c => c.Key.Date == now.Date).ToDictionary(),
+          data = chargeToday,
         };
         await _entityManager.SetAttributesAsync(_info_chargeTodayEntity.EntityId, attr_chargeToday);
       }
       if (chargeTomorrow.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_chargeTomorrowEntity.EntityId, chargeTomorrow.Sum(c => c.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_chargeTomorrowEntity.EntityId, chargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
         var attr_chargeTomorrow = new
         {
           data = chargeTomorrow,
@@ -382,16 +381,16 @@ namespace PVControl
 
       if (dischargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.Sum(c => c.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.GetSum(start:now).ToString(CultureInfo.InvariantCulture));
         var attr_dischargeToday = new
         {
-          data = discharge.Where(c => c.Key.Date == now.Date).ToDictionary(),
+          data = dischargeToday,
         };
         await _entityManager.SetAttributesAsync(_info_dischargeTodayEntity.EntityId, attr_dischargeToday);
       }
       if (dischargeTomorrow.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_dischargeTomorrowEntity.EntityId, dischargeTomorrow.Sum(c => c.Value).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_dischargeTomorrowEntity.EntityId, dischargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
         var attr_dischargeTomorrow = new
         {
           data = dischargeTomorrow,
