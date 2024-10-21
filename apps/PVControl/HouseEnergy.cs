@@ -35,7 +35,9 @@ namespace PVControl
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV  = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
       Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load);
-      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, BatterySoc, BatteryCapacity);
+      if (_config.BatterySoCEntity is null)
+        throw new NullReferenceException("BatterySoCEntity not available");
+      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, _config.BatterySoCEntity, BatteryCapacity);
 
       _config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentImportPriceEntity));
       _config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentBatteryPowerEntity));
