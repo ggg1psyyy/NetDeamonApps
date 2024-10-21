@@ -1,21 +1,9 @@
-# Project template for binary deploy
-This is the project template for binary deploy. This allows you to build a binary package and deploy it to NetDaemon.
+# PVControl
+An application to optimize (external) energy usage by monitoring and predicting battery SoC, houseload and PV charge.
 
-This is generated using NetDaemon runtime version 3.1 and .NET 7.
+## Prediction
+Class to encapsulate different predictions and forecasts.
+For the load there only is a (weighted) average prediction available for now, but the logged data is meant to use some sort of ML/AI to predict the load more efficient.
 
-## Getting started
-Please see [netdaemon.xyz](https://netdaemon.xyz/docs/v3) for more information about getting starting developing apps for Home Assistant using NetDaemon.
-
-Please add code generation features in `program.cs` when using code generation features by removing comments!
-
-## Use the code generator
-See https://netdaemon.xyz/docs/v3/hass_model/hass_model_codegen
-
-## Issues
-
-- If you have issues or suggestions of improvements to this template, please [add an issue](https://github.com/net-daemon/netdaemon-app-template)
-- If you have issues or suggestions of improvements to NetDaemon, please [add an issue](https://github.com/net-daemon/netdaemon/issues)
-
-## Discuss the NetDaemon
-
-Please [join the Discord server](https://discord.gg/K3xwfcX) to get support or if you want to contribute and help others.
+# DataLogger
+This part logs the most important sensor information into a sqlite db to use for prediction.
