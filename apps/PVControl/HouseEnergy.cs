@@ -193,14 +193,6 @@ namespace PVControl
     {
       get
       {
-        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
-        if (_currentMode == InverterModes.force_charge)
-        {
-          if (IsNowCheapestWindowTotal)
-            return RunHeavyLoadsStatus.Yes;
-          else
-            return RunHeavyLoadsStatus.IfNecessary;
-        }
         var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
         var now = DateTime.Now;
 
@@ -217,7 +209,16 @@ namespace PVControl
         var minSocTilFirstPV = estSoC.FirstMinOrDefault(now, firstPV);
         if (minSocTilFirstPV.Value > PreferredMinimalSoC)
           return RunHeavyLoadsStatus.IfNecessary;
-        
+
+        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
+        if (_currentMode == InverterModes.force_charge)
+        {
+          if (IsNowCheapestWindowTotal)
+            return RunHeavyLoadsStatus.Yes;
+          else
+            return RunHeavyLoadsStatus.IfNecessary;
+        }
+
         // otherwise nope
         return RunHeavyLoadsStatus.No;
       }
