@@ -102,7 +102,7 @@ namespace PVControl
         }
         else
         {
-          ForceChargeReason = ForceChargeReasons.None;
+          //ForceChargeReason = ForceChargeReasons.None;
           _currentMode = InverterModes.normal;
           return InverterModes.normal;
         }
@@ -152,13 +152,13 @@ namespace PVControl
           }
         }
 
-        int minCharge = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
+        int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
         if (_currentMode == InverterModes.force_charge)
           // while charging increase minCharge to prevent hysteresis
-          minCharge++;
+          minSoC++;
 
         // when do we reach mincharge
-        var minReached = estSoC.FirstUnderOrDefault(minCharge, start: now);
+        var minReached = estSoC.FirstUnderOrDefault(minSoC, start: now);
         if (minReached.Key == default)
           // we don't reach minima, so what's the lowest
           minReached = estSoC.FirstMinOrDefault(start: now);
@@ -169,12 +169,16 @@ namespace PVControl
         // charge to Max if in absolut cheapest period when we never reach 100% SoC today or tomorrow with PV only and if we have at least 12h price preview
         if (PriceList.Where(p => p.StartTime > now).Count() > 12)
           if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > now).Min(p => p.Price) && maxReached.Value < 99 && estSoC.Where(e => e.Key.Date == now.Date.AddDays(1)).Max(e => e.Value) < 99)
-            minCharge = 100;
+            minSoC = 100;
 
-        // We need to force charge if we estimate to fall to minCharge
-        bool needCharge = minReached.Value <= minCharge;
+        bool minBeforeMax = minReached.Key < maxReached.Key;
+        bool minUnderDefined = minReached.Value <= minSoC;
+        bool maxOver100 = maxReached.Value >= 100;
+
+        // We need to force charge if we estimate to fall to minCharge before we reach max or max < 100
+        bool needCharge = minUnderDefined && (minBeforeMax || !maxOver100);
         if (needCharge)
-          ForceChargeReason = minCharge < PreferredMinimalSoC ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
+          ForceChargeReason = minSoC <= AbsoluteMinimalSoC+2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
         _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key, minReached.Value);
         _lastCalculatedNeedToCharge = now;
         return _needToChargeFromExternalCache;
@@ -186,6 +190,7 @@ namespace PVControl
       get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode; 
       private set => _forceChargeReason = value; 
     }
+    public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
     /// <summary>
     /// Tells if it's a good time to run heavy loads now
     /// </summary>
@@ -202,24 +207,41 @@ namespace PVControl
           // as long as we still reach over 97% SoC via PV it's always ok
           var maxSocRestOfToday = estSoC.FirstMaxOrDefault(now, LastRelevantPVEnergyToday);
           if (maxSocRestOfToday.Value > 97)
+          {
+            RunHeavyLoadReason = RunHeavyLoadReasons.WillReach100;
             return RunHeavyLoadsStatus.Yes;
+          }
         }
         // we allow it as long as we don't go under PreferredSoC
         var firstPV = CurrentPVPeriod == PVPeriods.BeforePV ? FirstRelevantPVEnergyToday : FirstRelevantPVEnergyTomorrow;
         var minSocTilFirstPV = estSoC.FirstMinOrDefault(now, firstPV);
         if (minSocTilFirstPV.Value > PreferredMinimalSoC)
-          return RunHeavyLoadsStatus.IfNecessary;
-
+        {
+          RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverPreferredMinima;
+          return RunHeavyLoadsStatus.Yes;
+        }
+        else if (minSocTilFirstPV.Value > AbsoluteMinimalSoC+3)
+        {
+          RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverAbsoluteMinima;
+          return RunHeavyLoadsStatus.Prevent;
+        }
         // if we're already force_charging we're sure to be in a cheap window so it should be allowed
         if (_currentMode == InverterModes.force_charge)
         {
           if (IsNowCheapestWindowTotal)
+          {
+            RunHeavyLoadReason = RunHeavyLoadReasons.ChargingAtCheapestPrice;
             return RunHeavyLoadsStatus.Yes;
+          }
           else
+          {
+            RunHeavyLoadReason = RunHeavyLoadReasons.Charging;
             return RunHeavyLoadsStatus.IfNecessary;
+          }
         }
 
         // otherwise nope
+        RunHeavyLoadReason = RunHeavyLoadReasons.WillGoUnderAbsoluteMinima;
         return RunHeavyLoadsStatus.No;
       }
     }

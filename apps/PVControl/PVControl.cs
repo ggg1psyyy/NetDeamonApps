@@ -112,17 +112,6 @@ namespace PVControl
       _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
       _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
 
-#if DEBUG
-      //_house.EnforcePreferredSoC = true;
-      //_house.PreferredMinBatterySoC = 75;
-      //_house.ForceCharge = true;
-      //_house.ForceChargeMaxPrice = 2;
-      //_house.ForceChargeTargetSoC = 90;
-      //var Y = _house.ProposedMode;
-      //_house.EnforcePreferredSoC = false;
-      //var Z = _house.ProposedMode;
-#endif
-
       _logger.LogInformation("Finished PVControl constructor");
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
@@ -151,9 +140,12 @@ namespace PVControl
         if (_overrideModeEntity.State != null)
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 #if DEBUG
-        _scheduler.ScheduleCron("0 */1 * * *", async () => await ScheduledOperations(), false);
+        _scheduler.ScheduleCron("* */1 * * *", async () => await ScheduledOperations(), false);
 #else
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
+#endif
+#if DEBUG
+        var Z = _house.Prediction_PV;
 #endif
       }
       else
@@ -202,7 +194,9 @@ namespace PVControl
           _house.ForceChargeTargetSoC = value;
         await _entityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
+#if !DEBUG
       await ScheduledOperations();
+#endif
     }
     private async Task ScheduledOperations()
     {
@@ -225,6 +219,11 @@ namespace PVControl
       #endregion
       #region RunHeavyLoads
       await _entityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
+      var attr_HeavyLoad = new
+      {
+        Reason = _house.RunHeavyLoadReason.ToString(),
+      };
+      await _entityManager.SetAttributesAsync(_RunHeavyLoadsNowEntity.EntityId, attr_HeavyLoad);
       #endregion
       #region Remaining battery
       await _entityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
@@ -319,7 +318,7 @@ namespace PVControl
         var attr_Min_SoC_Today = new
         {
           time = min_soc_today.Key.ToISO8601(),
-          data = est_soc_today.Select( s => new { datetime = s.Key, soc = s.Value }),
+          data = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).Select( s => new { datetime = s.Key, soc = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_EstimatedMinSoCTodayEntity.EntityId, attr_Min_SoC_Today);
 

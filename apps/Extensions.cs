@@ -48,6 +48,16 @@ namespace PVControl
     Yes,
     No,
     IfNecessary,
+    Prevent,
+  }
+  public enum RunHeavyLoadReasons
+  {
+    WillReach100,
+    ChargingAtCheapestPrice,
+    Charging,
+    WillStayOverPreferredMinima,
+    WillStayOverAbsoluteMinima,
+    WillGoUnderAbsoluteMinima,
   }
   public enum PVPeriods
   {
