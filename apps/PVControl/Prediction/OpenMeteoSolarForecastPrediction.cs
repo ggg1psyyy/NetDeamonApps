@@ -38,7 +38,11 @@ namespace PVControl
     {
       try
       {
-        var result = entity.EntityState?.AttributesJson?.GetProperty("watts").Deserialize<Dictionary<DateTime, int>>()?.OrderBy(t => t.Key).ToDictionary();
+        var resultDTO = entity.EntityState?.AttributesJson?.GetProperty("watts").Deserialize<Dictionary<DateTimeOffset, int>>()?.OrderBy(t => t.Key).ToDictionary();
+        Dictionary<DateTime, int> result = [];
+        foreach (var item in resultDTO)
+          result.Add(item.Key.DateTime, item.Value);
+
         if (result != null)
         {
           float interval = 0.25f;
