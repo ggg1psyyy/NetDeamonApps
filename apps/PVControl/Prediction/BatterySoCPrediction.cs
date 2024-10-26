@@ -30,13 +30,13 @@ namespace PVControl
 
       for (int i = curIndex; i < result.Count; i++)
       {
-        curEnergy = Math.Min(curEnergy + _netEnergyPrediction.TodayAndTomorrow[result.ElementAt(i).Key], _battCapacity);
+        curEnergy = Math.Max(Math.Min(curEnergy + _netEnergyPrediction.TodayAndTomorrow[result.ElementAt(i).Key], _battCapacity), 0);
         result[result.ElementAt(i).Key] = CalculateBatterySoCAtEnergy(curEnergy);
       }
       curEnergy = CalculateBatteryEnergyAtSoC(curSoc);
       for (int i = curIndex - 1; i >= 0; i--)
       {
-        curEnergy = Math.Min(curEnergy - _netEnergyPrediction.TodayAndTomorrow[result.ElementAt(i).Key], _battCapacity);
+        curEnergy = Math.Max(Math.Min(curEnergy - _netEnergyPrediction.TodayAndTomorrow[result.ElementAt(i).Key], _battCapacity), 0);
         result[result.ElementAt(i).Key] = CalculateBatterySoCAtEnergy(curEnergy);
       }
       return result;
