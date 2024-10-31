@@ -200,7 +200,20 @@ namespace PVControl
       {
         var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
         var now = DateTime.Now;
-
+        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
+        if (_currentMode == InverterModes.force_charge)
+        {
+          if (IsNowCheapestWindowTotal)
+          {
+            RunHeavyLoadReason = RunHeavyLoadReasons.ChargingAtCheapestPrice;
+            return RunHeavyLoadsStatus.Yes;
+          }
+          else
+          {
+            RunHeavyLoadReason = RunHeavyLoadReasons.Charging;
+            return RunHeavyLoadsStatus.IfNecessary;
+          }
+        }
         // in PVperiod
         if (CurrentPVPeriod == PVPeriods.InPVPeriod)
         {
@@ -223,24 +236,20 @@ namespace PVControl
         else if (minSocTilFirstPV.Value > AbsoluteMinimalSoC+3)
         {
           RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverAbsoluteMinima;
-          return RunHeavyLoadsStatus.Prevent;
-        }
-        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
-        if (_currentMode == InverterModes.force_charge)
-        {
-          if (IsNowCheapestWindowTotal)
-          {
-            RunHeavyLoadReason = RunHeavyLoadReasons.ChargingAtCheapestPrice;
-            return RunHeavyLoadsStatus.Yes;
-          }
-          else
-          {
-            RunHeavyLoadReason = RunHeavyLoadReasons.Charging;
-            return RunHeavyLoadsStatus.IfNecessary;
-          }
+          return RunHeavyLoadsStatus.IfNecessary;
         }
 
-        // otherwise nope
+        // otherwise 
+        if (BatterySoc > PreferredMinimalSoC)
+        {
+          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOverPreferredMinima;
+          return RunHeavyLoadsStatus.IfNecessary;
+        }
+        else if (BatterySoc > AbsoluteMinimalSoC)
+        {
+          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOberAbsoluteMinima;
+          return RunHeavyLoadsStatus.Prevent;
+        }
         RunHeavyLoadReason = RunHeavyLoadReasons.WillGoUnderAbsoluteMinima;
         return RunHeavyLoadsStatus.No;
       }

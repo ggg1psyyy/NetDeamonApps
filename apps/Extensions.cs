@@ -58,6 +58,8 @@ namespace PVControl
     WillStayOverPreferredMinima,
     WillStayOverAbsoluteMinima,
     WillGoUnderAbsoluteMinima,
+    CurrentlyOverPreferredMinima,
+    CurrentlyOberAbsoluteMinima,
   }
   public enum PVPeriods
   {
