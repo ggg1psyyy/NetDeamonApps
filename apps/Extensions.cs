@@ -285,5 +285,35 @@ namespace PVControl
       base.Enqueue(item);
     }
   }
+  public class RunningIntAverage
+  {
+    private Queue<(DateTime timestamp, int value)> _Values;
+    private TimeSpan _Window;
 
+    public RunningIntAverage(TimeSpan window)
+    {
+      _Values = [];
+      _Window = window;
+    }
+    public void AddValue(int value)
+    {
+      DateTime now = DateTime.UtcNow;
+      _Values.Enqueue((now, value));
+
+      while (_Values.Count > 0 && (now - _Values.Peek().timestamp) > _Window)
+      {
+        _Values.Dequeue();
+      }
+    }
+    public int Count
+    {
+      get { return _Values.Count; }
+    }
+    public int GetAverage()
+    {
+      if ( _Values.Count == 0 ) 
+        return int.MinValue;
+      return (int) Math.Round(_Values.Average(v => v.value), 0);
+    }
+  }
 }

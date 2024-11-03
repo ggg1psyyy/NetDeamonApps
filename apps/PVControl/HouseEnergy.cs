@@ -10,7 +10,9 @@ namespace PVControl
   public class HouseEnergy
   {
     private readonly PVConfig _config;
-    private readonly FixedSizeQueue<int> _battChargeFIFO;
+    private readonly RunningIntAverage _battChargeAverage;
+    private readonly RunningIntAverage _LoadRunningAverage;
+    private readonly RunningIntAverage _PVRunningAverage;
     /// <summary>
     /// Default Efficiency if not set in config
     /// </summary>
@@ -27,20 +29,42 @@ namespace PVControl
     public HouseEnergy(PVConfig config)
     { 
       _config = config;
-      _battChargeFIFO = new FixedSizeQueue<int>(12);
+      _battChargeAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
+      if (_config.CurrentBatteryPowerEntity is null)
+        throw new NullReferenceException("BatteryPowerEntity not available");
+      if (_config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
+        _battChargeAverage.AddValue(bat);
+
+      _LoadRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
+      if (_config.CurrentHouseLoadEntity is null)
+        throw new NullReferenceException("HouseLoadEntity not available");
+      if (_config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
+        _LoadRunningAverage.AddValue(load);
+
+      _PVRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
+      if (_config.CurrentPVPowerEntity is null)
+        throw new NullReferenceException("CurrentPVPowerEntity not available");
+      if (_config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
+        _PVRunningAverage.AddValue(pv);
+
       if (string.IsNullOrEmpty(_config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
       Prediction_Load = new HourlyWeightedAverageLoadPrediction(_config.DBLocation);
+
       if (_config.ForecastPVEnergyTodayEntities is null || _config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV  = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
-      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load);
+
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _LoadRunningAverage, _PVRunningAverage);
+
       if (_config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
       Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, _config.BatterySoCEntity, BatteryCapacity);
 
       _config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentImportPriceEntity));
       _config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentBatteryPowerEntity));
+      _config.CurrentPVPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentPVPowerEntity));
+      _config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentHouseLoadEntity));
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
       _dailySoCPrediction = [];
@@ -65,9 +89,17 @@ namespace PVControl
       {
         UpdatePriceList();
       }
-      if (entity.EntityId == _config.CurrentBatteryPowerEntity?.EntityId)
+      if (entity.EntityId == _config.CurrentBatteryPowerEntity?.EntityId && _config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
       {
-        UpdateBatteryPowerQueue();
+        _battChargeAverage.AddValue(bat);
+      }
+      if (entity.EntityId == _config.CurrentHouseLoadEntity?.EntityId && _config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
+      {
+        _LoadRunningAverage.AddValue(load);
+      }
+      if (entity.EntityId == _config.CurrentPVPowerEntity?.EntityId && _config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
+      {
+        _PVRunningAverage.AddValue(pv);
       }
     }
     private InverterModes _currentMode;
@@ -93,8 +125,8 @@ namespace PVControl
           NeedToChargeFromExternal.Item1
           // stay 2 minutes away from extremes, to make sure we have the same time as the provider
           && DateTime.Now > BestChargeTime.StartTime.AddMinutes(2) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-2)
-          // don't charge over 98% SoC as it get's really slow and inefficient
-          && BatterySoc <= 98
+          // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
+          && ((_currentMode == InverterModes.force_charge && BatterySoc <= 98) || (_currentMode != InverterModes.force_charge && BatterySoc <= 96))
           )
         {
           _currentMode = InverterModes.force_charge;
@@ -314,11 +346,11 @@ namespace PVControl
     {
       get
       {
-        if (AverageBatteryChargeDischargePower > -10 && AverageBatteryChargeDischargePower < 10)
+        if (CurrentAverageBatteryChargeDischargePower > -10 && CurrentAverageBatteryChargeDischargePower < 10)
           return BatteryStatuses.idle;
-        else if (AverageBatteryChargeDischargePower > 0)
+        else if (CurrentAverageBatteryChargeDischargePower > 0)
           return BatteryStatuses.charging;
-        else if (AverageBatteryChargeDischargePower < 0)
+        else if (CurrentAverageBatteryChargeDischargePower < 0)
           return BatteryStatuses.discharging;
         else
           return BatteryStatuses.unknown;
@@ -406,12 +438,12 @@ namespace PVControl
     {
       get
       {
-        if (AverageBatteryChargeDischargePower > -10 && AverageBatteryChargeDischargePower < 10)
+        if (CurrentAverageBatteryChargeDischargePower > -10 && CurrentAverageBatteryChargeDischargePower < 10)
           return 0;
-        else if (AverageBatteryChargeDischargePower > 0)
-          return (int)CalculateChargingDurationWh(BatterySoc, 100, AverageBatteryChargeDischargePower);
-        else if (AverageBatteryChargeDischargePower < 0)
-          return (int)CalculateChargingDurationWh(BatterySoc, PreferredMinimalSoC, AverageBatteryChargeDischargePower);
+        else if (CurrentAverageBatteryChargeDischargePower > 0)
+          return (int)CalculateChargingDurationWh(BatterySoc, 100, CurrentAverageBatteryChargeDischargePower);
+        else if (CurrentAverageBatteryChargeDischargePower < 0)
+          return (int)CalculateChargingDurationWh(BatterySoc, PreferredMinimalSoC, CurrentAverageBatteryChargeDischargePower);
         else
           return 0;
       }
@@ -423,14 +455,25 @@ namespace PVControl
         return CalculateChargingDurationA(NeedToChargeFromExternal.Item3, 100, MaxBatteryChargePower);
       }
     }
-    public int AverageBatteryChargeDischargePower
+    public int CurrentAverageBatteryChargeDischargePower
     {
       get
       {
-        if (_battChargeFIFO.Count < 2)
-          UpdateBatteryPowerQueue();
-
-        return (int)_battChargeFIFO.Average();
+        return _battChargeAverage.GetAverage();
+      }
+    }
+    public int CurrentAverageHouseLoad
+    {
+      get
+      {
+        return _LoadRunningAverage.GetAverage();
+      }
+    }
+    public int CurrentAveragePVPower
+    {
+      get
+      {
+        return _PVRunningAverage.GetAverage();
       }
     }
     public EpexPriceTableEntry BestChargeTime
@@ -512,10 +555,6 @@ namespace PVControl
     {
       _priceListCache = [];
     }
-    private void UpdateBatteryPowerQueue()
-    {
-      _battChargeFIFO.Enqueue((_config.CurrentBatteryPowerEntity is not null && _config.CurrentBatteryPowerEntity.TryGetStateValue<int>(out int value)) ? value : 0);
-    }
     private List<EpexPriceTableEntry> PriceList
     {
       get 
@@ -590,9 +629,10 @@ namespace PVControl
       DateTime now = DateTime.Now;
       if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
       {
-        _dailySoCPrediction = Prediction_BatterySoC.TodayAndTomorrow;
         _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
         _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();
+        var netPrediction = new NetEnergyPrediction(Prediction_PV, Prediction_Load, null, null, false);
+        _dailySoCPrediction = new BatterySoCPrediction(netPrediction, _config.BatterySoCEntity, BatteryCapacity).TodayAndTomorrow;
         LastSnapshotUpdate = now;
       }
     }

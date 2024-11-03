@@ -89,6 +89,13 @@ namespace PVControl
         return TodayAndTomorrow.Where(d => d.Key.Date == DateTime.Now.AddDays(1).Date).ToDictionary();
       }
     }
+    public int CurrentValue
+    {
+      get
+      {
+        return Today.GetEntryAtTime(DateTime.Now).Value;
+      }
+    }
     public bool DataOK
     {
       get => DataContainer.DataOK;

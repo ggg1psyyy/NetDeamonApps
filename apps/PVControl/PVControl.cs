@@ -140,12 +140,12 @@ namespace PVControl
         if (_overrideModeEntity.State != null)
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 #if DEBUG
-        _scheduler.ScheduleCron("* */1 * * *", async () => await ScheduledOperations(), false);
+       // _scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
 #else
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
-        var Z = _house.Prediction_PV;
+        var Z = _house.DailyBatterySoCPredictionTodayAndTomorrow;
 #endif
       }
       else
@@ -231,7 +231,7 @@ namespace PVControl
       {
         Estimated_time = now.AddMinutes(_house.EstimatedTimeToBatteryFullOrEmpty).ToISO8601(),
         next_relevant_pv_charge = _house.FirstRelevantPVEnergyToday.ToISO8601(),
-        avg_battery_charge_or_discharge_Power = _house.AverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
+        avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         status = _house.BatteryStatus.ToString(),
       };
       await _entityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
@@ -240,7 +240,11 @@ namespace PVControl
       await _entityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.BatteryStatus.ToString());
       var attr_batStatus = new
       {
-        avg_battery_charge_or_discharge_Power = _house.AverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
+        avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
+        avg_house_load_now = _house.CurrentAverageHouseLoad.ToString(CultureInfo.InvariantCulture) + " W",
+        predicted_house_load_now = _house.Prediction_Load.CurrentValue * 4 +  " W", 
+        avg_pv_power_now = _house.CurrentAveragePVPower.ToString(CultureInfo.InvariantCulture) + " W",
+        predicted_pv_power_now = _house.Prediction_PV.CurrentValue * 4 + " W",
         current_SoC = _house.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
       await _entityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
