@@ -1,8 +1,7 @@
-﻿using NetDaemon.HassModel.Entities;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 
-namespace PVControl
+namespace NetDeamon.apps.PVControl.Predictions
 {
   public class NetEnergyPrediction : Prediction
   {
@@ -21,7 +20,7 @@ namespace PVControl
       _AdjustToRunningAverage = adjustToRunningAverage;
       if (currentLoad is null || currentPV is null)
         _AdjustToRunningAverage = false;
-      base.Initialize("NetEnergy Prediction");
+      Initialize("NetEnergy Prediction");
     }
 
     protected override Dictionary<DateTime, int> PopulateData()
@@ -47,12 +46,12 @@ namespace PVControl
               float avgLoad = _CurrentLoad.GetAverage() / 4;
               float avgPV = _CurrentPV.GetAverage() / 4;
 
-              multLoad = predictedLoad != 0 ? (float) avgLoad/ predictedLoad : 1;
-              multPV = predictedPV != 0 ? (float) avgPV/predictedPV : 1;
+              multLoad = predictedLoad != 0 ? (float)avgLoad / predictedLoad : 1;
+              multPV = predictedPV != 0 ? (float)avgPV / predictedPV : 1;
               needRecalc = false;
             }
-            
-            predictedLoad = (int) Math.Round(predictedLoad * multLoad, 0);
+
+            predictedLoad = (int)Math.Round(predictedLoad * multLoad, 0);
             predictedPV = (int)Math.Round(predictedPV * multPV, 0);
             if (multLoad != 1.0f)
               multLoad = multLoad > 1f ? multLoad * scaling : multLoad / scaling;

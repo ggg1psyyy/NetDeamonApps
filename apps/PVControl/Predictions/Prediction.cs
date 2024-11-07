@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
 
-namespace PVControl
+namespace NetDeamon.apps.PVControl.Predictions
 {
   public class PredictionContainer
   {
@@ -11,7 +11,7 @@ namespace PVControl
       _data = [];
       _data.ClearAndCreateEmptyPredictionData();
       LastUpdated = default;
-      if (data != null ) 
+      if (data != null)
         UpdateData(data);
     }
     public bool DataOK { get; private set; }

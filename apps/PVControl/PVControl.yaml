@@ -1,4 +1,4 @@
-PVControl.PVConfig:
+NetDeamon.apps.PVControl.PVConfig:
   # config entries marked with '***' are required
 
   # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 

@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 
-namespace PVControl
+namespace NetDeamon.apps
 {
   public struct EpexPriceTableEntry(DateTime startTime, DateTime endTime, float price)
   {
@@ -63,7 +63,7 @@ namespace PVControl
   }
   public enum PVPeriods
   {
-    BeforePV, 
+    BeforePV,
     InPVPeriod,
     AfterPV,
   }
@@ -300,7 +300,7 @@ namespace PVControl
       DateTime now = DateTime.UtcNow;
       _Values.Enqueue((now, value));
 
-      while (_Values.Count > 0 && (now - _Values.Peek().timestamp) > _Window)
+      while (_Values.Count > 0 && now - _Values.Peek().timestamp > _Window)
       {
         _Values.Dequeue();
       }
@@ -311,9 +311,9 @@ namespace PVControl
     }
     public int GetAverage()
     {
-      if ( _Values.Count == 0 ) 
+      if (_Values.Count == 0)
         return int.MinValue;
-      return (int) Math.Round(_Values.Average(v => v.value), 0);
+      return (int)Math.Round(_Values.Average(v => v.value), 0);
     }
   }
 }

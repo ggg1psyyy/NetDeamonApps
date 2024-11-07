@@ -8,21 +8,20 @@ using System.Reactive.Concurrency;
 using System.Threading;
 using System.Threading.Tasks;
 
-//#pragma warning disable CS1998
-namespace PVControl
+namespace NetDeamon.apps.PVControl
 {
   public class PVConfig
   {
-    public String? DBLocation { get; set; }
+    public string? DBLocation { get; set; }
     public Entity? CurrentImportPriceEntity { get; set; }
     public Entity? CurrentExportPriceEntity { get; set; }
     public Entity? CurrentHouseLoadEntity { get; set; }
     public Entity? CurrentPVPowerEntity { get; set; }
     public Entity? CurrentBatteryPowerEntity { get; set; }
-    public float? InverterEfficiency { get; set; } 
+    public float? InverterEfficiency { get; set; }
     public Entity? TodayPVEnergyEntity { get; set; }
     public List<Entity>? ForecastPVEnergyTodayEntities { get; set; }
-    public List<Entity>? ForecastPVEnergyTomorrowEntities{ get; set; }
+    public List<Entity>? ForecastPVEnergyTomorrowEntities { get; set; }
     public Entity? BatterySoCEntity { get; set; }
     public Entity? BatteryCapacityEntity { get; set; }
     public float? BatteryCapacityValue { get; set; }
@@ -43,7 +42,7 @@ namespace PVControl
     private readonly ILogger<PVControl> _logger;
     private readonly PVConfig _config;
     private readonly IScheduler _scheduler;
-    
+
     private readonly HouseEnergy _house;
     #region Created Entities
     private Entity _modeEntity;
@@ -79,8 +78,8 @@ namespace PVControl
       _logger = logger;
       _config = config.Value;
       _scheduler = scheduler;
-      
-      if (String.IsNullOrWhiteSpace(_config.DBLocation))
+
+      if (string.IsNullOrWhiteSpace(_config.DBLocation))
         _config.DBLocation = "apps/DataLogger/energy_history.db";
 
       if (!CheckConfiguration())
@@ -153,7 +152,7 @@ namespace PVControl
         _logger.LogError("Error registering sensors");
       }
     }
-    private async Task UserStateChanged(Entity? entity, String newState)
+    private async Task UserStateChanged(Entity? entity, string newState)
     {
       if (entity == null)
         return;
@@ -242,7 +241,7 @@ namespace PVControl
       {
         avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         avg_house_load_now = _house.CurrentAverageHouseLoad.ToString(CultureInfo.InvariantCulture) + " W",
-        predicted_house_load_now = _house.Prediction_Load.CurrentValue * 4 +  " W", 
+        predicted_house_load_now = _house.Prediction_Load.CurrentValue * 4 + " W",
         avg_pv_power_now = _house.CurrentAveragePVPower.ToString(CultureInfo.InvariantCulture) + " W",
         predicted_pv_power_now = _house.Prediction_PV.CurrentValue * 4 + " W",
         current_SoC = _house.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
@@ -322,7 +321,7 @@ namespace PVControl
         var attr_Min_SoC_Today = new
         {
           time = min_soc_today.Key.ToISO8601(),
-          data = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).Select( s => new { datetime = s.Key, soc = s.Value }),
+          data = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).Select(s => new { datetime = s.Key, soc = s.Value }),
         };
         await _entityManager.SetAttributesAsync(_info_EstimatedMinSoCTodayEntity.EntityId, attr_Min_SoC_Today);
 
@@ -365,7 +364,7 @@ namespace PVControl
 
       if (chargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.GetSum(start:now).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
         var attr_chargeToday = new
         {
           data = chargeToday,
@@ -384,7 +383,7 @@ namespace PVControl
 
       if (dischargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.GetSum(start:now).ToString(CultureInfo.InvariantCulture));
+        await _entityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
         var attr_dischargeToday = new
         {
           data = dischargeToday,

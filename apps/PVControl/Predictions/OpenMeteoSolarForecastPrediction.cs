@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-namespace PVControl
+namespace NetDeamon.apps.PVControl.Predictions
 {
   public class OpenMeteoSolarForecastPrediction : Prediction
   {
@@ -13,7 +13,7 @@ namespace PVControl
     {
       _todayForecastEntities = todayForecastEntities;
       _tomorrowForeCastEntities = tomorrowForeCastEntities;
-      base.Initialize("PV Forecast");
+      Initialize("PV Forecast");
     }
     protected override Dictionary<DateTime, int> PopulateData()
     {

@@ -1,11 +1,12 @@
 ﻿using LinqToDB;
 using NetDaemon.HassModel.Entities;
+using NetDeamon.apps.PVControl.Predictions;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace PVControl
+namespace NetDeamon.apps.PVControl
 {
   public class HouseEnergy
   {
@@ -27,7 +28,7 @@ namespace PVControl
     { get; private set; }
 
     public HouseEnergy(PVConfig config)
-    { 
+    {
       _config = config;
       _battChargeAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
       if (_config.CurrentBatteryPowerEntity is null)
@@ -53,7 +54,7 @@ namespace PVControl
 
       if (_config.ForecastPVEnergyTodayEntities is null || _config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
-      Prediction_PV  = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
+      Prediction_PV = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
 
       Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _LoadRunningAverage, _PVRunningAverage);
 
@@ -76,9 +77,9 @@ namespace PVControl
     /// <summary>
     /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
     /// </summary>
-    public bool EnforcePreferredSoC {  get; set; }
+    public bool EnforcePreferredSoC { get; set; }
     public int PreferredMinBatterySoC { get; set; }
-    public InverterModes OverrideMode{  get; set; }
+    public InverterModes OverrideMode { get; set; }
     public int ForceChargeMaxPrice { get; set; }
     public int ForceChargeTargetSoC { get; set; }
 #pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
@@ -126,7 +127,7 @@ namespace PVControl
           // stay 2 minutes away from extremes, to make sure we have the same time as the provider
           && DateTime.Now > BestChargeTime.StartTime.AddMinutes(2) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-2)
           // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
-          && ((_currentMode == InverterModes.force_charge && BatterySoc <= 98) || (_currentMode != InverterModes.force_charge && BatterySoc <= 96))
+          && (_currentMode == InverterModes.force_charge && BatterySoc <= 98 || _currentMode != InverterModes.force_charge && BatterySoc <= 96)
           )
         {
           _currentMode = InverterModes.force_charge;
@@ -164,7 +165,7 @@ namespace PVControl
         var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
 
         if (ForceCharge)
-        { 
+        {
           // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
           // and only so far that we reach 100% via PV today
           var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
@@ -210,17 +211,17 @@ namespace PVControl
         // We need to force charge if we estimate to fall to minCharge before we reach max or max < 100
         bool needCharge = minUnderDefined && (minBeforeMax || !maxOver100);
         if (needCharge)
-          ForceChargeReason = minSoC <= AbsoluteMinimalSoC+2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
+          ForceChargeReason = minSoC <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
         _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key, minReached.Value);
         _lastCalculatedNeedToCharge = now;
         return _needToChargeFromExternalCache;
       }
     }
     private ForceChargeReasons _forceChargeReason;
-    public ForceChargeReasons ForceChargeReason 
-    { 
-      get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode; 
-      private set => _forceChargeReason = value; 
+    public ForceChargeReasons ForceChargeReason
+    {
+      get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode;
+      private set => _forceChargeReason = value;
     }
     public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
     /// <summary>
@@ -265,7 +266,7 @@ namespace PVControl
           RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverPreferredMinima;
           return RunHeavyLoadsStatus.Yes;
         }
-        else if (minSocTilFirstPV.Value > AbsoluteMinimalSoC+3)
+        else if (minSocTilFirstPV.Value > AbsoluteMinimalSoC + 3)
         {
           RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverAbsoluteMinima;
           return RunHeavyLoadsStatus.IfNecessary;
@@ -293,7 +294,7 @@ namespace PVControl
     {
       get
       {
-        return (_config.BatterySoCEntity is not null && _config.BatterySoCEntity.TryGetStateValue<int>(out int soc)) ? soc : 0;
+        return _config.BatterySoCEntity is not null && _config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
       }
     }
     /// <summary>
@@ -313,7 +314,7 @@ namespace PVControl
       get
       {
         int minAllowedSoC = _config.MinBatterySoCValue ?? 0;
-        if (_config.MinBatterySoCEntity is not null && _config.MinBatterySoCEntity.TryGetStateValue<int>(out int minSoc))
+        if (_config.MinBatterySoCEntity is not null && _config.MinBatterySoCEntity.TryGetStateValue(out int minSoc))
           minAllowedSoC = minSoc;
         // add 2% to prevent inverter from shutting off early and needing to import probably expensive energy
         return minAllowedSoC + 2;
@@ -334,7 +335,7 @@ namespace PVControl
       get
       {
         float batteryCapacity = _config.BatteryCapacityValue ?? 0;
-        if (_config.BatteryCapacityEntity is not null && _config.BatteryCapacityEntity.TryGetStateValue<float>(out float battCapacity))
+        if (_config.BatteryCapacityEntity is not null && _config.BatteryCapacityEntity.TryGetStateValue(out float battCapacity))
           batteryCapacity = battCapacity;
         return (int)batteryCapacity;
       }
@@ -362,7 +363,7 @@ namespace PVControl
       get
       {
         int maxPower = _config.MaxBatteryChargeCurrrentValue != null ? (int)_config.MaxBatteryChargeCurrrentValue : 10;
-        if (_config.MaxBatteryChargeCurrrentEntity is not null && _config.MaxBatteryChargeCurrrentEntity.TryGetStateValue<int>(out int max))
+        if (_config.MaxBatteryChargeCurrrentEntity is not null && _config.MaxBatteryChargeCurrrentEntity.TryGetStateValue(out int max))
           maxPower = max;
 
         return maxPower;
@@ -375,18 +376,18 @@ namespace PVControl
     {
       get
       {
-        return (_config.CurrentImportPriceEntity is not null && _config.CurrentImportPriceEntity.TryGetStateValue<float>(out float value)) ? value : 0;
+        return _config.CurrentImportPriceEntity is not null && _config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
       }
     }
     public float CurrentEnergyExportPrice
     {
       get
       {
-        return (_config.CurrentExportPriceEntity is not null && _config.CurrentExportPriceEntity.TryGetStateValue<float>(out float value)) ? value : 0;
+        return _config.CurrentExportPriceEntity is not null && _config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0;
       }
     }
     /// <summary>
-    /// Currently usable energy in battery down to <see cref="HouseEnergy.AbsoluteMinimalSoC"/> or <see cref="HouseEnergy.PreferredMinimalSoC"/> depending on <see cref="HouseEnergy.EnforcePreferredSoC"/> in Wh
+    /// Currently usable energy in battery down to <see cref="AbsoluteMinimalSoC"/> or <see cref="PreferredMinimalSoC"/> depending on <see cref="EnforcePreferredSoC"/> in Wh
     /// </summary>
     public int UsableBatteryEnergy
     {
@@ -441,9 +442,9 @@ namespace PVControl
         if (CurrentAverageBatteryChargeDischargePower > -10 && CurrentAverageBatteryChargeDischargePower < 10)
           return 0;
         else if (CurrentAverageBatteryChargeDischargePower > 0)
-          return (int)CalculateChargingDurationWh(BatterySoc, 100, CurrentAverageBatteryChargeDischargePower);
+          return CalculateChargingDurationWh(BatterySoc, 100, CurrentAverageBatteryChargeDischargePower);
         else if (CurrentAverageBatteryChargeDischargePower < 0)
-          return (int)CalculateChargingDurationWh(BatterySoc, PreferredMinimalSoC, CurrentAverageBatteryChargeDischargePower);
+          return CalculateChargingDurationWh(BatterySoc, PreferredMinimalSoC, CurrentAverageBatteryChargeDischargePower);
         else
           return 0;
       }
@@ -485,7 +486,7 @@ namespace PVControl
         if (need.Item1)
         {
           maxChargeTime = CalculateChargingDurationA(need.Item3, 100, MaxBatteryChargePower);
-          maxChargeTime = Math.Max((int)Math.Round((float)maxChargeTime / 60.0f, 0), 1);
+          maxChargeTime = Math.Max((int)Math.Round(maxChargeTime / 60.0f, 0), 1);
           var sortedPriceList = PriceList.Where(p => p.EndTime > DateTime.Now && p.StartTime < need.Item2).OrderBy(p => p.Price);
           if (maxChargeTime < 2)
             return sortedPriceList.First();
@@ -501,7 +502,7 @@ namespace PVControl
               return sortetPricesByPeriod.First();
           }
         }
-       return PriceList.Where(p => p.EndTime > DateTime.Now).OrderBy(p => p.Price).First();
+        return PriceList.Where(p => p.EndTime > DateTime.Now).OrderBy(p => p.Price).First();
       }
     }
     private int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)
@@ -509,10 +510,10 @@ namespace PVControl
       float sS = (float)startSoC / 100;
       float eS = (float)endSoC / 100;
 
-      float reqEnergy = ((eS - sS) * BatteryCapacity) * InverterEfficiency;
+      float reqEnergy = (eS - sS) * BatteryCapacity * InverterEfficiency;
       float duration = reqEnergy / pow;
 
-      return (int) (duration * 60);
+      return (int)(duration * 60);
     }
     private int CalculateChargingDurationA(int startSoC, int endSoC, int amps, int volts = 240)
     {
@@ -523,10 +524,10 @@ namespace PVControl
     {
       float s = (float)soc / 100;
       float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
-      float e = ((float)BatteryCapacity * s - (float)BatteryCapacity * ms);
-      return (int) e;
+      float e = BatteryCapacity * s - BatteryCapacity * ms;
+      return (int)e;
     }
-    private List<EpexPriceTableEntry> SortPriceListByCheapestPeriod(DateTime start, DateTime end, int hours=1)
+    private List<EpexPriceTableEntry> SortPriceListByCheapestPeriod(DateTime start, DateTime end, int hours = 1)
     {
       if (hours == 0)
         hours = 1;
@@ -534,7 +535,7 @@ namespace PVControl
       if (start.Hour == end.Hour && start.Date == end.Date)
         return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
 
-      var prices = PriceList.Where(p => p.EndTime >= start &&  p.StartTime <= end);
+      var prices = PriceList.Where(p => p.EndTime >= start && p.StartTime <= end);
       List<EpexPriceTableEntry> result = [];
 
       if (hours <= 0 || hours > prices.Count())
@@ -545,7 +546,7 @@ namespace PVControl
           .Select(i => new { Sum = prices.Skip(i).Take(hours).Sum(s => s.Price), Index = i }).OrderBy(s => s.Sum);
         foreach (var window in windows)
         {
-          result.Add(new EpexPriceTableEntry(prices.ElementAt(window.Index).StartTime, prices.ElementAt(window.Index + hours-1).EndTime, window.Sum / hours));
+          result.Add(new EpexPriceTableEntry(prices.ElementAt(window.Index).StartTime, prices.ElementAt(window.Index + hours - 1).EndTime, window.Sum / hours));
         }
       }
       return result;
@@ -557,7 +558,7 @@ namespace PVControl
     }
     private List<EpexPriceTableEntry> PriceList
     {
-      get 
+      get
       {
         if (_priceListCache is null || _priceListCache.Count == 0)
         {
@@ -627,7 +628,7 @@ namespace PVControl
     private void UpdateSnapshots()
     {
       DateTime now = DateTime.Now;
-      if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || (now.Hour == 0 && now.Minute == 1) || (now - LastSnapshotUpdate).TotalMinutes > 24*60)
+      if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || now.Hour == 0 && now.Minute == 1 || (now - LastSnapshotUpdate).TotalMinutes > 24 * 60)
       {
         _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
         _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();

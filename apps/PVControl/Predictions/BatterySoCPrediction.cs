@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 
-namespace PVControl
+namespace NetDeamon.apps.PVControl.Predictions
 {
   public class BatterySoCPrediction : Prediction
   {
@@ -15,7 +15,7 @@ namespace PVControl
       _netEnergyPrediction = netEnergyPrediction;
       _currentSocEntity = currentSocEntity;
       _battCapacity = battCapacity;
-      base.Initialize("Battery SoC Prediction");
+      Initialize("Battery SoC Prediction");
     }
 
     protected override Dictionary<DateTime, int> PopulateData()
@@ -43,12 +43,12 @@ namespace PVControl
     }
     private int CalculateBatteryEnergyAtSoC(int soc)
     {
-      float e = ((float)_battCapacity * (float)soc / 100);
-      return (int) Math.Round(e, 0);
+      float e = _battCapacity * (float)soc / 100;
+      return (int)Math.Round(e, 0);
     }
     public int CalculateBatterySoCAtEnergy(int energy)
     {
-      return (int) Math.Round((float)energy * 100 / (float)_battCapacity, 0);
+      return (int)Math.Round((float)energy * 100 / _battCapacity, 0);
     }
   }
 }
