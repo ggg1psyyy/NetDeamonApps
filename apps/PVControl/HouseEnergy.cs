@@ -280,7 +280,7 @@ namespace NetDeamon.apps.PVControl
         }
         else if (BatterySoc > AbsoluteMinimalSoC)
         {
-          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOberAbsoluteMinima;
+          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOverAbsoluteMinima;
           return RunHeavyLoadsStatus.Prevent;
         }
         RunHeavyLoadReason = RunHeavyLoadReasons.WillGoUnderAbsoluteMinima;

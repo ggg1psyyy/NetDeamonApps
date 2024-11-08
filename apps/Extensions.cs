@@ -59,7 +59,7 @@ namespace NetDeamon.apps
     WillStayOverAbsoluteMinima,
     WillGoUnderAbsoluteMinima,
     CurrentlyOverPreferredMinima,
-    CurrentlyOberAbsoluteMinima,
+    CurrentlyOverAbsoluteMinima,
   }
   public enum PVPeriods
   {
