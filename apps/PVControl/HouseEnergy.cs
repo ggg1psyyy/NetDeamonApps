@@ -551,6 +551,66 @@ namespace NetDeamon.apps.PVControl
       }
       return result;
     }
+    private List<EpexPriceTableEntry> UpcomingPriceList
+    {
+      get
+      {
+        DateTime currentHour = DateTime.Now.Date.AddHours(DateTime.Now.Hour);
+        return PriceList.Where(p => p.StartTime >= currentHour).OrderBy(p => p.StartTime).ToList();
+      }
+    }
+    private Dictionary<int, EpexPriceTableEntry> UpcomingPriceListRanked
+    {
+      get
+      {
+        Dictionary<int, EpexPriceTableEntry> result = [];
+        int rank = 1;
+        foreach (var entry in UpcomingPriceList.OrderBy(p => p.Price))
+        {
+          result.Add(rank, entry);
+          rank++;
+        }
+        return result.OrderBy(r => r.Value.StartTime).ToDictionary();
+      }
+    }
+    private List<Tuple<int, EpexPriceTableEntry>> UpcomingPriceListPercentage
+    {
+      get
+      {
+        List<Tuple<int, EpexPriceTableEntry>> result = [];
+        float minPrice = UpcomingPriceList.Min(p => p.Price);
+        float maxPrice = UpcomingPriceList.Max(p => p.Price);
+        foreach (var entry in UpcomingPriceList)
+        {
+          result.Add(new Tuple<int, EpexPriceTableEntry>(maxPrice - minPrice == 0 ? 0 : (int)Math.Round((entry.Price - minPrice) / (maxPrice - minPrice) * 100, 0), entry));
+        }
+        return result.OrderBy(r => r.Item2.StartTime).ToList();
+      }
+    }
+    private int GetPriceRank(DateTime dateTime)
+    {
+      var priceRankAtTime = UpcomingPriceListRanked.Where(r => r.Value.StartTime.Hour == dateTime.Hour).FirstOrDefault();
+      return priceRankAtTime.Key;
+    }
+    private int GetPricePercentage(DateTime dateTime)
+    {
+      var pricePercentageAtTime = UpcomingPriceListPercentage.Where(r => r.Item2.StartTime.Hour == dateTime.Hour).FirstOrDefault();
+      return pricePercentageAtTime is null ? -1 : pricePercentageAtTime.Item1;
+    }
+    public int CurrentPriceRank
+    {
+      get
+      {
+        return GetPriceRank(DateTime.Now);
+      }
+    }
+    public int CurrentPricePercentage
+    {
+      get
+      {
+        return GetPricePercentage(DateTime.Now);
+      }
+    }
     private List<EpexPriceTableEntry> _priceListCache;
     private void UpdatePriceList()
     {
