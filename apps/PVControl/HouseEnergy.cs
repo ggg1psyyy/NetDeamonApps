@@ -487,7 +487,7 @@ namespace NetDeamon.apps.PVControl
         {
           maxChargeTime = CalculateChargingDurationA(need.Item3, 100, MaxBatteryChargePower);
           int maxChargeHours = (int) Math.Ceiling(maxChargeTime / 60.0f);
-          var sortedPriceList = PriceList.Where(p => p.EndTime > DateTime.Now && p.StartTime < need.Item2).OrderBy(p => p.Price);
+          var sortedPriceList = UpcomingPriceList.Where(p => p.StartTime <= need.Item2).OrderBy(p => p.Price);
           if (maxChargeHours < 2)
             return sortedPriceList.First();
           else
