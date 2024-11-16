@@ -50,7 +50,7 @@ namespace NetDeamon.apps.PVControl
 
       if (string.IsNullOrEmpty(_config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
-      Prediction_Load = new HourlyWeightedAverageLoadPrediction(_config.DBLocation);
+      Prediction_Load = new HourlyWeightedAverageLoadPrediction(_config.DBLocation, 10);
 
       if (_config.ForecastPVEnergyTodayEntities is null || _config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
@@ -486,23 +486,16 @@ namespace NetDeamon.apps.PVControl
         if (need.Item1)
         {
           maxChargeTime = CalculateChargingDurationA(need.Item3, 100, MaxBatteryChargePower);
-          maxChargeTime = Math.Max((int)Math.Round(maxChargeTime / 60.0f, 0), 1);
+          int maxChargeHours = (int) Math.Ceiling(maxChargeTime / 60.0f);
           var sortedPriceList = PriceList.Where(p => p.EndTime > DateTime.Now && p.StartTime < need.Item2).OrderBy(p => p.Price);
-          if (maxChargeTime < 2)
+          if (maxChargeHours < 2)
             return sortedPriceList.First();
           else
           {
-            var sortetPricesByPeriod = SortPriceListByCheapestPeriod(DateTime.Now, need.Item2, maxChargeTime);
-            float sumSingleHours = 0.0f;
-            for (int i = 0; i < maxChargeTime; i++)
-              sumSingleHours += sortedPriceList.ElementAt(i).Price;
-            if (sumSingleHours / maxChargeTime > sortedPriceList.First().Price)
-              return sortedPriceList.First();
-            else
-              return sortetPricesByPeriod.First();
+            return SortPriceListByCheapestPeriod(DateTime.Now, need.Item2, maxChargeHours).First(); 
           }
         }
-        return PriceList.Where(p => p.EndTime > DateTime.Now).OrderBy(p => p.Price).First();
+        return UpcomingPriceList.OrderBy(p => p.Price).First();
       }
     }
     private int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)
@@ -535,7 +528,7 @@ namespace NetDeamon.apps.PVControl
       if (start.Hour == end.Hour && start.Date == end.Date)
         return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
 
-      var prices = PriceList.Where(p => p.EndTime >= start && p.StartTime <= end);
+      var prices = PriceList.Where(p => p.StartTime.Date.AddHours(p.StartTime.Hour) >= start.Date.AddHours(start.Hour) && p.EndTime <= end.AddHours(hours));
       List<EpexPriceTableEntry> result = [];
 
       if (hours <= 0 || hours > prices.Count())
