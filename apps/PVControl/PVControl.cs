@@ -144,7 +144,8 @@ namespace NetDeamon.apps.PVControl
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
-        var Z = _house.DailyBatterySoCPredictionTodayAndTomorrow;
+        var Z = _house.BestChargeTime;
+        var Y = _house.CurrentPriceRank;
 #endif
       }
       else
@@ -434,386 +435,209 @@ namespace NetDeamon.apps.PVControl
 
       return checkResult;
     }
-    private async Task<bool> RegisterSensors()
+    public async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? additionalConfig = null, string defaultValue="", bool reRegister=false)
     {
-      try
+      var identifiers = new[] { "pv_control" };
+      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
+      Entity entity = new Entity(_context, id);
+      if (entity?.State == null || reRegister)
       {
-        var identifiers = new[] { "pv_control" };
-        var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.1 };
-
-        if (_overrideModeEntity?.State is null)
+        if (reRegister && entity?.State != null)
         {
-          await _entityManager.CreateAsync("select.pv_control_mode_override", new EntityCreationOptions
-          {
-            Name = "Mode Override",
-            DeviceClass = "select",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:form-select",
-            options = Enum.GetNames(typeof(InverterModes)),
-            device
-          }).ConfigureAwait(false);
-          _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
-          await _entityManager.SetStateAsync(_overrideModeEntity.EntityId, InverterModes.automatic.ToString());
+          await _entityManager.RemoveAsync(id);
         }
-
-        if (_forceChargeEntity?.State is null)
+        dynamic conf = additionalConfig != null ? new { icon = icon, additionalConfig, device } : new { icon = icon, device };
+        await _entityManager.CreateAsync(id, new EntityCreationOptions
         {
-          await _entityManager.CreateAsync("switch.pv_control_force_charge_at_cheapest_period", new EntityCreationOptions
-          {
-            Name = "Force charge at cheapest price",
-            DeviceClass = "switch",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:transmission-tower",
-            device
-          }).ConfigureAwait(false);
-          _forceChargeEntity = new Entity(_context, "switch.pv_control_force_charge_at_cheapest_period");
-          await _entityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
-        }
-
-        if (_enforcePreferredSocEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("switch.pv_control_enforce_preferred_soc", new EntityCreationOptions
-          {
-            Name = "Enforce the preferred SoC",
-            DeviceClass = "switch",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:battery-plus-variant",
-            device
-          }).ConfigureAwait(false);
-          _enforcePreferredSocEntity = new Entity(_context, "switch.pv_control_enforce_preferred_soc");
-          await _entityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
-        }
-
-        if (_forceChargeMaxPriceEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("number.pv_control_max_price_for_forcecharge", new EntityCreationOptions
-          {
-            Name = "Max price for force charge",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:currency-eur",
-            min = 0,
-            max = 25,
-            step = 1,
-            initial = 0,
-            unitOfMeasurement = "ct",
-            mode = "slider",
-            device
-          }).ConfigureAwait(false);
-          _forceChargeMaxPriceEntity = new Entity(_context, "number.pv_control_max_price_for_forcecharge");
-          await _entityManager.SetStateAsync(_forceChargeMaxPriceEntity.EntityId, "0");
-        }
-
-        if (_forceChargeTargetSoCEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("number.pv_control_forcecharge_target_soc", new EntityCreationOptions
-          {
-            Name = "Force charge target SoC",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:battery-alert",
-            min = 0,
-            max = 95,
-            step = 5,
-            initial = 50,
-            unitOfMeasurement = "%",
-            mode = "slider",
-            device
-          }).ConfigureAwait(false);
-          _forceChargeTargetSoCEntity = new Entity(_context, "number.pv_control_forcecharge_target_soc");
-          await _entityManager.SetStateAsync(_forceChargeTargetSoCEntity.EntityId, "50");
-        }
-
-        if (_prefBatterySoCEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("number.pv_control_preferredbatterycharge", new EntityCreationOptions
-          {
-            Name = "Preferred min SoC",
-            Persist = true,
-          }, new
-          {
-            icon = "mdi:battery-unknown",
-            min = 10,
-            max = 100,
-            step = 5,
-            initial = 30,
-            unitOfMeasurement = "%",
-            mode = "slider",
-            device
-          }).ConfigureAwait(false);
-          _prefBatterySoCEntity = new Entity(_context, "number.pv_control_preferredbatterycharge");
-          await _entityManager.SetStateAsync(_prefBatterySoCEntity.EntityId, "30");
-        }
-
-        if (_modeEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_mode", new EntityCreationOptions
-          {
-            Name = "Mode",
-            DeviceClass = "ENUM",
-          }, new
-          {
-            icon = "mdi:form-select",
-            options = Enum.GetNames(typeof(InverterModes)),
-            device
-          }).ConfigureAwait(false);
-          _modeEntity = new Entity(_context, "sensor.pv_control_mode");
-        }
-
-        if (_RunHeavyLoadsNowEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_run_heavyloads_now", new EntityCreationOptions
-          {
-            Name = "Run heavy loads now",
-            DeviceClass = "ENUM",
-          }, new
-          {
-            icon = "mdi:ev-station",
-            options = Enum.GetNames(typeof(RunHeavyLoadsStatus)),
-            device
-          }).ConfigureAwait(false);
-          _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
-        }
-
-        if (_battery_StatusEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_battery_status", new EntityCreationOptions
-          {
-            Name = "Battery Status",
-            DeviceClass = "ENUM",
-          }, new
-          {
-            icon = "mdi:battery-charging",
-            options = Enum.GetNames(typeof(BatteryStatuses)),
-            device
-          }).ConfigureAwait(false);
-          _battery_StatusEntity = new Entity(_context, "sensor.pv_control_battery_status");
-        }
-
-        if (_battery_RemainingTimeEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_battery_remainingtime", new EntityCreationOptions
-          {
-            Name = "Battery - remaining time",
-            DeviceClass = "DURATION",
-          }, new
-          {
-            unit_of_measurement = "min",
-            icon = "mdi:timer-alert",
-            device
-          }).ConfigureAwait(false);
-          _battery_RemainingTimeEntity = new Entity(_context, "sensor.pv_control_battery_remainingtime");
-        }
-
-        if (_needToChargeFromGridTodayEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("binary_sensor.pv_control_need_to_charge_from_grid_today", new EntityCreationOptions
-          {
-            Name = "Need to charge from Grid today",
-          }, new
-          {
-            icon = "mdi:transmission-tower-export",
-            device
-          }).ConfigureAwait(false);
-          _needToChargeFromGridTodayEntity = new Entity(_context, "sensor.pv_control_need_to_charge_from_grid_today");
-        }
-
-        if (_battery_RemainingEnergyEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_battery_remainingenergy", new EntityCreationOptions
-          {
-            Name = "Battery - available energy",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:lightning-bolt-outline",
-            device
-          }).ConfigureAwait(false);
-          _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
-        }
-
-        if (_info_EstimatedMaxSoCTodayEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_max_soc_today", new EntityCreationOptions
-          {
-            Name = "Estimated Max SoC Today",
-            DeviceClass = "Battery",
-          }, new
-          {
-            unit_of_measurement = "%",
-            icon = "mdi:battery-charging-90",
-            device
-          }).ConfigureAwait(false);
-          _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
-        }
-
-        if (_info_EstimatedMinSoCTodayEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_min_soc_today", new EntityCreationOptions
-          {
-            Name = "Estimated Min SoC Today",
-            DeviceClass = "Battery",
-          }, new
-          {
-            unit_of_measurement = "%",
-            icon = "mdi:battery-charging-20",
-            device
-          }).ConfigureAwait(false);
-          _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
-        }
-
-        if (_info_EstimatedMaxSoCTomorrowEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_max_soc_tomorrow", new EntityCreationOptions
-          {
-            Name = "Estimated Max SoC Tomorrow",
-            DeviceClass = "Battery",
-          }, new
-          {
-            unit_of_measurement = "%",
-            icon = "mdi:battery-charging-90",
-            device
-          }).ConfigureAwait(false);
-          _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
-        }
-
-        if (_info_EstimatedMinSoCTomorrowEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_min_soc_tomorrow", new EntityCreationOptions
-          {
-            Name = "Estimated Min SoC Tomorrow",
-            DeviceClass = "Battery",
-          }, new
-          {
-            unit_of_measurement = "%",
-            icon = "mdi:battery-charging-20",
-            device
-          }).ConfigureAwait(false);
-          _info_EstimatedMinSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_min_soc_tomorrow");
-        }
-
-        if (_info_PredictedSoCEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_predicted_soc", new EntityCreationOptions
-          {
-            Name = "Predicted SoC Now",
-            DeviceClass = "Battery",
-          }, new
-          {
-            unit_of_measurement = "%",
-            icon = "mdi:calendar-question",
-            device
-          }).ConfigureAwait(false);
-          _info_PredictedSoCEntity = new Entity(_context, "sensor.pv_control_info_predicted_soc");
-        }
-
-        if (_info_PredictedChargeEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_predicted_charge", new EntityCreationOptions
-          {
-            Name = "Predicted Charge Until Now",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:solar-power-variant",
-            device
-          }).ConfigureAwait(false);
-          _info_PredictedChargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_charge");
-        }
-
-        if (_info_PredictedDischargeEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_info_predicted_discharge", new EntityCreationOptions
-          {
-            Name = "Predicted Discharge Until Now",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:home-lightbulb-outline",
-            device
-          }).ConfigureAwait(false);
-          _info_PredictedDischargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_discharge");
-        }
-
-        if (_info_chargeTodayEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_estimated_remaining_charge_today", new EntityCreationOptions
-          {
-            Name = "Estimated remaining charge today",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:solar-power",
-            device
-          }).ConfigureAwait(false);
-          _info_chargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_charge_today");
-        }
-
-        if (_info_chargeTomorrowEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_estimated_charge_tomorrow", new EntityCreationOptions
-          {
-            Name = "Estimated charge tomorrow",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:solar-power",
-            device
-          }).ConfigureAwait(false);
-          _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
-        }
-
-        if (_info_dischargeTodayEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_estimated_remaining_discharge_today", new EntityCreationOptions
-          {
-            Name = "Estimated remaining discharge today",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:home-lightning-bolt",
-            device
-          }).ConfigureAwait(false);
-          _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
-        }
-
-        if (_info_dischargeTomorrowEntity?.State is null)
-        {
-          await _entityManager.CreateAsync("sensor.pv_control_estimated_discharge_tomorrow", new EntityCreationOptions
-          {
-            Name = "Estimated discharge tomorrow",
-            DeviceClass = "Energy",
-          }, new
-          {
-            unit_of_measurement = "Wh",
-            icon = "mdi:home-lightning-bolt",
-            device
-          }).ConfigureAwait(false);
-          _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
-        }
-        //await _entityManager.RemoveAsync("sensor.pv_control_estimated_remaining_discharge_tomorrow");
-
-        return true;
+          Name = name,
+          DeviceClass = deviceClass,
+        }, 
+        conf
+        ).ConfigureAwait(false);
+        entity = new Entity(_context, id);
+        if (!string.IsNullOrEmpty(defaultValue))
+          await _entityManager.SetStateAsync(entity.EntityId, defaultValue);
       }
-      catch (Exception ex)
-      {
-        _logger.LogError("Error registering sensors: {message}", ex.Message);
-        return false;
-      }
+      return entity;
+    }
+    private async Task<bool> RegisterSensors(bool reset=false)
+    {
+      _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select", 
+        additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) }, 
+        defaultValue: InverterModes.automatic.ToString(),
+        reRegister: reset);
+
+      _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Force charge at cheapest price", "switch", "mdi:transmission-tower",
+        defaultValue: "OFF",
+        reRegister: reset);
+
+      _enforcePreferredSocEntity = await RegisterSensor("switch.pv_control_enforce_preferred_soc", "Enforce the preferred SoC", "switch", "mdi:battery-plus-variant",
+        defaultValue: "OFF",
+        reRegister: reset);
+
+      _forceChargeMaxPriceEntity = await RegisterSensor("number.pv_control_max_price_for_forcecharge", "Max price for force charge", "None", "mdi:currency-eur",
+        additionalConfig: new
+        {
+          min = 0,
+          max = 25,
+          step = 1,
+          initial = 0,
+          unitOfMeasurement = "ct",
+          mode = "slider",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _forceChargeTargetSoCEntity = await RegisterSensor("number.pv_control_forcecharge_target_soc", "Force charge target SoC", "battery", "mdi:battery-alert",
+        additionalConfig: new
+        {
+          min = 0,
+          max = 95,
+          step = 5,
+          initial = 50,
+          unitOfMeasurement = "%",
+          mode = "slider",
+        },
+        defaultValue: "50",
+        reRegister: reset);
+
+      _prefBatterySoCEntity = await RegisterSensor("number.pv_control_preferredbatterycharge", "Preferred min SoC", "battery", "mdi:battery-unknown",
+        additionalConfig: new
+        {
+          min = 0,
+          max = 100,
+          step = 5,
+          initial = 30,
+          unitOfMeasurement = "%",
+          mode = "slider",
+        },
+        defaultValue: "30",
+        reRegister: reset);
+
+      _enforcePreferredSocEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
+        additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
+        defaultValue: InverterModes.normal.ToString(),
+        reRegister: reset);
+
+      _RunHeavyLoadsNowEntity = await RegisterSensor("sensor.pv_control_run_heavyloads_now", "Run heavy loads now", "ENUM", "mdi:ev-station",
+        additionalConfig: new { options = Enum.GetNames(typeof(RunHeavyLoadsStatus)) },
+        defaultValue: RunHeavyLoadsStatus.No.ToString(),
+        reRegister: reset);
+
+      _battery_StatusEntity = await RegisterSensor("sensor.pv_control_battery_status", "Battery Status", "ENUM", "mdi:battery-charging",
+        additionalConfig: new { options = Enum.GetNames(typeof(BatteryStatuses)) },
+        defaultValue: BatteryStatuses.unknown.ToString(),
+        reRegister: reset);
+
+      _battery_RemainingTimeEntity = await RegisterSensor("sensor.pv_control_battery_remainingtime", "Battery - remaining time", "DURATION", "mdi:timer-alert",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "min",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _needToChargeFromGridTodayEntity = await RegisterSensor("binary_sensor.pv_control_need_to_charge_from_grid_today", "Need to charge from Grid today", "battery_charging", "mdi:transmission-tower-export",
+        defaultValue: "OFF",
+        reRegister: reset);
+
+      _battery_RemainingEnergyEntity = await RegisterSensor("sensor.pv_control_battery_remainingenergy", "Battery - available energy", "Energy", "mdi:lightning-bolt-outline",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_EstimatedMaxSoCTodayEntity = await RegisterSensor("sensor.pv_control_info_max_soc_today", "Estimated Max SoC Today", "Battery", "mdi:battery-charging-90",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_EstimatedMinSoCTodayEntity = await RegisterSensor("sensor.pv_control_info_min_soc_today", "Estimated Min SoC Today", "Battery", "mdi:battery-charging-20",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_EstimatedMaxSoCTomorrowEntity = await RegisterSensor("sensor.pv_control_info_max_soc_tomorrow", "Estimated Max SoC Tomorrow", "Battery", "mdi:battery-charging-90",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_EstimatedMinSoCTomorrowEntity = await RegisterSensor("sensor.pv_control_info_min_soc_tomorrow", "Estimated Min SoC Tomorrow", "Battery", "mdi:battery-charging-20",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_PredictedSoCEntity = await RegisterSensor("sensor.pv_control_info_predicted_soc", "Predicted SoC Now", "Battery", "mdi:calendar-question",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_PredictedChargeEntity = await RegisterSensor("sensor.pv_control_info_predicted_charge", "Predicted Charge Until Now", "Energy", "mdi:solar-power-variant",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_PredictedDischargeEntity = await RegisterSensor("sensor.pv_control_info_predicted_discharge", "Predicted Discharge Until Now", "Energy", "mdi:home-lightbulb-outline",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_chargeTodayEntity = await RegisterSensor("sensor.pv_control_estimated_remaining_charge_today", "Estimated remaining charge today", "Energy", "mdi:solar-power",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_chargeTomorrowEntity = await RegisterSensor("sensor.pv_control_estimated_charge_tomorrow", "Estimated charge tomorrow", "Energy", "mdi:solar-power",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_dischargeTodayEntity = await RegisterSensor("sensor.pv_control_estimated_remaining_discharge_today", "Estimated remaining discharge today", "Energy", "mdi:home-lightning-bolt",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _info_dischargeTomorrowEntity = await RegisterSensor("sensor.pv_control_estimated_discharge_tomorrow", "Estimated discharge tomorrow", "Energy", "mdi:home-lightning-bolt",
+        additionalConfig: new
+        {
+          unitOfMeasurement = "Wh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      return true;
     }
   }
 }
