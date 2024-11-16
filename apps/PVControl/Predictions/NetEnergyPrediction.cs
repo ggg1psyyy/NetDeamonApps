@@ -34,38 +34,36 @@ namespace NetDeamon.apps.PVControl.Predictions
       bool needRecalc = true;
       foreach (var item in _LoadPrediction.TodayAndTomorrow)
       {
-        if (_SolarForecast.TodayAndTomorrow.TryGetValue(item.Key, out int value))
+        if (!_SolarForecast.TodayAndTomorrow.TryGetValue(item.Key, out int value))
+          value = 0;
+
+        // adjust for actual values and slowly revert to original prediction
+        int predictedLoad = item.Value;
+        int predictedPV = value;
+        if (item.Key >= now && _AdjustToRunningAverage)
         {
-          // adjust for actual values and slowly revert to original prediction
-          int predictedLoad = item.Value;
-          int predictedPV = value;
-          if (item.Key >= now && _AdjustToRunningAverage)
+          if (needRecalc)
           {
-            if (needRecalc)
-            {
-              float avgLoad = _CurrentLoad.GetAverage() / 4;
-              float avgPV = _CurrentPV.GetAverage() / 4;
+            float avgLoad = _CurrentLoad.GetAverage() / 4;
+            float avgPV = _CurrentPV.GetAverage() / 4;
 
-              multLoad = predictedLoad != 0 ? (float)avgLoad / predictedLoad : 1;
-              multPV = predictedPV != 0 ? (float)avgPV / predictedPV : 1;
-              needRecalc = false;
-            }
-
-            predictedLoad = (int)Math.Round(predictedLoad * multLoad, 0);
-            predictedPV = (int)Math.Round(predictedPV * multPV, 0);
-            if (multLoad != 1.0f)
-              multLoad = multLoad > 1f ? multLoad * scaling : multLoad / scaling;
-            if (multPV != 1.0f)
-              multPV = multPV > 1f ? multPV * scaling : multPV / scaling;
-            if (Math.Abs(multLoad - 1) < threshhold)
-              multLoad = 1.0f;
-            if (Math.Abs(multPV - 1) < threshhold)
-              multPV = 1.0f;
+            multLoad = predictedLoad != 0 ? (float)avgLoad / predictedLoad : 1;
+            multPV = predictedPV != 0 ? (float)avgPV / predictedPV : 1;
+            needRecalc = false;
           }
-          result.Add(item.Key, predictedPV - predictedLoad);
+
+          predictedLoad = (int)Math.Round(predictedLoad * multLoad, 0);
+          predictedPV = (int)Math.Round(predictedPV * multPV, 0);
+          if (multLoad != 1.0f)
+            multLoad = multLoad > 1f ? multLoad * scaling : multLoad / scaling;
+          if (multPV != 1.0f)
+            multPV = multPV > 1f ? multPV * scaling : multPV / scaling;
+          if (Math.Abs(multLoad - 1) < threshhold)
+            multLoad = 1.0f;
+          if (Math.Abs(multPV - 1) < threshhold)
+            multPV = 1.0f;
         }
-        else
-          throw new ArgumentException("one of the predictions is not valid");
+        result.Add(item.Key, predictedPV - predictedLoad);
       }
       return result.OrderBy(o => o.Key).ToDictionary();
     }
