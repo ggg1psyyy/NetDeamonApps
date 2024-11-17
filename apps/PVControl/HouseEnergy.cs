@@ -108,6 +108,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
+        var need = NeedToChargeFromExternal;
         if (OverrideMode != InverterModes.automatic)
         {
           ForceChargeReason = ForceChargeReasons.UserMode;
@@ -123,15 +124,26 @@ namespace NetDeamon.apps.PVControl
         }
 
         else if (
-          NeedToChargeFromExternal.Item1
+          need.Item1
           // stay 2 minutes away from extremes, to make sure we have the same time as the provider
           && DateTime.Now > BestChargeTime.StartTime.AddMinutes(2) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-2)
           // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
           && (_currentMode == InverterModes.force_charge && BatterySoc <= 98 || _currentMode != InverterModes.force_charge && BatterySoc <= 96)
           )
         {
-          _currentMode = InverterModes.force_charge;
-          return InverterModes.force_charge;
+          DateTime now = DateTime.Now;
+          // if chargetime is in the latest quarter of the current hour and next hour is cheaper, it's better to just import energy normally, without force charging
+          if ((ForceChargeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || ForceChargeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
+            CurrentPriceRank > GetPriceRank(now.AddHours(1)) && need.Item2.Date == now.Date && need.Item2.Hour == now.Hour && need.Item2.Minute >= 45)
+          {
+            _currentMode = InverterModes.normal;
+            return InverterModes.normal;
+          }
+          else
+          { 
+            _currentMode = InverterModes.force_charge;
+            return InverterModes.force_charge;
+          }
         }
         else
         {
