@@ -649,7 +649,7 @@ namespace NetDeamon.apps.PVControl
     }
     public void UpdatePredictions()
     {
-      if (DateTime.Now.Hour == 0 && Math.Abs((DateTime.Now - Prediction_Load.LastDataUpdate).TotalMinutes) > 60)
+      if (DateTime.Now.Hour == 0 && DateTime.Now.Minute == 5 && Math.Abs((DateTime.Now - Prediction_Load.LastDataUpdate).TotalMinutes) > 60)
         Prediction_Load.UpdateData();
       Prediction_PV.UpdateData();
       Prediction_NetEnergy.UpdateData();
