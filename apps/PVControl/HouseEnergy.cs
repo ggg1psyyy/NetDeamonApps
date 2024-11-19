@@ -494,20 +494,10 @@ namespace NetDeamon.apps.PVControl
       get
       {
         var need = NeedToChargeFromExternal;
-        int maxChargeTime = 1;
         if (need.Item1)
-        {
-          maxChargeTime = CalculateChargingDurationA(need.Item3, 100, MaxBatteryChargePower);
-          int maxChargeHours = (int) Math.Ceiling(maxChargeTime / 60.0f);
-          var sortedPriceList = UpcomingPriceList.Where(p => p.StartTime <= need.Item2).OrderBy(p => p.Price);
-          if (maxChargeHours < 2)
-            return sortedPriceList.First();
-          else
-          {
-            return SortPriceListByCheapestPeriod(DateTime.Now, need.Item2, maxChargeHours).First(); 
-          }
-        }
-        return UpcomingPriceList.OrderBy(p => p.Price).First();
+          return UpcomingPriceList.Where(p => p.StartTime <= need.Item2).OrderBy(p => p.Price).First();
+        else
+          return UpcomingPriceList.OrderBy(p => p.Price).First();
       }
     }
     private int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)
@@ -531,30 +521,6 @@ namespace NetDeamon.apps.PVControl
       float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
       float e = BatteryCapacity * s - BatteryCapacity * ms;
       return (int)e;
-    }
-    private List<EpexPriceTableEntry> SortPriceListByCheapestPeriod(DateTime start, DateTime end, int hours = 1)
-    {
-      if (hours == 0)
-        hours = 1;
-
-      if (start.Hour == end.Hour && start.Date == end.Date)
-        return PriceList.Where(p => p.StartTime.Date == start.Date && p.StartTime.Hour == start.Hour).ToList();
-
-      var prices = PriceList.Where(p => p.StartTime.Date.AddHours(p.StartTime.Hour) >= start.Date.AddHours(start.Hour) && p.EndTime <= end.AddHours(hours));
-      List<EpexPriceTableEntry> result = [];
-
-      if (hours <= 0 || hours > prices.Count())
-        result.Add(new EpexPriceTableEntry(DateTime.MaxValue, DateTime.MaxValue, float.NaN));
-      else
-      {
-        var windows = Enumerable.Range(0, prices.Count() - hours + 1)
-          .Select(i => new { Sum = prices.Skip(i).Take(hours).Sum(s => s.Price), Index = i }).OrderBy(s => s.Sum);
-        foreach (var window in windows)
-        {
-          result.Add(new EpexPriceTableEntry(prices.ElementAt(window.Index).StartTime, prices.ElementAt(window.Index + hours - 1).EndTime, window.Sum / hours));
-        }
-      }
-      return result;
     }
     private List<EpexPriceTableEntry> UpcomingPriceList
     {
@@ -639,7 +605,8 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return SortPriceListByCheapestPeriod(DateTime.Now.Date, DateTime.Now.Date.AddDays(1)).First();
+        DateTime now = DateTime.Now;
+        return PriceList.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).FirstOrDefault();
       }
     }
     public EpexPriceTableEntry CheapestWindowTotal
