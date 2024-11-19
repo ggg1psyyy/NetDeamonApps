@@ -5,12 +5,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl
 {
   public class HouseEnergy
   {
-    private readonly PVConfig _config;
     private readonly RunningIntAverage _battChargeAverage;
     private readonly RunningIntAverage _LoadRunningAverage;
     private readonly RunningIntAverage _PVRunningAverage;
@@ -27,45 +27,44 @@ namespace NetDeamon.apps.PVControl
     public Prediction Prediction_BatterySoC
     { get; private set; }
 
-    public HouseEnergy(PVConfig config)
+    public HouseEnergy()
     {
-      _config = config;
       _battChargeAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
-      if (_config.CurrentBatteryPowerEntity is null)
+      if (PVCC_Config.CurrentBatteryPowerEntity is null)
         throw new NullReferenceException("BatteryPowerEntity not available");
-      if (_config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
+      if (PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
         _battChargeAverage.AddValue(bat);
 
       _LoadRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
-      if (_config.CurrentHouseLoadEntity is null)
+      if (PVCC_Config.CurrentHouseLoadEntity is null)
         throw new NullReferenceException("HouseLoadEntity not available");
-      if (_config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
+      if (PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
         _LoadRunningAverage.AddValue(load);
 
       _PVRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
-      if (_config.CurrentPVPowerEntity is null)
+      if (PVCC_Config.CurrentPVPowerEntity is null)
         throw new NullReferenceException("CurrentPVPowerEntity not available");
-      if (_config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
+      if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
         _PVRunningAverage.AddValue(pv);
 
-      if (string.IsNullOrEmpty(_config.DBLocation))
+      if (string.IsNullOrEmpty(PVCC_Config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
-      Prediction_Load = new HourlyWeightedAverageLoadPrediction(_config.DBLocation, 10);
+      Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBLocation, 10);
 
-      if (_config.ForecastPVEnergyTodayEntities is null || _config.ForecastPVEnergyTomorrowEntities is null)
+      if (PVCC_Config.ForecastPVEnergyTodayEntities is null || PVCC_Config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
-      Prediction_PV = new OpenMeteoSolarForecastPrediction(_config.ForecastPVEnergyTodayEntities, _config.ForecastPVEnergyTomorrowEntities);
+      Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
 
       Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _LoadRunningAverage, _PVRunningAverage);
 
-      if (_config.BatterySoCEntity is null)
+      if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
-      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, _config.BatterySoCEntity, BatteryCapacity);
+      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, PVCC_Config.BatterySoCEntity, BatteryCapacity);
 
-      _config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentImportPriceEntity));
-      _config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentBatteryPowerEntity));
-      _config.CurrentPVPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentPVPowerEntity));
-      _config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(_config.CurrentHouseLoadEntity));
+      PVCC_Config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentImportPriceEntity));
+      PVCC_Config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentBatteryPowerEntity));
+      PVCC_Config.CurrentPVPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentPVPowerEntity));
+      PVCC_Config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentHouseLoadEntity));
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
       _dailySoCPrediction = [];
@@ -86,19 +85,19 @@ namespace NetDeamon.apps.PVControl
     private async Task UserStateChanged(Entity entity)
 #pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
     {
-      if (entity.EntityId == _config.CurrentImportPriceEntity?.EntityId)
+      if (entity.EntityId == PVCC_Config.CurrentImportPriceEntity?.EntityId)
       {
         UpdatePriceList();
       }
-      if (entity.EntityId == _config.CurrentBatteryPowerEntity?.EntityId && _config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
+      if (entity.EntityId == PVCC_Config.CurrentBatteryPowerEntity?.EntityId && PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
       {
         _battChargeAverage.AddValue(bat);
       }
-      if (entity.EntityId == _config.CurrentHouseLoadEntity?.EntityId && _config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
+      if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
       {
         _LoadRunningAverage.AddValue(load);
       }
-      if (entity.EntityId == _config.CurrentPVPowerEntity?.EntityId && _config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
+      if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
         _PVRunningAverage.AddValue(pv);
       }
@@ -306,7 +305,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return _config.BatterySoCEntity is not null && _config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
+        return PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
       }
     }
     /// <summary>
@@ -325,8 +324,8 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        int minAllowedSoC = _config.MinBatterySoCValue ?? 0;
-        if (_config.MinBatterySoCEntity is not null && _config.MinBatterySoCEntity.TryGetStateValue(out int minSoc))
+        int minAllowedSoC = PVCC_Config.MinBatterySoCValue != default ? PVCC_Config.MinBatterySoCValue : 0;
+        if (PVCC_Config.MinBatterySoCEntity is not null && PVCC_Config.MinBatterySoCEntity.TryGetStateValue(out int minSoc))
           minAllowedSoC = minSoc;
         // add 2% to prevent inverter from shutting off early and needing to import probably expensive energy
         return minAllowedSoC + 2;
@@ -336,7 +335,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return _config.InverterEfficiency is not null ? (float)_config.InverterEfficiency : _defaultInverterEfficiency;
+        return PVCC_Config.InverterEfficiency != default ? PVCC_Config.InverterEfficiency : _defaultInverterEfficiency;
       }
     }
     /// <summary>
@@ -346,8 +345,8 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        float batteryCapacity = _config.BatteryCapacityValue ?? 0;
-        if (_config.BatteryCapacityEntity is not null && _config.BatteryCapacityEntity.TryGetStateValue(out float battCapacity))
+        float batteryCapacity = PVCC_Config.BatteryCapacityValue != default ? PVCC_Config.BatteryCapacityValue : 0;
+        if (PVCC_Config.BatteryCapacityEntity is not null && PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out float battCapacity))
           batteryCapacity = battCapacity;
         return (int)batteryCapacity;
       }
@@ -374,8 +373,8 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        int maxPower = _config.MaxBatteryChargeCurrrentValue != null ? (int)_config.MaxBatteryChargeCurrrentValue : 10;
-        if (_config.MaxBatteryChargeCurrrentEntity is not null && _config.MaxBatteryChargeCurrrentEntity.TryGetStateValue(out int max))
+        int maxPower = PVCC_Config.MaxBatteryChargeCurrrentValue != default ? PVCC_Config.MaxBatteryChargeCurrrentValue : 10;
+        if (PVCC_Config.MaxBatteryChargeCurrrentEntity is not null && PVCC_Config.MaxBatteryChargeCurrrentEntity.TryGetStateValue(out int max))
           maxPower = max;
 
         return maxPower;
@@ -388,14 +387,14 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return _config.CurrentImportPriceEntity is not null && _config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
+        return PVCC_Config.CurrentImportPriceEntity is not null && PVCC_Config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
       }
     }
     public float CurrentEnergyExportPrice
     {
       get
       {
-        return _config.CurrentExportPriceEntity is not null && _config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0;
+        return PVCC_Config.CurrentExportPriceEntity is not null && PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0;
       }
     }
     /// <summary>
@@ -594,7 +593,7 @@ namespace NetDeamon.apps.PVControl
         if (_priceListCache is null || _priceListCache.Count == 0)
         {
           _priceListCache = [];
-          if (_config.CurrentImportPriceEntity != null && _config.CurrentImportPriceEntity.EntityState?.AttributesJson?.GetProperty("data") is JsonElement data)
+          if (PVCC_Config.CurrentImportPriceEntity != null && PVCC_Config.CurrentImportPriceEntity.EntityState?.AttributesJson?.GetProperty("data") is JsonElement data)
             if (data.Deserialize<List<EpexPriceTableEntry>>()?.OrderBy(x => x.StartTime).ToList() is List<EpexPriceTableEntry> priceList)
               _priceListCache = priceList;
         }
@@ -664,8 +663,8 @@ namespace NetDeamon.apps.PVControl
       {
         _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
         _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();
-        var netPrediction = new NetEnergyPrediction(Prediction_PV, Prediction_Load, null, null, false);
-        _dailySoCPrediction = new BatterySoCPrediction(netPrediction, _config.BatterySoCEntity, BatteryCapacity).TodayAndTomorrow;
+        var netPrediction = new NetEnergyPrediction(Prediction_PV, Prediction_Load, null!, null!, false);
+        _dailySoCPrediction = new BatterySoCPrediction(netPrediction, PVCC_Config.BatterySoCEntity, BatteryCapacity).TodayAndTomorrow;
         LastSnapshotUpdate = now;
       }
     }

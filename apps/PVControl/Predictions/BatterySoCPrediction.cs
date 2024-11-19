@@ -1,6 +1,7 @@
 ﻿using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Linq;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
@@ -23,7 +24,10 @@ namespace NetDeamon.apps.PVControl.Predictions
       Dictionary<DateTime, int> result = [];
       result.ClearAndCreateEmptyPredictionData();
       if (!_currentSocEntity.TryGetStateValue(out int curSoc))
-        throw new Exception("Error reading current SoC value");
+      {
+        PVCC_Logger.LogError("Could not get current SoC");
+        return [];
+      }
 
       int curEnergy = CalculateBatteryEnergyAtSoC(curSoc);
       int curIndex = _netEnergyPrediction.TodayAndTomorrow.Keys.ToList().IndexOf(_netEnergyPrediction.TodayAndTomorrow.Keys.FirstOrDefault(k => k >= DateTime.Now));

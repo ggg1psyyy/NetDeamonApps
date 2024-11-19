@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
@@ -38,6 +39,7 @@ namespace NetDeamon.apps.PVControl.Predictions
         _data.ClearAndCreateEmptyPredictionData();
         LastUpdated = default;
         DataOK = false;
+        PVCC_Logger.LogError("Prediction could not be validated");
       }
     }
     private static bool ValidateData(Dictionary<DateTime, int> data)

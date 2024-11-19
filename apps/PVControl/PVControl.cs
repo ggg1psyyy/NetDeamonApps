@@ -1,132 +1,73 @@
 ﻿using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
-using NetDeamon.apps.PVControl.Managers;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Threading;
 using System.Threading.Tasks;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl
 {
-  public class PVConfig
-  {
-    public string? DBLocation { get; set; }
-    public Entity? CurrentImportPriceEntity { get; set; }
-    public Entity? CurrentExportPriceEntity { get; set; }
-    public Entity? CurrentHouseLoadEntity { get; set; }
-    public Entity? CurrentPVPowerEntity { get; set; }
-    public Entity? CurrentBatteryPowerEntity { get; set; }
-    public float? InverterEfficiency { get; set; }
-    public Entity? TodayPVEnergyEntity { get; set; }
-    public List<Entity>? ForecastPVEnergyTodayEntities { get; set; }
-    public List<Entity>? ForecastPVEnergyTomorrowEntities { get; set; }
-    public Entity? BatterySoCEntity { get; set; }
-    public Entity? BatteryCapacityEntity { get; set; }
-    public float? BatteryCapacityValue { get; set; }
-    public Entity? MaxBatteryChargeCurrrentEntity { get; set; }
-    public int? MaxBatteryChargeCurrrentValue { get; set; }
-    public Entity? MinBatterySoCEntity { get; set; }
-    public int? MinBatterySoCValue { get; set; }
-  }
-
   [NetDaemonApp]
 #if DEBUG
   [Focus]
 #endif
   public class PVControl : IAsyncInitializable
   {
-    private readonly IHaContext _context;
-    private readonly IMqttEntityManager _entityManager;
-    private readonly ILogger<PVControl> _logger;
-    private readonly PVConfig _config;
-    private readonly IScheduler _scheduler;
-
-    private readonly HouseEnergy _house;
+    // nullforgiving "!" used to supress CS8618 for now
+    private HouseEnergy _house = null!;
     #region Created Entities
-    private Entity _modeEntity;
-    private Entity _battery_RemainingTimeEntity;
-    private Entity _battery_RemainingEnergyEntity;
-    private Entity _needToChargeFromGridTodayEntity;
-    private Entity _battery_StatusEntity;
-    private Entity _info_EstimatedMaxSoCTodayEntity;
-    private Entity _info_EstimatedMaxSoCTomorrowEntity;
-    private Entity _info_EstimatedMinSoCTodayEntity;
-    private Entity _info_EstimatedMinSoCTomorrowEntity;
-    private Entity _prefBatterySoCEntity;
-    private Entity _enforcePreferredSocEntity;
-    private Entity _forceChargeEntity;
-    private Entity _forceChargeTargetSoCEntity;
-    private Entity _forceChargeMaxPriceEntity;
-    private Entity _info_chargeTodayEntity;
-    private Entity _info_dischargeTodayEntity;
-    private Entity _info_chargeTomorrowEntity;
-    private Entity _info_dischargeTomorrowEntity;
-    private Entity _info_PredictedSoCEntity;
-    private Entity _info_PredictedChargeEntity;
-    private Entity _info_PredictedDischargeEntity;
-    private Entity _overrideModeEntity;
-    private Entity _RunHeavyLoadsNowEntity;
+    private Entity _modeEntity = null!;
+    private Entity _battery_RemainingTimeEntity = null!;
+    private Entity _battery_RemainingEnergyEntity = null!;
+    private Entity _needToChargeFromGridTodayEntity = null!;
+    private Entity _battery_StatusEntity = null!;
+    private Entity _info_EstimatedMaxSoCTodayEntity = null!;
+    private Entity _info_EstimatedMaxSoCTomorrowEntity = null!;
+    private Entity _info_EstimatedMinSoCTodayEntity = null!;
+    private Entity _info_EstimatedMinSoCTomorrowEntity = null!;
+    private Entity _prefBatterySoCEntity = null!;
+    private Entity _enforcePreferredSocEntity = null!;
+    private Entity _forceChargeEntity = null!;
+    private Entity _forceChargeTargetSoCEntity = null!;
+    private Entity _forceChargeMaxPriceEntity = null!;
+    private Entity _info_chargeTodayEntity = null!;
+    private Entity _info_dischargeTodayEntity = null!;
+    private Entity _info_chargeTomorrowEntity = null!;
+    private Entity _info_dischargeTomorrowEntity = null!;
+    private Entity _info_PredictedSoCEntity = null!;
+    private Entity _info_PredictedChargeEntity = null!;
+    private Entity _info_PredictedDischargeEntity = null!;
+    private Entity _overrideModeEntity = null!;
+    private Entity _RunHeavyLoadsNowEntity = null!;
     #endregion
 
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
-      _context = ha;
-      _entityManager = entityManager;
-      _logger = logger;
-      _config = config.Value;
-      _scheduler = scheduler;
+      PVCCInstance.Initialize(ha, entityManager, logger, config.Value, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler);
 
-      if (string.IsNullOrWhiteSpace(_config.DBLocation))
-        _config.DBLocation = "apps/DataLogger/energy_history.db";
+      if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
+        PVCC_Config.DBLocation = "apps/DataLogger/energy_history.db";
 
       if (!CheckConfiguration())
         throw new Exception("Error initializing configuration");
+      _house = new HouseEnergy();
 
-      _house = new HouseEnergy(_config);
-
-      _modeEntity = new Entity(_context, "sensor.pv_control_mode");
-      _battery_StatusEntity = new Entity(_context, "sensor.pv_control_battery_status");
-      _battery_RemainingTimeEntity = new Entity(_context, "sensor.pv_control_battery_remainingtime");
-      _battery_RemainingEnergyEntity = new Entity(_context, "sensor.pv_control_battery_remainingenergy");
-      _needToChargeFromGridTodayEntity = new Entity(_context, "binary_sensor.pv_control_need_to_charge_from_grid_today");
-      _prefBatterySoCEntity = new Entity(_context, "number.pv_control_preferredbatterycharge");
-      _enforcePreferredSocEntity = new Entity(_context, "switch.pv_control_enforce_preferred_soc");
-      _info_EstimatedMaxSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_max_soc_today");
-      _info_EstimatedMinSoCTodayEntity = new Entity(_context, "sensor.pv_control_info_min_soc_today");
-      _info_EstimatedMaxSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_max_soc_tomorrow");
-      _info_EstimatedMinSoCTomorrowEntity = new Entity(_context, "sensor.pv_control_info_min_soc_tomorrow");
-      _info_PredictedSoCEntity = new Entity(_context, "sensor.pv_control_info_predicted_soc");
-      _info_PredictedDischargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_discharge");
-      _info_PredictedChargeEntity = new Entity(_context, "sensor.pv_control_info_predicted_charge");
-      _info_chargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_charge_today");
-      _info_chargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_charge_tomorrow");
-      _info_dischargeTodayEntity = new Entity(_context, "sensor.pv_control_estimated_remaining_discharge_today");
-      _info_dischargeTomorrowEntity = new Entity(_context, "sensor.pv_control_estimated_discharge_tomorrow");
-      _forceChargeEntity = new Entity(_context, "switch.pv_control_force_charge_at_cheapest_period");
-      _forceChargeMaxPriceEntity = new Entity(_context, "number.pv_control_max_price_for_forcecharge");
-      _forceChargeTargetSoCEntity = new Entity(_context, "number.pv_control_forcecharge_target_soc");
-      _overrideModeEntity = new Entity(_context, "select.pv_control_mode_override");
-      _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
-
-      _logger.LogInformation("Finished PVControl constructor");
-
-      //var x = new HeatpumpManager().Initialize();
+      PVCC_Logger.LogInformation("Finished PVControl constructor");
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
-      //await _entityManager.RemoveAsync("sensor.car_charger_battery");
-      if (await RegisterSensors())
+      if (await RegisterControlSensors())
       {
-        (await _entityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
-        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
-        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
-        (await _entityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
-        (await _entityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
-        (await _entityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
 
         // initialize local values with saved in HA
         if (_prefBatterySoCEntity.State != null)
@@ -141,10 +82,11 @@ namespace NetDeamon.apps.PVControl
           await UserStateChanged(_forceChargeEntity, _forceChargeEntity.State);
         if (_overrideModeEntity.State != null)
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
+
 #if DEBUG
-        // _scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
+        //PVCC_Scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
 #else
-        _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
+        PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
         var Z = _house.NeedToChargeFromExternal;
@@ -153,7 +95,7 @@ namespace NetDeamon.apps.PVControl
       }
       else
       {
-        _logger.LogError("Error registering sensors");
+        PVCC_Logger.LogError("Error registering sensors");
       }
     }
     private async Task UserStateChanged(Entity? entity, string newState)
@@ -167,35 +109,35 @@ namespace NetDeamon.apps.PVControl
           _house.OverrideMode = modeselect;
         else
           _house.OverrideMode = InverterModes.automatic;
-        await _entityManager.SetStateAsync(entity.EntityId, _house.OverrideMode.ToString());
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.OverrideMode.ToString());
       }
       if (entity.EntityId == _prefBatterySoCEntity.EntityId)
       {
         if (int.TryParse(newState, out int value))
           _house.PreferredMinBatterySoC = value;
-        await _entityManager.SetStateAsync(entity.EntityId, _house.PreferredMinBatterySoC.ToString());
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.PreferredMinBatterySoC.ToString());
       }
       if (entity.EntityId == _enforcePreferredSocEntity.EntityId && entity.State is not null)
       {
         _house.EnforcePreferredSoC = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await _entityManager.SetStateAsync(entity.EntityId, _house.EnforcePreferredSoC ? "ON" : "OFF");
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.EnforcePreferredSoC ? "ON" : "OFF");
       }
       if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
       {
         _house.ForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceCharge ? "ON" : "OFF");
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceCharge ? "ON" : "OFF");
       }
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
         if (int.TryParse(newState, out int value))
           _house.ForceChargeMaxPrice = value;
-        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString());
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString());
       }
       if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
       {
         if (int.TryParse(newState, out int value))
           _house.ForceChargeTargetSoC = value;
-        await _entityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
 #if !DEBUG
       await ScheduledOperations();
@@ -203,12 +145,12 @@ namespace NetDeamon.apps.PVControl
     }
     private async Task ScheduledOperations()
     {
-      _logger.LogDebug("Entering Schedule");
+      PVCC_Logger.LogDebug("Entering Schedule");
       DateTime now = DateTime.Now;
-      _logger.LogDebug("Updating Predictions");
+      PVCC_Logger.LogDebug("Updating Predictions");
       _house.UpdatePredictions();
-      _logger.LogDebug("Finished Updating Predictions");
-      await _entityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
+      PVCC_Logger.LogDebug("Finished Updating Predictions");
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       #region Mode
       var nextCheapest = _house.BestChargeTime;
       var attr_Mode = new
@@ -218,18 +160,18 @@ namespace NetDeamon.apps.PVControl
         price = nextCheapest.Price.ToString(CultureInfo.InvariantCulture),
         charge_Reason = _house.ForceChargeReason.ToString(),
       };
-      await _entityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
+      await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
       #endregion
       #region RunHeavyLoads
-      await _entityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
+      await PVCC_EntityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
       var attr_HeavyLoad = new
       {
         Reason = _house.RunHeavyLoadReason.ToString(),
       };
-      await _entityManager.SetAttributesAsync(_RunHeavyLoadsNowEntity.EntityId, attr_HeavyLoad);
+      await PVCC_EntityManager.SetAttributesAsync(_RunHeavyLoadsNowEntity.EntityId, attr_HeavyLoad);
       #endregion
       #region Remaining battery
-      await _entityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingTime = new
       {
         Estimated_time = now.AddMinutes(_house.EstimatedTimeToBatteryFullOrEmpty).ToISO8601(),
@@ -237,10 +179,10 @@ namespace NetDeamon.apps.PVControl
         avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         status = _house.BatteryStatus.ToString(),
       };
-      await _entityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
+      await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
       #endregion
       #region Battery status
-      await _entityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.BatteryStatus.ToString());
+      await PVCC_EntityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.BatteryStatus.ToString());
       var attr_batStatus = new
       {
         avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
@@ -250,10 +192,10 @@ namespace NetDeamon.apps.PVControl
         predicted_pv_power_now = _house.Prediction_PV.CurrentValue * 4 + " W",
         current_SoC = _house.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
-      await _entityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
+      await PVCC_EntityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
       #endregion
       #region Remaining energy
-      await _entityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingEnergy = new
       {
         min_allowed_SoC = (_house.EnforcePreferredSoC ? _house.PreferredMinimalSoC : _house.AbsoluteMinimalSoC).ToString() + "%",
@@ -261,11 +203,11 @@ namespace NetDeamon.apps.PVControl
         remaining_energy_to_zero_soc = _house.CalculateBatteryEnergyAtSoC(_house.BatterySoc, 0).ToString(CultureInfo.InvariantCulture) + " Wh",
         battery_capacity = _house.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
       };
-      await _entityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
+      await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
       #endregion
       #region NeedToCharge
       var needToCharge = _house.NeedToChargeFromExternal;
-      await _entityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
+      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
       var attr_Charge = new
       {
         minimal_SoC_allowed = _house.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
@@ -274,44 +216,44 @@ namespace NetDeamon.apps.PVControl
         at_time = needToCharge.Item2.ToISO8601(),
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
       };
-      await _entityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
+      await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
       #endregion
       #region Prediction
       var curPredSoc = _house.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredSoc.Key != default)
       {
-        await _entityManager.SetStateAsync(_info_PredictedSoCEntity.EntityId, curPredSoc.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_PredictedSoCEntity.EntityId, curPredSoc.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
           last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, soc = s.Value }),
         };
-        await _entityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
+        await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
       }
       var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredCharge.Key != default)
       {
-        await _entityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
           current_entry_time = curPredCharge.Key.ToISO8601(),
           last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyChargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, charge = s.Value }),
         };
-        await _entityManager.SetAttributesAsync(_info_PredictedChargeEntity.EntityId, attr_pred_charge);
+        await PVCC_EntityManager.SetAttributesAsync(_info_PredictedChargeEntity.EntityId, attr_pred_charge);
       }
       var curPredDischarge = _house.DailyDischargePredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredDischarge.Key != default)
       {
-        await _entityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
           current_entry_time = curPredDischarge.Key.ToISO8601(),
           last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data = _house.DailyDischargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, discharge = s.Value }),
         };
-        await _entityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);
+        await PVCC_EntityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);
       }
       #endregion
       #region SoC estimates
@@ -321,43 +263,43 @@ namespace NetDeamon.apps.PVControl
       if (est_soc_today.Count > 0)
       {
         var min_soc_today = est_soc_today.FirstMinOrDefault();
-        await _entityManager.SetStateAsync(_info_EstimatedMinSoCTodayEntity.EntityId, min_soc_today.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_EstimatedMinSoCTodayEntity.EntityId, min_soc_today.Value.ToString(CultureInfo.InvariantCulture));
         var attr_Min_SoC_Today = new
         {
           time = min_soc_today.Key.ToISO8601(),
           data = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).Select(s => new { datetime = s.Key, soc = s.Value }),
         };
-        await _entityManager.SetAttributesAsync(_info_EstimatedMinSoCTodayEntity.EntityId, attr_Min_SoC_Today);
+        await PVCC_EntityManager.SetAttributesAsync(_info_EstimatedMinSoCTodayEntity.EntityId, attr_Min_SoC_Today);
 
         var max_soc_today = est_soc_today.FirstMaxOrDefault();
-        await _entityManager.SetStateAsync(_info_EstimatedMaxSoCTodayEntity.EntityId, max_soc_today.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_EstimatedMaxSoCTodayEntity.EntityId, max_soc_today.Value.ToString(CultureInfo.InvariantCulture));
         var attr_Max_SoC_Today = new
         {
           time = max_soc_today.Key.ToISO8601(),
           data = est_soc_today,
         };
-        await _entityManager.SetAttributesAsync(_info_EstimatedMaxSoCTodayEntity.EntityId, attr_Max_SoC_Today);
+        await PVCC_EntityManager.SetAttributesAsync(_info_EstimatedMaxSoCTodayEntity.EntityId, attr_Max_SoC_Today);
       }
 
       if (est_soc_tomorrow.Count > 0)
       {
         var min_soc_tomorrow = est_soc_tomorrow.FirstMinOrDefault();
-        await _entityManager.SetStateAsync(_info_EstimatedMinSoCTomorrowEntity.EntityId, min_soc_tomorrow.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_EstimatedMinSoCTomorrowEntity.EntityId, min_soc_tomorrow.Value.ToString(CultureInfo.InvariantCulture));
         var attr_Min_SoC_Tomorrow = new
         {
           time = min_soc_tomorrow.Key.ToISO8601(),
           data = est_soc_tomorrow,
         };
-        await _entityManager.SetAttributesAsync(_info_EstimatedMinSoCTomorrowEntity.EntityId, attr_Min_SoC_Tomorrow);
+        await PVCC_EntityManager.SetAttributesAsync(_info_EstimatedMinSoCTomorrowEntity.EntityId, attr_Min_SoC_Tomorrow);
 
         var max_soc_tomorrow = est_soc_tomorrow.FirstMaxOrDefault();
-        await _entityManager.SetStateAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, max_soc_tomorrow.Value.ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, max_soc_tomorrow.Value.ToString(CultureInfo.InvariantCulture));
         var attr_Max_SoC_Tomorrow = new
         {
           time = max_soc_tomorrow.Key.ToISO8601(),
           data = est_soc_tomorrow,
         };
-        await _entityManager.SetAttributesAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, attr_Max_SoC_Tomorrow);
+        await PVCC_EntityManager.SetAttributesAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, attr_Max_SoC_Tomorrow);
       }
       #endregion
       #region charge/discharge forecasts
@@ -368,62 +310,62 @@ namespace NetDeamon.apps.PVControl
 
       if (chargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_chargeTodayEntity.EntityId, chargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
         var attr_chargeToday = new
         {
           data = chargeToday,
         };
-        await _entityManager.SetAttributesAsync(_info_chargeTodayEntity.EntityId, attr_chargeToday);
+        await PVCC_EntityManager.SetAttributesAsync(_info_chargeTodayEntity.EntityId, attr_chargeToday);
       }
       if (chargeTomorrow.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_chargeTomorrowEntity.EntityId, chargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_chargeTomorrowEntity.EntityId, chargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
         var attr_chargeTomorrow = new
         {
           data = chargeTomorrow,
         };
-        await _entityManager.SetAttributesAsync(_info_chargeTomorrowEntity.EntityId, attr_chargeTomorrow);
+        await PVCC_EntityManager.SetAttributesAsync(_info_chargeTomorrowEntity.EntityId, attr_chargeTomorrow);
       }
 
       if (dischargeToday.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_dischargeTodayEntity.EntityId, dischargeToday.GetSum(start: now).ToString(CultureInfo.InvariantCulture));
         var attr_dischargeToday = new
         {
           data = dischargeToday,
         };
-        await _entityManager.SetAttributesAsync(_info_dischargeTodayEntity.EntityId, attr_dischargeToday);
+        await PVCC_EntityManager.SetAttributesAsync(_info_dischargeTodayEntity.EntityId, attr_dischargeToday);
       }
       if (dischargeTomorrow.Count > 0)
       {
-        await _entityManager.SetStateAsync(_info_dischargeTomorrowEntity.EntityId, dischargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(_info_dischargeTomorrowEntity.EntityId, dischargeTomorrow.GetSum().ToString(CultureInfo.InvariantCulture));
         var attr_dischargeTomorrow = new
         {
           data = dischargeTomorrow,
         };
-        await _entityManager.SetAttributesAsync(_info_dischargeTomorrowEntity.EntityId, attr_dischargeTomorrow);
+        await PVCC_EntityManager.SetAttributesAsync(_info_dischargeTomorrowEntity.EntityId, attr_dischargeTomorrow);
       }
       #endregion
-      _logger.LogDebug("Leave Schedule");
+      PVCC_Logger.LogDebug("Leave Schedule");
     }
     private bool CheckConfiguration()
     {
       bool checkResult = true;
 
-      if (_config.CurrentImportPriceEntity?.State is null)
+      if (PVCC_Config.CurrentImportPriceEntity?.State is null)
       {
         checkResult = false;
-        _logger.LogError("{entity} is not available in configuration ({entityid})", "CurrentPriceEntity", _config.CurrentImportPriceEntity?.EntityId);
+        PVCC_Logger.LogError("{entity} is not available in configuration ({entityid})", "CurrentPriceEntity", PVCC_Config.CurrentImportPriceEntity?.EntityId);
       }
-      if (_config.CurrentPVPowerEntity?.State is null)
+      if (PVCC_Config.CurrentPVPowerEntity?.State is null)
       {
         checkResult = false;
-        _logger.LogError("{entity} is not available in configuration ({entityid})", "CurrentPVPowerEntity", _config.CurrentPVPowerEntity?.EntityId);
+        PVCC_Logger.LogError("{entity} is not available in configuration ({entityid})", "CurrentPVPowerEntity", PVCC_Config.CurrentPVPowerEntity?.EntityId);
       }
-      if (_config.TodayPVEnergyEntity?.State is null)
+      if (PVCC_Config.TodayPVEnergyEntity?.State is null)
       {
         checkResult = false;
-        _logger.LogError("{entity} is not available in configuration ({entityid})", "TodayPVEnergyEntity", _config.TodayPVEnergyEntity?.EntityId);
+        PVCC_Logger.LogError("{entity} is not available in configuration ({entityid})", "TodayPVEnergyEntity", PVCC_Config.TodayPVEnergyEntity?.EntityId);
       }
       //if (_config.ForecastPVEnergyTodayEntity?.State is null)
       //{
@@ -438,32 +380,7 @@ namespace NetDeamon.apps.PVControl
 
       return checkResult;
     }
-    public async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? additionalConfig = null, string defaultValue="", bool reRegister=false)
-    {
-      var identifiers = new[] { "pv_control" };
-      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
-      Entity entity = new Entity(_context, id);
-      if (entity?.State == null || reRegister)
-      {
-        if (reRegister && entity?.State != null)
-        {
-          await _entityManager.RemoveAsync(id);
-        }
-        dynamic conf = additionalConfig != null ? new { icon = icon, additionalConfig, device } : new { icon = icon, device };
-        await _entityManager.CreateAsync(id, new EntityCreationOptions
-        {
-          Name = name,
-          DeviceClass = deviceClass,
-        }, 
-        conf
-        ).ConfigureAwait(false);
-        entity = new Entity(_context, id);
-        if (!string.IsNullOrEmpty(defaultValue))
-          await _entityManager.SetStateAsync(entity.EntityId, defaultValue);
-      }
-      return entity;
-    }
-    private async Task<bool> RegisterSensors(bool reset=false)
+    private async Task<bool> RegisterControlSensors(bool reset=false)
     {
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select", 
         additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) }, 

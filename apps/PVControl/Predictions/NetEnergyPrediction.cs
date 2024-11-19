@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
@@ -35,8 +36,10 @@ namespace NetDeamon.apps.PVControl.Predictions
       foreach (var item in _LoadPrediction.TodayAndTomorrow)
       {
         if (!_SolarForecast.TodayAndTomorrow.TryGetValue(item.Key, out int value))
+        { 
           value = 0;
-
+          PVCC_Logger.LogError("Could not find SolarForeCast for {date}", item.Key);
+        }
         // adjust for actual values and slowly revert to original prediction
         int predictedLoad = item.Value;
         int predictedPV = value;

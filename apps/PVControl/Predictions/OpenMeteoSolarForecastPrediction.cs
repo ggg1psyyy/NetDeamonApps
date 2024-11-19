@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
@@ -40,6 +41,11 @@ namespace NetDeamon.apps.PVControl.Predictions
       {
         var resultDTO = entity.EntityState?.AttributesJson?.GetProperty("watts").Deserialize<Dictionary<DateTimeOffset, int>>()?.OrderBy(t => t.Key).ToDictionary();
         Dictionary<DateTime, int> result = [];
+        if (resultDTO is null)
+        {
+          PVCC_Logger.LogError("Could not get PV forecast values");
+          return [];
+        }
         foreach (var item in resultDTO)
           result.Add(item.Key.DateTime, item.Value);
 
