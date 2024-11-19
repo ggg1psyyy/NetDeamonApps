@@ -175,27 +175,6 @@ namespace NetDeamon.apps.PVControl
         ForceChargeReason = ForceChargeReasons.None;
         var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
 
-        if (ForceCharge)
-        {
-          // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
-          // and only so far that we reach 100% via PV today
-          var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
-          // keep a wiggle room of 1 hour to prevent higher loads than predicted to oszilate the charging if pv max reached is very near the end of the day
-          var minsToLastPV = (LastRelevantPVEnergyToday - maxSoCToday.Key).TotalMinutes;
-          bool wiggle = (_currentMode == InverterModes.force_charge ? minsToLastPV <= 60 : minsToLastPV <= 0) || maxSoCToday.Value < 100;
-          // ForceCharge is only allowed to max. 95%
-          ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
-          // hysteresis prevention
-          int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC + 2 : ForceChargeTargetSoC;
-          if (BatterySoc < forceChargeTo && CheapestWindowToday.Price < ForceChargeMaxPrice && wiggle && IsNowCheapestWindowToday)
-          {
-            ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
-            _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(true, now, BatterySoc);
-            _lastCalculatedNeedToCharge = now;
-            return _needToChargeFromExternalCache;
-          }
-        }
-
         int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
         if (_currentMode == InverterModes.force_charge)
           // while charging increase minCharge to prevent hysteresis
@@ -224,6 +203,30 @@ namespace NetDeamon.apps.PVControl
         if (needCharge)
           ForceChargeReason = minSoC <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
         _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key, minReached.Value);
+
+        if (ForceCharge)
+        {
+          // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
+          // and only so far that we reach 100% via PV today
+          var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
+          // keep a wiggle room of 1 hour to prevent higher loads than predicted to oszilate the charging if pv max reached is very near the end of the day
+          var minsToLastPV = (LastRelevantPVEnergyToday - maxSoCToday.Key).TotalMinutes;
+          bool wiggle = (_currentMode == InverterModes.force_charge ? minsToLastPV <= 60 : minsToLastPV <= 0) || maxSoCToday.Value < 100;
+          // ForceCharge is only allowed to max. 95%
+          ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
+          // if cheapest price is in the evening it's possible that after midnight an even cheaper period starts, so we wait at max 8 hours for this if we can make it at least 30 minutes before then
+          bool cheapestNow = IsNowCheapestWindowToday;
+          var diff = CheapestWindowTotal.StartTime - CheapestWindowToday.StartTime;
+          if (diff.TotalHours > 0 && diff.TotalHours <= 8 && CheapestWindowTotal.StartTime < minReached.Key.AddMinutes(-30))
+            cheapestNow = false;          
+          // hysteresis prevention
+          int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC + 2 : ForceChargeTargetSoC;
+          if (BatterySoc < forceChargeTo && CheapestWindowToday.Price < ForceChargeMaxPrice && wiggle && cheapestNow)
+          {
+            ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
+            _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(true, now, BatterySoc);
+          }
+        }
         _lastCalculatedNeedToCharge = now;
         return _needToChargeFromExternalCache;
       }
