@@ -1,6 +1,7 @@
 ﻿using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
+using NetDeamon.apps.PVControl.Managers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -112,6 +113,8 @@ namespace NetDeamon.apps.PVControl
       _RunHeavyLoadsNowEntity = new Entity(_context, "sensor.pv_control_run_heavyloads_now");
 
       _logger.LogInformation("Finished PVControl constructor");
+
+      //var x = new HeatpumpManager().Initialize();
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
@@ -139,12 +142,12 @@ namespace NetDeamon.apps.PVControl
         if (_overrideModeEntity.State != null)
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 #if DEBUG
-       // _scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
+        // _scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
 #else
         _scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
-        var Z = _house.BestChargeTime;
+        var Z = _house.NeedToChargeFromExternal;
         var Y = _house.CurrentPriceRank;
 #endif
       }
@@ -514,7 +517,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "30",
         reRegister: reset);
 
-      _enforcePreferredSocEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
+      _modeEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
         additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
         defaultValue: InverterModes.normal.ToString(),
         reRegister: reset);
