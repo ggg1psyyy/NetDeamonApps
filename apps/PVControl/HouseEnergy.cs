@@ -124,8 +124,8 @@ namespace NetDeamon.apps.PVControl
 
         else if (
           need.Item1
-          // stay 2 minutes away from extremes, to make sure we have the same time as the provider
-          && DateTime.Now > BestChargeTime.StartTime.AddMinutes(2) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-2)
+          // stay 1 minute away from extremes, to make sure we have the same time as the provider
+          && DateTime.Now > BestChargeTime.StartTime.AddMinutes(1) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-1)
           // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
           && (_currentMode == InverterModes.force_charge && BatterySoc <= 98 || _currentMode != InverterModes.force_charge && BatterySoc <= 96)
           )
@@ -202,7 +202,9 @@ namespace NetDeamon.apps.PVControl
         bool needCharge = minUnderDefined && (minBeforeMax || !maxOver100);
         if (needCharge)
           ForceChargeReason = minSoC <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
-        _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key, minReached.Value);
+        // be very pessimistic and substract 10% of the targettime, so we are relatively sure to reach the next price minima 
+        int quarterhoursTilCharge = (int)(((minReached.Key - now).TotalMinutes * 0.1)/ 15);
+        _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key.AddMinutes(-quarterhoursTilCharge*15), minReached.Value);
 
         if (ForceCharge)
         {
