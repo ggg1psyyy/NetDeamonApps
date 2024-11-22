@@ -147,6 +147,10 @@ namespace NetDeamon.apps
       {
         return false;
       }
+      else if (entity.State.ToLowerInvariant() == "unavailable")
+      {
+        return false;
+      }
       else if (typeof(T) == typeof(float))
       {
         if (float.TryParse(entity.State, NumberStyles.Any, CultureInfo.InvariantCulture, out float value))
@@ -188,6 +192,23 @@ namespace NetDeamon.apps
       }
       else
         return false;
+    }
+    public static bool TryGetJsonAttribute(this Entity entity, string attributeName, out JsonElement attribute)
+    {
+      attribute = default!;
+      if (entity is null)
+        return false;
+      else if (entity.EntityState is null || entity.EntityState.AttributesJson is null || entity.State?.ToLowerInvariant() == "unavailable")
+      {
+        return false;
+      }
+      var result = entity.EntityState.AttributesJson?.GetProperty(attributeName);
+      if (result is JsonElement) 
+      {
+        attribute = (JsonElement)result;
+        return true;
+      }
+      return false;
     }
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
     {

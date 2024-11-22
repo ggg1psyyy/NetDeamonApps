@@ -54,7 +54,6 @@ namespace NetDeamon.apps.PVControl
 
       if (!CheckConfiguration())
         throw new Exception("Error initializing configuration");
-      _house = new HouseEnergy();
 
       PVCC_Logger.LogInformation("Finished PVControl constructor");
     }
@@ -62,6 +61,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (await RegisterControlSensors())
       {
+        _house = new HouseEnergy();
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
@@ -89,8 +89,8 @@ namespace NetDeamon.apps.PVControl
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
-        var Z = _house.NeedToChargeFromExternal;
-        var Y = _house.CurrentPriceRank;
+        var manager = new Managers.Manager(_house);
+        var x = _house.CurrentPriceRank;
 #endif
       }
       else

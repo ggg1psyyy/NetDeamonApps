@@ -390,7 +390,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return PVCC_Config.CurrentImportPriceEntity is not null && PVCC_Config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
+        return PVCC_Config.CurrentImportPriceEntity?.State is not null && PVCC_Config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
       }
     }
     public float CurrentEnergyExportPrice
@@ -596,7 +596,7 @@ namespace NetDeamon.apps.PVControl
         if (_priceListCache is null || _priceListCache.Count == 0)
         {
           _priceListCache = [];
-          if (PVCC_Config.CurrentImportPriceEntity != null && PVCC_Config.CurrentImportPriceEntity.EntityState?.AttributesJson?.GetProperty("data") is JsonElement data)
+          if (PVCC_Config.CurrentImportPriceEntity is not null && PVCC_Config.CurrentImportPriceEntity.TryGetJsonAttribute("data", out JsonElement data))
             if (data.Deserialize<List<EpexPriceTableEntry>>()?.OrderBy(x => x.StartTime).ToList() is List<EpexPriceTableEntry> priceList)
               _priceListCache = priceList;
         }
@@ -651,7 +651,8 @@ namespace NetDeamon.apps.PVControl
     }
     public void UpdatePredictions()
     {
-      if (DateTime.Now.Hour == 0 && DateTime.Now.Minute == 5 && Math.Abs((DateTime.Now - Prediction_Load.LastDataUpdate).TotalMinutes) > 60)
+      DateTime now = DateTime.Now;
+      if (Prediction_Load.Today.First().Key.Date < now.Date )
         Prediction_Load.UpdateData();
       Prediction_PV.UpdateData();
       Prediction_NetEnergy.UpdateData();

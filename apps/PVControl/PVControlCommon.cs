@@ -57,10 +57,10 @@ namespace NetDeamon.apps.PVControl
       return entity;
     }
   }
-  public class PVConfig
+  public partial class PVConfig
   {
     public string DBLocation { get; set; } = default!;
-    public Entity CurrentImportPriceEntity { get; set; } = null!;
+    public List<Entity> CurrentImportPriceEntities { get; set; } = null!;
     public Entity CurrentExportPriceEntity { get; set; } = null!;
     public Entity CurrentHouseLoadEntity { get; set; } = null!;
     public Entity CurrentPVPowerEntity { get; set; } = null!;
@@ -76,5 +76,18 @@ namespace NetDeamon.apps.PVControl
     public int MaxBatteryChargeCurrrentValue { get; set; }
     public Entity MinBatterySoCEntity { get; set; } = null!;
     public int MinBatterySoCValue { get; set; } = default;
+
+    public Entity CurrentImportPriceEntity
+    {
+      get
+      {
+        foreach (var entity in CurrentImportPriceEntities)
+        {
+          if (entity.TryGetJsonAttribute("data", out _))
+            return entity;
+        }
+        return null!;
+      }
+    }
   }
 }

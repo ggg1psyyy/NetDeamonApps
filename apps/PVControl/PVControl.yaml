@@ -3,7 +3,10 @@ NetDeamon.apps.PVControl.PVConfig:
 
   # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
-  CurrentImportPriceEntity: sensor.epex_spot_data_net_price
+  # since these fail sometimes you can have multiple different sources, order = priority
+  CurrentImportPriceEntities: 
+    - sensor.epex_spot_data_net_price
+    - sensor.epex_spot_data_net_price_2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.oemag_marktpreis
   # *** current house load (W)
@@ -37,3 +40,10 @@ NetDeamon.apps.PVControl.PVConfig:
   MinBatterySoCEntity: sensor.solax_battery_actual_min_soc
   # Min SoC to keep (%) direct value (if both are used, sensor has priority)
   #MinBatterySoCValue: 10
+
+  # HeatpumpManager
+  WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
+  WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
+  WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
+  WarmwaterEnergyUsageEntity: sensor.ww_energy_consumption_day
+  WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
