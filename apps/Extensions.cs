@@ -147,7 +147,7 @@ namespace NetDeamon.apps
       {
         return false;
       }
-      else if (entity.State.ToLowerInvariant() == "unavailable")
+      else if (entity.State.ToLowerInvariant() == "unavailable"  || entity.State.ToLowerInvariant() == "unknown")
       {
         return false;
       }

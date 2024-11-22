@@ -47,8 +47,10 @@ namespace NetDeamon.apps.PVControl
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
-      PVCCInstance.Initialize(ha, entityManager, logger, config.Value, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler);
-
+      // Converter often needs some time after restart of HA to give values
+      while (!config.Value.BatterySoCEntity.TryGetStateValue<int>(out _))
+        System.Threading.Thread.Sleep(1000);
+      PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler);
       if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
         PVCC_Config.DBLocation = "apps/DataLogger/energy_history.db";
 

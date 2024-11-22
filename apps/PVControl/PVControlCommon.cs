@@ -21,15 +21,21 @@ namespace NetDeamon.apps.PVControl
     public static PVConfig PVCC_Config { get; private set; } = null!;
     public static DisposableScheduler PVCC_Scheduler { get; private set; } = null!;
 
-    public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, PVConfig pVConfig, DisposableScheduler scheduler)
+    public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, IAppConfig<PVConfig> pVConfig, DisposableScheduler scheduler)
     {
-      if (PVCC_HaContext != null)
-        return;
       PVCC_HaContext = haContext;
       PVCC_EntityManager = mqttEntityManager; 
       PVCC_Logger = logger;
-      PVCC_Config = pVConfig;
+      PVCC_Config = pVConfig.Value;
       PVCC_Scheduler = scheduler;
+    }
+    ~PVControlCommon() 
+    {
+      PVCC_HaContext = null!;
+      PVCC_EntityManager = null!;
+      PVCC_Logger = null!;
+      PVCC_Config = null!;
+      PVCC_Scheduler = null!;
     }
     public static async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? additionalConfig = null, string defaultValue = "", bool reRegister = false)
     {
