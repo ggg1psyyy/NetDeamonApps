@@ -92,7 +92,7 @@ namespace NetDeamon.apps.PVControl
 #endif
 #if DEBUG
         var manager = new Managers.Manager(_house);
-        var x = _house.CurrentPriceRank;
+        var x = _house.ProposedMode;
 #endif
       }
       else

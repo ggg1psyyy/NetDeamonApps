@@ -1,4 +1,5 @@
 ﻿using LinqToDB;
+using LinqToDB.DataProvider;
 using NetDaemon.HassModel.Entities;
 using NetDeamon.apps.PVControl.Predictions;
 using System.Collections.Generic;
@@ -72,6 +73,9 @@ namespace NetDeamon.apps.PVControl
       _dailyDischargePrediction = [];
       _priceListCache = [];
     }
+    /// <summary>
+    /// UserSetting: ForceCharge to 100%
+    /// </summary>
     public bool ForceCharge { get; set; }
     /// <summary>
     /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
@@ -107,49 +111,76 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
+        DateTime now = DateTime.Now;
+        DateTime cheapestToday = CheapestWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
         if (OverrideMode != InverterModes.automatic)
         {
           ForceChargeReason = ForceChargeReasons.UserMode;
           _currentMode = OverrideMode;
-          return OverrideMode;
+          return _currentMode;
         }
 
         if (CurrentEnergyImportPrice < CurrentEnergyExportPrice * -1 && CurrentEnergyImportPrice < 0)
         {
           _currentMode = InverterModes.grid_only;
           ForceChargeReason = ForceChargeReasons.ImportPriceUnderExportPrice;
-          return InverterModes.grid_only;
+          return _currentMode;
         }
 
-        else if (
+        if (ForceCharge && now < cheapestToday.AddHours(2))
+        {
+          // don't recalculate if charging already started
+          if (ForceChargeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && _currentMode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
+          {
+            return _currentMode;
+          }
+          int socAtBestTime = Prediction_BatterySoC.Today.GetEntryAtTime(cheapestToday).Value;
+          int chargeTime = CalculateChargingDurationA(socAtBestTime, 100, PVCC_Config.MaxBatteryChargePower);
+          int rankBefore = GetPriceRank(cheapestToday.AddHours(-1));
+          int rankAfter = GetPriceRank(cheapestToday.AddHours(1));
+          DateTime chargeStart = cheapestToday;
+          if (chargeTime > 60)
+          {
+            if (rankBefore < rankAfter)
+            {
+              if (PriceList.Where(p => p.StartTime == chargeStart.AddHours(-1)).FirstOrDefault().Price < ForceChargeMaxPrice)
+                chargeStart = cheapestToday.AddMinutes(chargeTime - 60);
+            }
+          }
+
+          if (now > chargeStart && now < chargeStart.AddMinutes(chargeTime+10) && BatterySoc < Math.Min(96, ForceChargeTargetSoC))
+          {
+            _currentMode = InverterModes.force_charge;
+            ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
+            return _currentMode;
+          }
+        }
+
+        if (
           need.Item1
-          // stay 1 minute away from extremes, to make sure we have the same time as the provider
-          && DateTime.Now > BestChargeTime.StartTime.AddMinutes(1) && DateTime.Now < BestChargeTime.EndTime.AddMinutes(-1)
+          // stay 30 seconds away from extremes, to make sure we have the same time as the provider
+          && DateTime.Now > BestChargeTime.StartTime.AddSeconds(30) && DateTime.Now < BestChargeTime.EndTime.AddSeconds(-30)
           // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
           && (_currentMode == InverterModes.force_charge && BatterySoc <= 98 || _currentMode != InverterModes.force_charge && BatterySoc <= 96)
           )
         {
-          DateTime now = DateTime.Now;
           // if chargetime is in the latest quarter of the current hour and next hour is cheaper, it's better to just import energy normally, without force charging
           if ((ForceChargeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || ForceChargeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
             CurrentPriceRank > GetPriceRank(now.AddHours(1)) && need.Item2.Date == now.Date && need.Item2.Hour == now.Hour && need.Item2.Minute >= 45)
           {
             _currentMode = InverterModes.normal;
-            return InverterModes.normal;
+            return _currentMode;
           }
           else
           { 
             _currentMode = InverterModes.force_charge;
-            return InverterModes.force_charge;
+            return _currentMode;
           }
         }
-        else
-        {
-          //ForceChargeReason = ForceChargeReasons.None;
-          _currentMode = InverterModes.normal;
-          return InverterModes.normal;
-        }
+
+        _currentMode = InverterModes.normal;
+        return _currentMode;
       }
     }
     private Tuple<bool, DateTime, int>? _needToChargeFromExternalCache;
@@ -374,17 +405,6 @@ namespace NetDeamon.apps.PVControl
 
       }
     }
-    public int MaxBatteryChargePower
-    {
-      get
-      {
-        int maxPower = PVCC_Config.MaxBatteryChargeCurrrentValue != default ? PVCC_Config.MaxBatteryChargeCurrrentValue : 10;
-        if (PVCC_Config.MaxBatteryChargeCurrrentEntity is not null && PVCC_Config.MaxBatteryChargeCurrrentEntity.TryGetStateValue(out int max))
-          maxPower = max;
-
-        return maxPower;
-      }
-    }
     /// <summary>
     /// remaining PV yield forecast for today in WH
     /// </summary>
@@ -469,7 +489,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        return CalculateChargingDurationA(NeedToChargeFromExternal.Item3, 100, MaxBatteryChargePower);
+        return CalculateChargingDurationA(NeedToChargeFromExternal.Item3, 100, PVCC_Config.MaxBatteryChargePower);
       }
     }
     public int CurrentAverageBatteryChargeDischargePower
@@ -525,6 +545,24 @@ namespace NetDeamon.apps.PVControl
       float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
       float e = BatteryCapacity * s - BatteryCapacity * ms;
       return (int)e;
+    }
+    public DateTime CalculateRuntime(DateTime startTime, int startSoc, int minSoc = -1)
+    {
+      if (minSoc < 0)
+        minSoc = PreferredMinimalSoC;
+      int pred_soc_at_startTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(startTime).Value;
+      int diff = pred_soc_at_startTime - startSoc;
+      var pred_new = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
+      return pred_new.FirstUnderOrDefault(minSoc, start: startTime).Key;
+    }
+    public int CalculateSocNeedeedToReachTime(DateTime startTime, DateTime endTime, int minSoc = -1)
+    {
+      if (minSoc < 0)
+        minSoc = PreferredMinimalSoC;
+      int pred_soc_at_endTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(endTime).Value;
+      int diff = pred_soc_at_endTime - minSoc;
+      var pred_new = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
+      return pred_new.GetEntryAtTime(startTime).Value;
     }
     private List<EpexPriceTableEntry> UpcomingPriceList
     {

@@ -6,8 +6,8 @@ NetDeamon.apps.PVControl.PVConfig:
   # since these fail sometimes you can have multiple different sources, order = priority
   CurrentImportPriceEntities: 
     - sensor.epex_spot_data_net_price
-    - sensor.epex_spot_data_net_price_2
     - sensor.epex_spot_data_net_price_3
+    - sensor.epex_spot_data_net_price_2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.oemag_marktpreis
   # *** current house load (W)

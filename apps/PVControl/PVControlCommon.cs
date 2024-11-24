@@ -95,5 +95,16 @@ namespace NetDeamon.apps.PVControl
         return null!;
       }
     }
+    public int MaxBatteryChargePower
+    {
+      get
+      {
+        int maxPower = MaxBatteryChargeCurrrentValue != default ? MaxBatteryChargeCurrrentValue : 10;
+        if (MaxBatteryChargeCurrrentEntity is not null && MaxBatteryChargeCurrrentEntity.TryGetStateValue(out int max))
+          maxPower = max;
+
+        return maxPower;
+      }
+    }
   }
 }

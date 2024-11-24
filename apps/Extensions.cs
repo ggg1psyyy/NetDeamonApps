@@ -126,7 +126,9 @@ namespace NetDeamon.apps
     }
     public static int GetUnitMultiplicator(this Entity entity)
     {
-      string? unit = entity?.EntityState?.AttributesJson?.GetProperty("unit_of_measurement").ToString().ToLower();
+      if (!entity.TryGetJsonAttribute("unit_of_measurement", out JsonElement unitAttr))
+        return 1;
+      string unit = unitAttr.ToString().ToLower();
       if (unit is not null && unit.Length > 1)
       {
         if (unit.StartsWith("ct"))
@@ -147,7 +149,7 @@ namespace NetDeamon.apps
       {
         return false;
       }
-      else if (entity.State.ToLowerInvariant() == "unavailable"  || entity.State.ToLowerInvariant() == "unknown")
+      else if (entity.State.Equals("unavailable", StringComparison.InvariantCultureIgnoreCase) || entity.State.Equals("unknown", StringComparison.InvariantCultureIgnoreCase))
       {
         return false;
       }
@@ -202,12 +204,10 @@ namespace NetDeamon.apps
       {
         return false;
       }
-      var result = entity.EntityState.AttributesJson?.GetProperty(attributeName);
-      if (result is JsonElement) 
-      {
-        attribute = (JsonElement)result;
+      JsonElement attr = (JsonElement)entity.EntityState.AttributesJson;
+      if (attr.TryGetProperty(attributeName, out attribute))
         return true;
-      }
+
       return false;
     }
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
