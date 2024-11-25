@@ -128,7 +128,7 @@ namespace NetDeamon.apps.PVControl
           return _currentMode;
         }
 
-        if (ForceCharge && now < cheapestToday.AddHours(2))
+        if (ForceCharge && now > cheapestToday.AddHours(-1) && now < cheapestToday.AddHours(2))
         {
           // don't recalculate if charging already started
           if (ForceChargeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && _currentMode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
@@ -220,11 +220,6 @@ namespace NetDeamon.apps.PVControl
         // what's the next max
         var maxReached = estSoC.FirstMaxOrDefault(start: now);
 
-        // charge to Max if in absolut cheapest period when we never reach 100% SoC today or tomorrow with PV only and if we have at least 12h price preview
-        if (PriceList.Where(p => p.StartTime > now).Count() > 12)
-          if (CurrentEnergyImportPrice < PriceList.Where(p => p.StartTime > now).Min(p => p.Price) && maxReached.Value < 99 && estSoC.Where(e => e.Key.Date == now.Date.AddDays(1)).Max(e => e.Value) < 99)
-            minSoC = 100;
-
         bool minBeforeMax = minReached.Key < maxReached.Key;
         bool minUnderDefined = minReached.Value <= minSoC;
         bool maxOver100 = maxReached.Value >= 100;
@@ -236,30 +231,6 @@ namespace NetDeamon.apps.PVControl
         // be very pessimistic and substract 10% of the targettime, so we are relatively sure to reach the next price minima 
         int quarterhoursTilCharge = (int)(((minReached.Key - now).TotalMinutes * 0.1)/ 15);
         _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(needCharge, minReached.Key.AddMinutes(-quarterhoursTilCharge*15), minReached.Value);
-
-        if (ForceCharge)
-        {
-          // if ForceCharge is enabled we always charge once a day at the absolute cheapest period (only if price < ForceChargeMaxPrice set by user)
-          // and only so far that we reach 100% via PV today
-          var maxSoCToday = estSoC.FirstMaxOrDefault(now, now.Date.AddDays(1));
-          // keep a wiggle room of 1 hour to prevent higher loads than predicted to oszilate the charging if pv max reached is very near the end of the day
-          var minsToLastPV = (LastRelevantPVEnergyToday - maxSoCToday.Key).TotalMinutes;
-          bool wiggle = (_currentMode == InverterModes.force_charge ? minsToLastPV <= 60 : minsToLastPV <= 0) || maxSoCToday.Value < 100;
-          // ForceCharge is only allowed to max. 95%
-          ForceChargeTargetSoC = Math.Min(ForceChargeTargetSoC, 95);
-          // if cheapest price is in the evening it's possible that after midnight an even cheaper period starts, so we wait at max 8 hours for this if we can make it at least 30 minutes before then
-          bool cheapestNow = IsNowCheapestWindowToday;
-          var diff = CheapestWindowTotal.StartTime - CheapestWindowToday.StartTime;
-          if (diff.TotalHours > 0 && diff.TotalHours <= 8 && CheapestWindowTotal.StartTime < minReached.Key.AddMinutes(-30))
-            cheapestNow = false;          
-          // hysteresis prevention
-          int forceChargeTo = _currentMode == InverterModes.force_charge ? ForceChargeTargetSoC + 2 : ForceChargeTargetSoC;
-          if (BatterySoc < forceChargeTo && CheapestWindowToday.Price < ForceChargeMaxPrice && wiggle && cheapestNow)
-          {
-            ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
-            _needToChargeFromExternalCache = new Tuple<bool, DateTime, int>(true, now, BatterySoc);
-          }
-        }
         _lastCalculatedNeedToCharge = now;
         return _needToChargeFromExternalCache;
       }
@@ -689,10 +660,10 @@ namespace NetDeamon.apps.PVControl
           return PVPeriods.InPVPeriod;
       }
     }
-    public void UpdatePredictions()
+    public void UpdatePredictions(bool all = false)
     {
       DateTime now = DateTime.Now;
-      if (Prediction_Load.Today.First().Key.Date < now.Date )
+      if ((Prediction_Load.Today.First().Key.Date < now.Date && now.Second >= 30) || all)
         Prediction_Load.UpdateData();
       Prediction_PV.UpdateData();
       Prediction_NetEnergy.UpdateData();
