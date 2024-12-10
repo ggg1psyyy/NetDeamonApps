@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps
 {
@@ -192,6 +193,12 @@ namespace NetDeamon.apps
         else
           return false;
       }
+      else if (typeof(T) == typeof(bool))
+      {
+        dynamic result = entity.State.Equals("on", StringComparison.InvariantCultureIgnoreCase) ? true : false;
+        resultValue = (T)result;
+        return true;
+      }
       else
         return false;
     }
@@ -209,6 +216,27 @@ namespace NetDeamon.apps
         return true;
 
       return false;
+    }
+    private static bool TurnOnOff(this Entity entity, bool On)
+    {
+      if (entity.TryGetStateValue(out bool curStatus))
+      {
+        entity.CallService(On ? "turn_on" : "turn_off");
+        //await PVCC_EntityManager.SetStateAsync(entity.EntityId, On ? "ON": "OFF");
+        System.Threading.Thread.Sleep(100);
+        entity.TryGetStateValue(out curStatus);
+        return curStatus == On;
+      }
+      else
+        return false;
+    }
+    public static bool TurnOn(this Entity entity)
+    {
+      return TurnOnOff(entity, true);
+    }
+    public static bool TurnOff(this Entity entity)
+    {
+      return TurnOnOff(entity, false);
     }
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
     {
