@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Reactive.Concurrency;
 using NetDaemon.Extensions.Scheduler;
+using NetDeamon.apps;
 
 #pragma warning disable CS1998
 
