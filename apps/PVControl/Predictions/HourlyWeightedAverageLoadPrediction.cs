@@ -21,16 +21,16 @@ namespace NetDeamon.apps.PVControl.Predictions
     protected override Dictionary<DateTime, int> PopulateData()
     {
       Dictionary<DateTime, int> data = [];
-      for (var time = DateTime.Now.Date; time < DateTime.Now.AddDays(2).Date; time = time.AddMinutes(15))
+      DateTime now = DateTime.Now.Date;
+      for (var time = now; time < now.AddDays(2).Date; time = time.AddMinutes(15))
       {
-        data.Add(time, GetHourlyHouseEnergyUsageHistory(time.Hour) / 4);
+        data.Add(time, GetHourlyHouseEnergyUsageHistory(time.Hour, now) / 4);
       }
       return data;
     }
-    private int GetHourlyHouseEnergyUsageHistory(int hour)
+    private int GetHourlyHouseEnergyUsageHistory(int hour, DateTime now)
     {
       using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(string.Format("Data Source={0}", _dbLocation)));
-      DateTime now = DateTime.Now;
       var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new { Date = h.Timestamp, Value = h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / _weightScaling) }).ToList();
       float weightedSum = weights.Sum(w => w.Value is null ? 0 : (float)w.Value * w.Weight);
       float sumOfWeights = weights.Sum(w => w.Weight);

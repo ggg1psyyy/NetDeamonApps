@@ -85,14 +85,16 @@ namespace NetDeamon.apps.PVControl
         if (_overrideModeEntity.State != null)
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 
+        var manager = new Managers.Manager(_house);
 #if DEBUG
         //PVCC_Scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
 #else
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 #if DEBUG
-        var manager = new Managers.Manager(_house);
+
         var x = _house.ProposedMode;
+        _house.UpdatePredictions(true);
 #endif
       }
       else
@@ -151,6 +153,11 @@ namespace NetDeamon.apps.PVControl
       DateTime now = DateTime.Now;
       PVCC_Logger.LogDebug("Updating Predictions");
       _house.UpdatePredictions();
+      if (_house.Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
+      {
+        PVCC_Logger.LogError("Prediction doesn't start with today");
+        _house.UpdatePredictions(true);
+      }
       PVCC_Logger.LogDebug("Finished Updating Predictions");
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       #region Mode

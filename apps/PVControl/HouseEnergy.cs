@@ -111,7 +111,11 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
+#if DEBUG
+        DateTime now = DateTime.Now.Date.AddHours(2.1);
+#else
         DateTime now = DateTime.Now;
+#endif
         DateTime cheapestToday = CheapestWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
         if (OverrideMode != InverterModes.automatic)
@@ -145,12 +149,13 @@ namespace NetDeamon.apps.PVControl
             if (rankBefore < rankAfter)
             {
               if (PriceList.Where(p => p.StartTime == chargeStart.AddHours(-1)).FirstOrDefault().Price < ForceChargeMaxPrice)
-                chargeStart = cheapestToday.AddMinutes(chargeTime - 60);
+                chargeStart = cheapestToday.AddMinutes(-(chargeTime - 50));
             }
           }
 
           if (now > chargeStart && now < chargeStart.AddMinutes(chargeTime+10) && BatterySoc < Math.Min(96, ForceChargeTargetSoC))
           {
+            //PVCC_Logger.LogInformation("ForceCharge cheapestToday starttime now: {start}", chargeStart);
             _currentMode = InverterModes.force_charge;
             ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
             return _currentMode;
@@ -543,13 +548,13 @@ namespace NetDeamon.apps.PVControl
         return PriceList.Where(p => p.StartTime >= currentHour).OrderBy(p => p.StartTime).ToList();
       }
     }
-    private Dictionary<int, EpexPriceTableEntry> UpcomingPriceListRanked
+    private Dictionary<int, EpexPriceTableEntry> PriceListRanked
     {
       get
       {
         Dictionary<int, EpexPriceTableEntry> result = [];
         int rank = 1;
-        foreach (var entry in UpcomingPriceList.OrderBy(p => p.Price))
+        foreach (var entry in PriceList.OrderBy(p => p.Price))
         {
           result.Add(rank, entry);
           rank++;
@@ -557,14 +562,14 @@ namespace NetDeamon.apps.PVControl
         return result.OrderBy(r => r.Value.StartTime).ToDictionary();
       }
     }
-    private List<Tuple<int, EpexPriceTableEntry>> UpcomingPriceListPercentage
+    private List<Tuple<int, EpexPriceTableEntry>> PriceListPercentage
     {
       get
       {
         List<Tuple<int, EpexPriceTableEntry>> result = [];
-        float minPrice = UpcomingPriceList.Min(p => p.Price);
-        float maxPrice = UpcomingPriceList.Max(p => p.Price);
-        foreach (var entry in UpcomingPriceList)
+        float minPrice = PriceList.Min(p => p.Price);
+        float maxPrice = PriceList.Max(p => p.Price);
+        foreach (var entry in PriceList)
         {
           result.Add(new Tuple<int, EpexPriceTableEntry>(maxPrice - minPrice == 0 ? 0 : (int)Math.Round((entry.Price - minPrice) / (maxPrice - minPrice) * 100, 0), entry));
         }
@@ -573,12 +578,12 @@ namespace NetDeamon.apps.PVControl
     }
     private int GetPriceRank(DateTime dateTime)
     {
-      var priceRankAtTime = UpcomingPriceListRanked.Where(r => r.Value.StartTime.Hour == dateTime.Hour).FirstOrDefault();
+      var priceRankAtTime = PriceListRanked.Where(r => r.Value.StartTime.Hour == dateTime.Hour).FirstOrDefault();
       return priceRankAtTime.Key;
     }
     private int GetPricePercentage(DateTime dateTime)
     {
-      var pricePercentageAtTime = UpcomingPriceListPercentage.Where(r => r.Item2.StartTime.Hour == dateTime.Hour).FirstOrDefault();
+      var pricePercentageAtTime = PriceListPercentage.Where(r => r.Item2.StartTime.Hour == dateTime.Hour).FirstOrDefault();
       return pricePercentageAtTime is null ? -1 : pricePercentageAtTime.Item1;
     }
     public int CurrentPriceRank
