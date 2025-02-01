@@ -44,7 +44,8 @@ namespace NetDeamon.apps
     GoingUnderPreferredMinima,
     GoingUnderAbsoluteMinima,
     ForcedChargeAtMinimumPrice,
-    ImportPriceUnderExportPrice,
+    ImportPriceNegative,
+    ExportPriceNegative,
     UserMode,
   }
   public enum RunHeavyLoadsStatus

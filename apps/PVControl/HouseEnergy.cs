@@ -156,10 +156,22 @@ namespace NetDeamon.apps.PVControl
           return _currentMode;
         }
 
-        if (CurrentEnergyImportPriceTotal < CurrentEnergyExportPriceTotal * -1 && CurrentEnergyImportPriceTotal < 0)
+        // negative import price completely covering network costs
+        if (CurrentEnergyImportPriceTotal < 0 && Math.Abs(CurrentEnergyImportPriceTotal) > CurrentEnergyImportPriceNetworkOnly)
         {
-          _currentMode = InverterModes.grid_only;
-          ForceChargeReason = ForceChargeReasons.ImportPriceUnderExportPrice;
+          if (BatterySoc <= 90)
+            _currentMode = InverterModes.force_charge;
+          else
+            _currentMode = InverterModes.grid_only;
+          ForceChargeReason = ForceChargeReasons.ImportPriceNegative;
+          return _currentMode;
+        }
+
+        // negative export price
+        if (CurrentEnergyExportPriceTotal < 0)
+        {
+          _currentMode = InverterModes.house_only;
+          ForceChargeReason = ForceChargeReasons.ExportPriceNegative;
           return _currentMode;
         }
 

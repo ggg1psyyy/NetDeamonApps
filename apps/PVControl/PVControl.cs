@@ -48,6 +48,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _sumImportCostEnergyOnly = null!;
     private Entity _sumImportCostNetworkOnly = null!;
     private Entity _sumExportEarningsBrutto = null!;
+    private Entity _sumImportExportNetCost = null!;
     #endregion
 
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
@@ -388,6 +389,7 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetStateAsync(_sumImportCostBrutto.EntityId, (_house.SumEnergyImportCostTotal / 100).ToString(CultureInfo.InvariantCulture));
       await PVCC_EntityManager.SetStateAsync(_sumImportCostEnergyOnly.EntityId, (_house.SumEnergyImportCostEnergyOnly / 100).ToString(CultureInfo.InvariantCulture));
       await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnly.EntityId, (_house.SumEnergyImportCostNetworkOnly / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnly.EntityId, ((_house.SumEnergyImportCostTotal - _house.SumEnergyExportEarningsTotal) / 100).ToString(CultureInfo.InvariantCulture));
       #endregion
       PVCC_Logger.LogDebug("Leave Schedule");
     }
@@ -536,6 +538,15 @@ namespace NetDeamon.apps.PVControl
         {
           unit_of_measurement = "€",
           state_class = "total_increasing",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _sumImportExportNetCost = await RegisterSensor("sensor.pv_control_sum_import_export_net_cost", "Sum of net import/export costs", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
