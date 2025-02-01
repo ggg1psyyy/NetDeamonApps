@@ -42,6 +42,12 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
     private Entity _RunHeavyLoadsNowEntity = null!;
+    private Entity _currentImportPriceBruttoEntity = null!;
+    private Entity _currentExportPriceBruttoEntity = null!;
+    private Entity _sumImportCostBrutto = null!;
+    private Entity _sumImportCostEnergyOnly = null!;
+    private Entity _sumImportCostNetworkOnly = null!;
+    private Entity _sumExportEarningsBrutto = null!;
     #endregion
 
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
@@ -64,6 +70,15 @@ namespace NetDeamon.apps.PVControl
       if (await RegisterControlSensors())
       {
         _house = new HouseEnergy();
+        if (_sumExportEarningsBrutto.TryGetStateValue(out float sumEarningsTotal))
+          _house.SumEnergyExportEarningsTotal = sumEarningsTotal * 100;
+        if (_sumImportCostBrutto.TryGetStateValue(out float sumImportTotal))
+          _house.SumEnergyImportCostTotal = sumImportTotal * 100;
+        if (_sumImportCostEnergyOnly.TryGetStateValue(out float sumImportEnergy))
+          _house.SumEnergyImportCostEnergyOnly = sumImportEnergy * 100;
+        if (_sumImportCostNetworkOnly.TryGetStateValue(out float sumImportNetwork))
+          _house.SumEnergyImportCostNetworkOnly = sumImportNetwork * 100;
+
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
@@ -86,16 +101,13 @@ namespace NetDeamon.apps.PVControl
           await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 
         var manager = new Managers.Manager(_house);
-#if DEBUG
-        //PVCC_Scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
-#else
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
-#endif
-#if DEBUG
 
+#if DEBUG
         var x = _house.ProposedMode;
         _house.UpdatePredictions(true);
 #endif
+
       }
       else
       {
@@ -143,8 +155,10 @@ namespace NetDeamon.apps.PVControl
           _house.ForceChargeTargetSoC = value;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
-#if !DEBUG
-      await ScheduledOperations();
+#if DEBUG
+      PVCC_Logger.LogDebug("In Debug -> don't start scheduled operations");
+#else
+      await ScheduledOperations(); 
 #endif
     }
     private async Task ScheduledOperations()
@@ -355,6 +369,26 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetAttributesAsync(_info_dischargeTomorrowEntity.EntityId, attr_dischargeTomorrow);
       }
       #endregion
+      #region Prices
+      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, (_house.CurrentEnergyImportPriceTotal / 100).ToString(CultureInfo.InvariantCulture));
+      var attr_currentImportPrice = new
+      {
+        data = _house.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
+      };
+      await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
+
+      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, (_house.CurrentEnergyExportPriceTotal / 100).ToString(CultureInfo.InvariantCulture));
+      var attr_currentExportPrice = new
+      {
+        data = _house.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
+      };
+      await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
+
+      await PVCC_EntityManager.SetStateAsync(_sumExportEarningsBrutto.EntityId, (_house.SumEnergyExportEarningsTotal / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostBrutto.EntityId, (_house.SumEnergyImportCostTotal / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostEnergyOnly.EntityId, (_house.SumEnergyImportCostEnergyOnly / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnly.EntityId, (_house.SumEnergyImportCostNetworkOnly / 100).ToString(CultureInfo.InvariantCulture));
+      #endregion
       PVCC_Logger.LogDebug("Leave Schedule");
     }
     private bool CheckConfiguration()
@@ -391,8 +425,9 @@ namespace NetDeamon.apps.PVControl
     }
     private async Task<bool> RegisterControlSensors(bool reset=false)
     {
-      _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select", 
-        additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) }, 
+      //reset = true;
+      _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
+        addConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
         defaultValue: InverterModes.automatic.ToString(),
         reRegister: reset);
 
@@ -404,64 +439,116 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "OFF",
         reRegister: reset);
 
-      _forceChargeMaxPriceEntity = await RegisterSensor("number.pv_control_max_price_for_forcecharge", "Max price for force charge", "None", "mdi:currency-eur",
-        additionalConfig: new
+      _forceChargeMaxPriceEntity = await RegisterSensor("number.pv_control_max_price_for_forcecharge", "Max price for force charge", "monetary", "mdi:currency-eur",
+        addConfig: new
         {
           min = 0,
-          max = 25,
+          max = 50,
           step = 1,
           initial = 0,
-          unitOfMeasurement = "ct",
+          unit_of_measurement = "ct",
           mode = "slider",
         },
         defaultValue: "0",
-        reRegister: reset);
+        reRegister: true);
 
       _forceChargeTargetSoCEntity = await RegisterSensor("number.pv_control_forcecharge_target_soc", "Force charge target SoC", "battery", "mdi:battery-alert",
-        additionalConfig: new
+        addConfig: new
         {
           min = 0,
           max = 95,
           step = 5,
           initial = 50,
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
           mode = "slider",
         },
         defaultValue: "50",
         reRegister: reset);
 
       _prefBatterySoCEntity = await RegisterSensor("number.pv_control_preferredbatterycharge", "Preferred min SoC", "battery", "mdi:battery-unknown",
-        additionalConfig: new
+        addConfig: new
         {
           min = 0,
           max = 100,
           step = 5,
           initial = 30,
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
           mode = "slider",
         },
         defaultValue: "30",
         reRegister: reset);
 
       _modeEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
-        additionalConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
+        addConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
         defaultValue: InverterModes.normal.ToString(),
         reRegister: reset);
 
       _RunHeavyLoadsNowEntity = await RegisterSensor("sensor.pv_control_run_heavyloads_now", "Run heavy loads now", "ENUM", "mdi:ev-station",
-        additionalConfig: new { options = Enum.GetNames(typeof(RunHeavyLoadsStatus)) },
+        addConfig: new { options = Enum.GetNames(typeof(RunHeavyLoadsStatus)) },
         defaultValue: RunHeavyLoadsStatus.No.ToString(),
         reRegister: reset);
 
+      _currentImportPriceBruttoEntity = await RegisterSensor("sensor.pv_control_current_import_price_brutto", "Current energy import price (brutto)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _currentExportPriceBruttoEntity = await RegisterSensor("sensor.pv_control_current_export_price_brutto", "Current energy export price (brutto)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _sumExportEarningsBrutto = await RegisterSensor("sensor.pv_control_sum_export_earnings_brutto", "Sum of export earnings (brutto)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€",
+          state_class = "total_increasing",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _sumImportCostBrutto = await RegisterSensor("sensor.pv_control_sum_import_cost_brutto", "Sum of import costs (brutto)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€",
+          state_class = "total_increasing",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _sumImportCostEnergyOnly = await RegisterSensor("sensor.pv_control_sum_import_cost_energy_only", "Sum of import costs (energy only)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€",
+          state_class = "total_increasing",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _sumImportCostNetworkOnly = await RegisterSensor("sensor.pv_control_sum_import_cost_network_only", "Sum of import costs (network only)", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€",
+          state_class = "total_increasing",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
       _battery_StatusEntity = await RegisterSensor("sensor.pv_control_battery_status", "Battery Status", "ENUM", "mdi:battery-charging",
-        additionalConfig: new { options = Enum.GetNames(typeof(BatteryStatuses)) },
+        addConfig: new { options = Enum.GetNames(typeof(BatteryStatuses)) },
         defaultValue: BatteryStatuses.unknown.ToString(),
         reRegister: reset);
 
       _battery_RemainingTimeEntity = await RegisterSensor("sensor.pv_control_battery_remainingtime", "Battery - remaining time", "DURATION", "mdi:timer-alert",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "min",
+          unit_of_measurement = "min",
         },
         defaultValue: "0",
         reRegister: reset);
@@ -471,97 +558,97 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
 
       _battery_RemainingEnergyEntity = await RegisterSensor("sensor.pv_control_battery_remainingenergy", "Battery - available energy", "Energy", "mdi:lightning-bolt-outline",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_EstimatedMaxSoCTodayEntity = await RegisterSensor("sensor.pv_control_info_max_soc_today", "Estimated Max SoC Today", "Battery", "mdi:battery-charging-90",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_EstimatedMinSoCTodayEntity = await RegisterSensor("sensor.pv_control_info_min_soc_today", "Estimated Min SoC Today", "Battery", "mdi:battery-charging-20",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_EstimatedMaxSoCTomorrowEntity = await RegisterSensor("sensor.pv_control_info_max_soc_tomorrow", "Estimated Max SoC Tomorrow", "Battery", "mdi:battery-charging-90",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_EstimatedMinSoCTomorrowEntity = await RegisterSensor("sensor.pv_control_info_min_soc_tomorrow", "Estimated Min SoC Tomorrow", "Battery", "mdi:battery-charging-20",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_PredictedSoCEntity = await RegisterSensor("sensor.pv_control_info_predicted_soc", "Predicted SoC Now", "Battery", "mdi:calendar-question",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "%",
+          unit_of_measurement = "%",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_PredictedChargeEntity = await RegisterSensor("sensor.pv_control_info_predicted_charge", "Predicted Charge Until Now", "Energy", "mdi:solar-power-variant",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_PredictedDischargeEntity = await RegisterSensor("sensor.pv_control_info_predicted_discharge", "Predicted Discharge Until Now", "Energy", "mdi:home-lightbulb-outline",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_chargeTodayEntity = await RegisterSensor("sensor.pv_control_estimated_remaining_charge_today", "Estimated remaining charge today", "Energy", "mdi:solar-power",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_chargeTomorrowEntity = await RegisterSensor("sensor.pv_control_estimated_charge_tomorrow", "Estimated charge tomorrow", "Energy", "mdi:solar-power",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_dischargeTodayEntity = await RegisterSensor("sensor.pv_control_estimated_remaining_discharge_today", "Estimated remaining discharge today", "Energy", "mdi:home-lightning-bolt",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);
 
       _info_dischargeTomorrowEntity = await RegisterSensor("sensor.pv_control_estimated_discharge_tomorrow", "Estimated discharge tomorrow", "Energy", "mdi:home-lightning-bolt",
-        additionalConfig: new
+        addConfig: new
         {
-          unitOfMeasurement = "Wh",
+          unit_of_measurement = "Wh",
         },
         defaultValue: "0",
         reRegister: reset);

@@ -1,6 +1,7 @@
 ﻿using NetDaemon.Client;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
@@ -12,13 +13,13 @@ using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps
 {
-  public struct EpexPriceTableEntry(DateTime startTime, DateTime endTime, float price)
+  public struct PriceTableEntry(DateTime startTime, DateTime endTime, float price)
   {
     [JsonPropertyName("start_time")]
     public DateTime StartTime { get; set; } = startTime;
     [JsonPropertyName("end_time")]
     public DateTime EndTime { get; set; } = endTime;
-    [JsonPropertyName("price_ct_per_kwh")]
+    [JsonPropertyName("price_per_kwh")]
     public float Price { get; set; } = price;
   }
   public enum InverterModes
@@ -27,6 +28,7 @@ namespace NetDeamon.apps
     normal,
     force_charge,
     grid_only,
+    force_discharge,
   }
   public enum BatteryStatuses
   {
@@ -146,7 +148,7 @@ namespace NetDeamon.apps
     public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true) where T : struct
     {
       resultValue = default;
-      if (entity.State is null)
+      if (entity is null || entity.State is null)
       {
         return false;
       }

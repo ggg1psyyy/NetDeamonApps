@@ -15,6 +15,8 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _battChargeAverage;
     private readonly RunningIntAverage _LoadRunningAverage;
     private readonly RunningIntAverage _PVRunningAverage;
+    private float _lastImportEnergySum;
+    private float _lastExportEnergySum;
     /// <summary>
     /// Default Efficiency if not set in config
     /// </summary>
@@ -48,6 +50,13 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
         _PVRunningAverage.AddValue(pv);
 
+      if (PVCC_Config.DailyExportEnergyEntity is null || PVCC_Config.DailyImportEnergyEntity is null)
+        throw new NullReferenceException("DailyEnergyEntities not available");
+      if (PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float lastExportEnergySum))
+        _lastExportEnergySum = lastExportEnergySum / 1000;
+      if (PVCC_Config.DailyImportEnergyEntity.TryGetStateValue(out float lastImportEnergySum))
+        _lastImportEnergySum = lastImportEnergySum / 1000;
+
       if (string.IsNullOrEmpty(PVCC_Config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
       Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBLocation, 10);
@@ -66,6 +75,8 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentBatteryPowerEntity));
       PVCC_Config.CurrentPVPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentPVPowerEntity));
       PVCC_Config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentHouseLoadEntity));
+      PVCC_Config.DailyExportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyExportEnergyEntity));
+      PVCC_Config.DailyImportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyImportEnergyEntity));
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
       _dailySoCPrediction = [];
@@ -105,6 +116,26 @@ namespace NetDeamon.apps.PVControl
       {
         _PVRunningAverage.AddValue(pv);
       }
+      if (entity.EntityId == PVCC_Config.DailyExportEnergyEntity?.EntityId && PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float export))
+      {
+        float diff = (export / 1000) - _lastExportEnergySum;
+        if (diff > 0)
+        {
+          SumEnergyExportEarningsTotal += diff * CurrentEnergyExportPriceTotal;
+        }
+        _lastExportEnergySum = export / 1000;
+      }
+      if (entity.EntityId == PVCC_Config.DailyImportEnergyEntity?.EntityId && PVCC_Config.DailyImportEnergyEntity.TryGetStateValue(out float import))
+      {
+        float diff = (import / 1000) - _lastImportEnergySum;
+        if (diff > 0)
+        {
+          SumEnergyImportCostTotal += diff * CurrentEnergyImportPriceTotal;
+          SumEnergyImportCostEnergyOnly += diff * CurrentEnergyImportPriceEnergyOnly;
+          SumEnergyImportCostNetworkOnly += diff * CurrentEnergyImportPriceNetworkOnly;
+        }
+        _lastImportEnergySum = import / 1000;
+      }
     }
     private InverterModes _currentMode;
     public InverterModes ProposedMode
@@ -125,7 +156,7 @@ namespace NetDeamon.apps.PVControl
           return _currentMode;
         }
 
-        if (CurrentEnergyImportPrice < CurrentEnergyExportPrice * -1 && CurrentEnergyImportPrice < 0)
+        if (CurrentEnergyImportPriceTotal < CurrentEnergyExportPriceTotal * -1 && CurrentEnergyImportPriceTotal < 0)
         {
           _currentMode = InverterModes.grid_only;
           ForceChargeReason = ForceChargeReasons.ImportPriceUnderExportPrice;
@@ -148,7 +179,7 @@ namespace NetDeamon.apps.PVControl
           {
             if (rankBefore < rankAfter)
             {
-              if (PriceList.Where(p => p.StartTime == chargeStart.AddHours(-1)).FirstOrDefault().Price < ForceChargeMaxPrice)
+              if (PriceListImport.Where(p => p.StartTime == chargeStart.AddHours(-1)).FirstOrDefault().Price < ForceChargeMaxPrice)
                 chargeStart = cheapestToday.AddMinutes(-(chargeTime - 50));
             }
           }
@@ -384,20 +415,6 @@ namespace NetDeamon.apps.PVControl
     /// <summary>
     /// remaining PV yield forecast for today in WH
     /// </summary>
-    public float CurrentEnergyImportPrice
-    {
-      get
-      {
-        return PVCC_Config.CurrentImportPriceEntity?.State is not null && PVCC_Config.CurrentImportPriceEntity.TryGetStateValue(out float value) ? value : 0;
-      }
-    }
-    public float CurrentEnergyExportPrice
-    {
-      get
-      {
-        return PVCC_Config.CurrentExportPriceEntity is not null && PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0;
-      }
-    }
     /// <summary>
     /// Currently usable energy in battery down to <see cref="AbsoluteMinimalSoC"/> or <see cref="PreferredMinimalSoC"/> depending on <see cref="EnforcePreferredSoC"/> in Wh
     /// </summary>
@@ -489,7 +506,7 @@ namespace NetDeamon.apps.PVControl
         return _PVRunningAverage.GetAverage();
       }
     }
-    public EpexPriceTableEntry BestChargeTime
+    public PriceTableEntry BestChargeTime
     {
       get
       {
@@ -540,21 +557,21 @@ namespace NetDeamon.apps.PVControl
       var pred_new = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
       return pred_new.GetEntryAtTime(startTime).Value;
     }
-    private List<EpexPriceTableEntry> UpcomingPriceList
+    private List<PriceTableEntry> UpcomingPriceList
     {
       get
       {
         DateTime currentHour = DateTime.Now.Date.AddHours(DateTime.Now.Hour);
-        return PriceList.Where(p => p.StartTime >= currentHour).OrderBy(p => p.StartTime).ToList();
+        return PriceListImport.Where(p => p.StartTime >= currentHour).OrderBy(p => p.StartTime).ToList();
       }
     }
-    private Dictionary<int, EpexPriceTableEntry> PriceListRanked
+    private Dictionary<int, PriceTableEntry> PriceListRanked
     {
       get
       {
-        Dictionary<int, EpexPriceTableEntry> result = [];
+        Dictionary<int, PriceTableEntry> result = [];
         int rank = 1;
-        foreach (var entry in PriceList.OrderBy(p => p.Price))
+        foreach (var entry in PriceListImport.OrderBy(p => p.Price))
         {
           result.Add(rank, entry);
           rank++;
@@ -562,16 +579,16 @@ namespace NetDeamon.apps.PVControl
         return result.OrderBy(r => r.Value.StartTime).ToDictionary();
       }
     }
-    private List<Tuple<int, EpexPriceTableEntry>> PriceListPercentage
+    private List<Tuple<int, PriceTableEntry>> PriceListPercentage
     {
       get
       {
-        List<Tuple<int, EpexPriceTableEntry>> result = [];
-        float minPrice = PriceList.Min(p => p.Price);
-        float maxPrice = PriceList.Max(p => p.Price);
-        foreach (var entry in PriceList)
+        List<Tuple<int, PriceTableEntry>> result = [];
+        float minPrice = PriceListImport.Min(p => p.Price);
+        float maxPrice = PriceListImport.Max(p => p.Price);
+        foreach (var entry in PriceListImport)
         {
-          result.Add(new Tuple<int, EpexPriceTableEntry>(maxPrice - minPrice == 0 ? 0 : (int)Math.Round((entry.Price - minPrice) / (maxPrice - minPrice) * 100, 0), entry));
+          result.Add(new Tuple<int, PriceTableEntry>(maxPrice - minPrice == 0 ? 0 : (int)Math.Round((entry.Price - minPrice) / (maxPrice - minPrice) * 100, 0), entry));
         }
         return result.OrderBy(r => r.Item2.StartTime).ToList();
       }
@@ -600,12 +617,12 @@ namespace NetDeamon.apps.PVControl
         return GetPricePercentage(DateTime.Now);
       }
     }
-    private List<EpexPriceTableEntry> _priceListCache;
+    private List<PriceTableEntry> _priceListCache;
     private void UpdatePriceList()
     {
       _priceListCache = [];
     }
-    private List<EpexPriceTableEntry> PriceList
+    private List<PriceTableEntry> PriceListNetto
     {
       get
       {
@@ -613,25 +630,113 @@ namespace NetDeamon.apps.PVControl
         {
           _priceListCache = [];
           if (PVCC_Config.CurrentImportPriceEntity is not null && PVCC_Config.CurrentImportPriceEntity.TryGetJsonAttribute("data", out JsonElement data))
-            if (data.Deserialize<List<EpexPriceTableEntry>>()?.OrderBy(x => x.StartTime).ToList() is List<EpexPriceTableEntry> priceList)
-              _priceListCache = priceList;
+            if (data.Deserialize<List<PriceTableEntry>>()?.OrderBy(x => x.StartTime).ToList() is List<PriceTableEntry> priceList)
+            {
+              _priceListCache = priceList.Select(p => new PriceTableEntry(
+                p.StartTime,
+                p.EndTime,
+                p.Price * 100 
+              )).ToList();
+            }
         }
         return _priceListCache;
       }
     }
-    public EpexPriceTableEntry CheapestWindowToday
+    public List<PriceTableEntry> PriceListImport
+    {
+      get
+      {
+        List<PriceTableEntry> resultList = PriceListNetto.Select(p => new PriceTableEntry(
+          p.StartTime,
+          p.EndTime,
+          CalculateBruttoPriceImport(p.Price, true)
+          )).ToList();
+        return resultList;
+      }
+    }
+    public List<PriceTableEntry> PriceListExport
+    {
+      get
+      {
+        if (PVCC_Config.ExportPriceIsVariable)
+        {
+          return PriceListNetto.Select(p => new PriceTableEntry(
+            p.StartTime,
+            p.EndTime,
+           CalculateBruttoPriceExport(p.Price, true)
+            )).ToList();
+        }
+        else
+        {
+          return PriceListNetto.Select(p => new PriceTableEntry(
+            p.StartTime,
+            p.EndTime,
+            PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0
+            )).ToList();
+        }
+      }
+    }
+    private float CalculateBruttoPriceExport(float nettoPrice, bool inclNetworkPrice)
+    {
+      return (nettoPrice * PVCC_Config.ExportPriceMultiplier + PVCC_Config.ExportPriceAddition + (inclNetworkPrice ? PVCC_Config.ExportPriceNetwork : 0)) * (1 + PVCC_Config.ExportPriceTax);
+    }
+    private float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice)
+    {
+      return (nettoPrice * PVCC_Config.ImportPriceMultiplier + PVCC_Config.ImportPriceAddition + (inclNetworkPrice ? PVCC_Config.ImportPriceNetwork : 0)) * (1 + PVCC_Config.ImportPriceTax);
+    }
+    public float CurrentEnergyPriceNetto
+    {
+      get
+      {
+        var now = DateTime.Now;
+        return PriceListNetto.Where(p => p.StartTime <= now && p.EndTime >= now).FirstOrDefault().Price;
+      }
+    }
+    public float CurrentEnergyImportPriceTotal
+    {
+      get
+      {
+        return CalculateBruttoPriceImport(CurrentEnergyPriceNetto, true);
+      }
+    }
+    public float CurrentEnergyImportPriceEnergyOnly
+    {
+      get
+      {
+        return CalculateBruttoPriceImport(CurrentEnergyPriceNetto, false);
+      }
+    }
+    public float CurrentEnergyImportPriceNetworkOnly
+    {
+      get
+      {
+        return PVCC_Config.ImportPriceNetwork * (1 + PVCC_Config.ImportPriceTax);
+      }
+    }
+    public float CurrentEnergyExportPriceTotal
+    {
+      get
+      {
+        return CalculateBruttoPriceExport(CurrentEnergyPriceNetto, true);
+      }
+    }
+    public float SumEnergyImportCostEnergyOnly { get; set; } = 0.0f;
+    public float SumEnergyImportCostNetworkOnly { get; set; } = 0.0f;
+    public float SumEnergyImportCostTotal { get; set; } = 0.0f;
+    public float SumEnergyExportEarningsTotal { get; set; } = 0.0f;
+    public PriceTableEntry CheapestWindowToday
     {
       get
       {
         DateTime now = DateTime.Now;
-        return PriceList.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).FirstOrDefault();
+        return PriceListImport.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).FirstOrDefault();
       }
     }
-    public EpexPriceTableEntry CheapestWindowTotal
+    public PriceTableEntry CheapestWindowTotal
     {
       get
       {
-        return PriceList.OrderBy(p => p.Price).First();
+        return PriceListImport.OrderBy(p => p.Price).First();
       }
     }
     public bool IsNowCheapestWindowToday

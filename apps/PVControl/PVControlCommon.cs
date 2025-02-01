@@ -3,6 +3,7 @@ using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Text;
@@ -37,7 +38,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config = null!;
       PVCC_Scheduler = null!;
     }
-    public static async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? additionalConfig = null, string defaultValue = "", bool reRegister = false)
+    public static async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false)
     {
       var identifiers = new[] { "pv_control" };
       var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
@@ -48,13 +49,24 @@ namespace NetDeamon.apps.PVControl
         {
           await PVCC_EntityManager.RemoveAsync(id);
         }
-        dynamic conf = additionalConfig != null ? new { icon = icon, additionalConfig, device } : new { icon = icon, device };
+
+        dynamic dynamicConfig = new ExpandoObject();
+        if (addConfig != null)
+        {
+          foreach (var property in addConfig.GetType().GetProperties())
+          {
+            ((IDictionary<string, object>)dynamicConfig)[property.Name] = property.GetValue(addConfig);
+          }
+        }
+        dynamicConfig.device = device;
+        dynamicConfig.icon = icon;
         await PVCC_EntityManager.CreateAsync(id, new EntityCreationOptions
         {
           Name = name,
           DeviceClass = deviceClass,
         },
-        conf
+        //conf
+        dynamicConfig
         ).ConfigureAwait(false);
         entity = new Entity(PVCC_HaContext, id);
         if (!string.IsNullOrEmpty(defaultValue))
@@ -67,7 +79,18 @@ namespace NetDeamon.apps.PVControl
   {
     public string DBLocation { get; set; } = default!;
     public List<Entity> CurrentImportPriceEntities { get; set; } = null!;
+    public float ImportPriceMultiplier { get; set; } = default;
+    public float ImportPriceAddition { get; set; } = default;
+    public float ImportPriceNetwork { get; set; } = default;
+    public float ImportPriceTax { get; set; } = default;
     public Entity CurrentExportPriceEntity { get; set; } = null!;
+    public bool ExportPriceIsVariable { get; set; } = default;
+    public float ExportPriceMultiplier { get; set; } = default;
+    public float ExportPriceAddition { get; set; } = default;
+    public float ExportPriceNetwork { get; set; } = default;
+    public float ExportPriceTax { get; set; } = default;
+    public Entity DailyImportEnergyEntity { get; set; } = null!;
+    public Entity DailyExportEnergyEntity { get; set; } = null!;
     public Entity CurrentHouseLoadEntity { get; set; } = null!;
     public Entity CurrentPVPowerEntity { get; set; } = null!;
     public Entity CurrentBatteryPowerEntity { get; set; } = null!;
@@ -82,7 +105,6 @@ namespace NetDeamon.apps.PVControl
     public int MaxBatteryChargeCurrrentValue { get; set; }
     public Entity MinBatterySoCEntity { get; set; } = null!;
     public int MinBatterySoCValue { get; set; } = default;
-
     public Entity CurrentImportPriceEntity
     {
       get
