@@ -65,7 +65,6 @@ namespace NetDeamon.apps.PVControl
           Name = name,
           DeviceClass = deviceClass,
         },
-        //conf
         dynamicConfig
         ).ConfigureAwait(false);
         entity = new Entity(PVCC_HaContext, id);

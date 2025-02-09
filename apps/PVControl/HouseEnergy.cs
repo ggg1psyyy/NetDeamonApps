@@ -147,7 +147,7 @@ namespace NetDeamon.apps.PVControl
 #else
         DateTime now = DateTime.Now;
 #endif
-        DateTime cheapestToday = CheapestWindowToday.StartTime;
+        DateTime cheapestToday = CheapestImportWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
         if (OverrideMode != InverterModes.automatic)
         {
@@ -302,7 +302,7 @@ namespace NetDeamon.apps.PVControl
         // if we're already force_charging we're sure to be in a cheap window so it should be allowed
         if (_currentMode == InverterModes.force_charge)
         {
-          if (IsNowCheapestWindowTotal)
+          if (IsNowCheapestImportWindowTotal)
           {
             RunHeavyLoadReason = RunHeavyLoadReasons.ChargingAtCheapestPrice;
             return RunHeavyLoadsStatus.Yes;
@@ -736,7 +736,7 @@ namespace NetDeamon.apps.PVControl
     public float SumEnergyImportCostNetworkOnly { get; set; } = 0.0f;
     public float SumEnergyImportCostTotal { get; set; } = 0.0f;
     public float SumEnergyExportEarningsTotal { get; set; } = 0.0f;
-    public PriceTableEntry CheapestWindowToday
+    public PriceTableEntry CheapestImportWindowToday
     {
       get
       {
@@ -744,29 +744,53 @@ namespace NetDeamon.apps.PVControl
         return PriceListImport.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).FirstOrDefault();
       }
     }
-    public PriceTableEntry CheapestWindowTotal
+    public PriceTableEntry MostExpensiveImportWindowToday
+    {
+      get
+      {
+        DateTime now = DateTime.Now;
+        return PriceListImport.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).LastOrDefault();
+      }
+    }
+    public PriceTableEntry CheapestImportWindowTotal
     {
       get
       {
         return PriceListImport.OrderBy(p => p.Price).First();
       }
     }
-    public bool IsNowCheapestWindowToday
+    public bool IsNowCheapestImportWindowToday
     {
       get
       {
-        var cheapest = CheapestWindowToday;
+        var cheapest = CheapestImportWindowToday;
         var now = DateTime.Now;
         return now > cheapest.StartTime && now < cheapest.EndTime;
       }
     }
-    public bool IsNowCheapestWindowTotal
+    public bool IsNowCheapestImportWindowTotal
     {
       get
       {
-        var cheapest = CheapestWindowTotal;
+        var cheapest = CheapestImportWindowTotal;
         var now = DateTime.Now;
         return now > cheapest.StartTime && now < cheapest.EndTime;
+      }
+    }
+    public PriceTableEntry CheapestExportWindowToday
+    {
+      get
+      {
+        DateTime now = DateTime.Now;
+        return PriceListExport.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).FirstOrDefault();
+      }
+    }
+    public PriceTableEntry MostExpensiveExportWindowToday
+    {
+      get
+      {
+        DateTime now = DateTime.Now;
+        return PriceListExport.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price).LastOrDefault();
       }
     }
     public PVPeriods CurrentPVPeriod

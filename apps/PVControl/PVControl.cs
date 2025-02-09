@@ -44,11 +44,13 @@ namespace NetDeamon.apps.PVControl
     private Entity _RunHeavyLoadsNowEntity = null!;
     private Entity _currentImportPriceBruttoEntity = null!;
     private Entity _currentExportPriceBruttoEntity = null!;
-    private Entity _sumImportCostBrutto = null!;
-    private Entity _sumImportCostEnergyOnly = null!;
-    private Entity _sumImportCostNetworkOnly = null!;
-    private Entity _sumExportEarningsBrutto = null!;
-    private Entity _sumImportExportNetCost = null!;
+    private Entity _sumImportCostBruttoEntity = null!;
+    private Entity _sumImportCostEnergyOnlyEntity = null!;
+    private Entity _sumImportCostNetworkOnlyEntity = null!;
+    private Entity _sumExportEarningsBruttoEntity = null!;
+    private Entity _sumImportExportNetCostEntity = null!;
+    private Entity _bestExportPriceEntity = null!;
+    private Entity _bestImportPriceEntity = null!;
     #endregion
 
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
@@ -71,13 +73,13 @@ namespace NetDeamon.apps.PVControl
       if (await RegisterControlSensors())
       {
         _house = new HouseEnergy();
-        if (_sumExportEarningsBrutto.TryGetStateValue(out float sumEarningsTotal))
+        if (_sumExportEarningsBruttoEntity.TryGetStateValue(out float sumEarningsTotal))
           _house.SumEnergyExportEarningsTotal = sumEarningsTotal * 100;
-        if (_sumImportCostBrutto.TryGetStateValue(out float sumImportTotal))
+        if (_sumImportCostBruttoEntity.TryGetStateValue(out float sumImportTotal))
           _house.SumEnergyImportCostTotal = sumImportTotal * 100;
-        if (_sumImportCostEnergyOnly.TryGetStateValue(out float sumImportEnergy))
+        if (_sumImportCostEnergyOnlyEntity.TryGetStateValue(out float sumImportEnergy))
           _house.SumEnergyImportCostEnergyOnly = sumImportEnergy * 100;
-        if (_sumImportCostNetworkOnly.TryGetStateValue(out float sumImportNetwork))
+        if (_sumImportCostNetworkOnlyEntity.TryGetStateValue(out float sumImportNetwork))
           _house.SumEnergyImportCostNetworkOnly = sumImportNetwork * 100;
 
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
@@ -385,11 +387,31 @@ namespace NetDeamon.apps.PVControl
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_sumExportEarningsBrutto.EntityId, (_house.SumEnergyExportEarningsTotal / 100).ToString(CultureInfo.InvariantCulture));
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostBrutto.EntityId, (_house.SumEnergyImportCostTotal / 100).ToString(CultureInfo.InvariantCulture));
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostEnergyOnly.EntityId, (_house.SumEnergyImportCostEnergyOnly / 100).ToString(CultureInfo.InvariantCulture));
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnly.EntityId, (_house.SumEnergyImportCostNetworkOnly / 100).ToString(CultureInfo.InvariantCulture));
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnly.EntityId, ((_house.SumEnergyImportCostTotal - _house.SumEnergyExportEarningsTotal) / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_sumExportEarningsBruttoEntity.EntityId, (_house.SumEnergyExportEarningsTotal / 100).ToString(CultureInfo.InvariantCulture));
+
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostBruttoEntity.EntityId, (_house.SumEnergyImportCostTotal / 100).ToString(CultureInfo.InvariantCulture));
+
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostEnergyOnlyEntity.EntityId, (_house.SumEnergyImportCostEnergyOnly / 100).ToString(CultureInfo.InvariantCulture));
+
+      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnlyEntity.EntityId, (_house.SumEnergyImportCostNetworkOnly / 100).ToString(CultureInfo.InvariantCulture));
+
+      await PVCC_EntityManager.SetStateAsync(_sumImportExportNetCostEntity.EntityId, ((_house.SumEnergyImportCostTotal - _house.SumEnergyExportEarningsTotal) / 100).ToString(CultureInfo.InvariantCulture));
+
+      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, (_house.MostExpensiveExportWindowToday.Price / 100).ToString(CultureInfo.InvariantCulture));
+      var attr_bestExportPrice = new
+      {
+        start_time = _house.MostExpensiveExportWindowToday.StartTime.ToISO8601(),
+        end_time = _house.MostExpensiveExportWindowToday.EndTime.ToISO8601(),
+      };
+      await PVCC_EntityManager.SetAttributesAsync(_bestExportPriceEntity.EntityId, attr_bestExportPrice);
+
+      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, (_house.CheapestImportWindowToday.Price / 100).ToString(CultureInfo.InvariantCulture));
+      var attr_bestImportPrice = new
+      {
+        start_time = _house.CheapestImportWindowToday.StartTime.ToISO8601(),
+        end_time = _house.CheapestImportWindowToday.EndTime.ToISO8601(),
+      };
+      await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
       #endregion
       PVCC_Logger.LogDebug("Leave Schedule");
     }
@@ -506,7 +528,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _sumExportEarningsBrutto = await RegisterSensor("sensor.pv_control_sum_export_earnings_brutto", "Sum of export earnings (brutto)", "MONETARY", "mdi:currency-eur",
+      _sumExportEarningsBruttoEntity = await RegisterSensor("sensor.pv_control_sum_export_earnings_brutto", "Sum of export earnings (brutto)", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
           unit_of_measurement = "€",
@@ -515,7 +537,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _sumImportCostBrutto = await RegisterSensor("sensor.pv_control_sum_import_cost_brutto", "Sum of import costs (brutto)", "MONETARY", "mdi:currency-eur",
+      _sumImportCostBruttoEntity = await RegisterSensor("sensor.pv_control_sum_import_cost_brutto", "Sum of import costs (brutto)", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
           unit_of_measurement = "€",
@@ -524,7 +546,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _sumImportCostEnergyOnly = await RegisterSensor("sensor.pv_control_sum_import_cost_energy_only", "Sum of import costs (energy only)", "MONETARY", "mdi:currency-eur",
+      _sumImportCostEnergyOnlyEntity = await RegisterSensor("sensor.pv_control_sum_import_cost_energy_only", "Sum of import costs (energy only)", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
           unit_of_measurement = "€",
@@ -533,7 +555,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _sumImportCostNetworkOnly = await RegisterSensor("sensor.pv_control_sum_import_cost_network_only", "Sum of import costs (network only)", "MONETARY", "mdi:currency-eur",
+      _sumImportCostNetworkOnlyEntity = await RegisterSensor("sensor.pv_control_sum_import_cost_network_only", "Sum of import costs (network only)", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
           unit_of_measurement = "€",
@@ -542,11 +564,29 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _sumImportExportNetCost = await RegisterSensor("sensor.pv_control_sum_import_export_net_cost", "Sum of net import/export costs", "MONETARY", "mdi:currency-eur",
+      _sumImportExportNetCostEntity = await RegisterSensor("sensor.pv_control_sum_import_export_net_cost", "Sum of net import/export costs", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
           unit_of_measurement = "€",
           state_class = "total",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _bestExportPriceEntity = await RegisterSensor("sensor.pv_control_best_export_price_today", "Best (highest) export price today", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
+          state_class = "measurement",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _bestImportPriceEntity = await RegisterSensor("sensor.pv_control_best_import_price_today", "Best (lowest) import price today", "MONETARY", "mdi:currency-eur",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
+          state_class = "measurement",
         },
         defaultValue: "0",
         reRegister: reset);

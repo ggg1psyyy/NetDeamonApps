@@ -62,7 +62,7 @@ namespace NetDeamon.apps.PVControl.Managers
       {
         if (DateTime.Now.AddMinutes(-powerRequest.RequestedUpdateRate) > powerRequest.LastUpdate)
           powerRequest.LoadManager.Update();
-        if (_house.IsNowCheapestWindowToday && powerRequest.RequestStatus != PowerReqestStatus.Running)
+        if (_house.IsNowCheapestImportWindowToday && powerRequest.RequestStatus != PowerReqestStatus.Running)
         {
           powerRequest.LoadManager.Start();
         }
