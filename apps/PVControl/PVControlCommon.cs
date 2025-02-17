@@ -14,7 +14,7 @@ namespace NetDeamon.apps.PVControl
   public class PVControlCommon
   {
     private PVControlCommon() { }
-    private static readonly PVControlCommon _instance = new PVControlCommon();
+    private static readonly PVControlCommon _instance = new();
     public static PVControlCommon PVCCInstance => _instance;
     public static IHaContext PVCC_HaContext { get; private set; } = null!;
     public static IMqttEntityManager PVCC_EntityManager { get; private set; } = null!;
@@ -42,7 +42,7 @@ namespace NetDeamon.apps.PVControl
     {
       var identifiers = new[] { "pv_control" };
       var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
-      Entity entity = new Entity(PVCC_HaContext, id);
+      Entity entity = new(PVCC_HaContext, id);
       if (entity?.State == null || reRegister)
       {
         if (reRegister && entity?.State != null)

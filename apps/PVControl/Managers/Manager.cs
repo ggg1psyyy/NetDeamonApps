@@ -43,8 +43,8 @@ namespace NetDeamon.apps.PVControl.Managers
   }
   public class Manager
   {
-    private HouseEnergy _house;
-    private List<PowerRequest> _powerRequests;
+    private readonly HouseEnergy _house;
+    private readonly List<PowerRequest> _powerRequests;
 
     public Manager(HouseEnergy house)
     {
@@ -60,7 +60,7 @@ namespace NetDeamon.apps.PVControl.Managers
       DateTime now = DateTime.Now;
       foreach (var powerRequest in _powerRequests)
       {
-        if (DateTime.Now.AddMinutes(-powerRequest.RequestedUpdateRate) > powerRequest.LastUpdate)
+        if (now.AddMinutes(-powerRequest.RequestedUpdateRate) > powerRequest.LastUpdate)
           powerRequest.LoadManager.Update();
         if (_house.IsNowCheapestImportWindowToday && powerRequest.RequestStatus != PowerReqestStatus.Running)
         {

@@ -451,7 +451,7 @@ namespace NetDeamon.apps.PVControl
     {
       //reset = true;
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
-        addConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
+        addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.automatic.ToString(),
         reRegister: reset);
 
@@ -503,12 +503,12 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
 
       _modeEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
-        addConfig: new { options = Enum.GetNames(typeof(InverterModes)) },
+        addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.normal.ToString(),
         reRegister: reset);
 
       _RunHeavyLoadsNowEntity = await RegisterSensor("sensor.pv_control_run_heavyloads_now", "Run heavy loads now", "ENUM", "mdi:ev-station",
-        addConfig: new { options = Enum.GetNames(typeof(RunHeavyLoadsStatus)) },
+        addConfig: new { options = Enum.GetNames<RunHeavyLoadsStatus>() },
         defaultValue: RunHeavyLoadsStatus.No.ToString(),
         reRegister: reset);
 
@@ -592,7 +592,7 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
 
       _battery_StatusEntity = await RegisterSensor("sensor.pv_control_battery_status", "Battery Status", "ENUM", "mdi:battery-charging",
-        addConfig: new { options = Enum.GetNames(typeof(BatteryStatuses)) },
+        addConfig: new { options = Enum.GetNames<BatteryStatuses>() },
         defaultValue: BatteryStatuses.unknown.ToString(),
         reRegister: reset);
 

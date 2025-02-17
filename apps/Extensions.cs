@@ -199,7 +199,7 @@ namespace NetDeamon.apps
       }
       else if (typeof(T) == typeof(bool))
       {
-        dynamic result = entity.State.Equals("on", StringComparison.InvariantCultureIgnoreCase) ? true : false;
+        dynamic result = entity.State.Equals("on", StringComparison.InvariantCultureIgnoreCase);
         resultValue = (T)result;
         return true;
       }
@@ -338,16 +338,11 @@ namespace NetDeamon.apps
       base.Enqueue(item);
     }
   }
-  public class RunningIntAverage
+  public class RunningIntAverage(TimeSpan window)
   {
-    private Queue<(DateTime timestamp, int value)> _Values;
-    private TimeSpan _Window;
+    private Queue<(DateTime timestamp, int value)> _Values = [];
+    private TimeSpan _Window = window;
 
-    public RunningIntAverage(TimeSpan window)
-    {
-      _Values = [];
-      _Window = window;
-    }
     public void AddValue(int value)
     {
       DateTime now = DateTime.UtcNow;
