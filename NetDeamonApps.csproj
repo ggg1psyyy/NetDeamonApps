@@ -27,15 +27,15 @@
         
     <ItemGroup>
         <PackageReference Include="linq2db.SQLite.MS" Version="5.4.1" />
-        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
-        <PackageReference Include="NetDaemon.AppModel" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Runtime" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.HassModel" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Client" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Extensions.Logging" Version="25.5.0" />
-        <PackageReference Include="NetDaemon.Extensions.Tts" Version="25.5.0" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.2" />
+        <PackageReference Include="NetDaemon.AppModel" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Runtime" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.HassModel" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Client" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Extensions.Logging" Version="25.6.0" />
+        <PackageReference Include="NetDaemon.Extensions.Tts" Version="25.6.0" />
     </ItemGroup>
         
     <ItemGroup>
