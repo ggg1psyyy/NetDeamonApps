@@ -1,5 +1,4 @@
 ﻿using NetDaemon.HassModel.Entities;
-using System.Threading.Tasks;
 using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl

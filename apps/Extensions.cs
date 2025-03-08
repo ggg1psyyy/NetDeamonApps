@@ -1,7 +1,6 @@
 ﻿using NetDaemon.Client;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
-using System.Dynamic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
@@ -9,7 +8,6 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
-using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps
 {

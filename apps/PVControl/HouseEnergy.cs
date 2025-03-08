@@ -1,6 +1,4 @@
-﻿using LinqToDB;
-using LinqToDB.DataProvider;
-using NetDaemon.HassModel.Entities;
+﻿using NetDaemon.HassModel.Entities;
 using NetDeamon.apps.PVControl.Predictions;
 using System.Collections.Generic;
 using System.Linq;
@@ -638,7 +636,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        if (_priceListCache is null || _priceListCache.Count == 0)
+        if (_priceListCache.Count == 0)
         {
           _priceListCache = [];
           if (PVCC_Config.CurrentImportPriceEntity is not null && PVCC_Config.CurrentImportPriceEntity.TryGetJsonAttribute("data", out JsonElement data))

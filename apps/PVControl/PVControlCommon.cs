@@ -1,12 +1,8 @@
 ﻿using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
-using System;
 using System.Collections.Generic;
 using System.Dynamic;
-using System.Linq;
-using System.Reactive.Concurrency;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace NetDeamon.apps.PVControl
