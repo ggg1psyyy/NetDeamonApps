@@ -73,6 +73,8 @@ namespace NetDeamon.apps.PVControl
       if (await RegisterControlSensors())
       {
         _house = new HouseEnergy();
+        #region Load settings from HA if available
+
         if (_sumExportEarningsBruttoEntity.TryGetStateValue(out float sumEarningsTotal))
           _house.SumEnergyExportEarningsTotal = sumEarningsTotal * 100;
         if (_sumImportCostBruttoEntity.TryGetStateValue(out float sumImportTotal))
@@ -82,26 +84,27 @@ namespace NetDeamon.apps.PVControl
         if (_sumImportCostNetworkOnlyEntity.TryGetStateValue(out float sumImportNetwork))
           _house.SumEnergyImportCostNetworkOnly = sumImportNetwork * 100;
 
+        if (_forceChargeMaxPriceEntity.TryGetStateValue(out int maxPrice))
+          _house.ForceChargeMaxPrice = maxPrice;
+        if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
+          _house.ForceChargeTargetSoC = targetSoC;
+        if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
+          _house.ForceCharge = forceCharge;
+        if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
+          _house.OverrideMode = mode;
+        if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
+          _house.PreferredMinBatterySoC = prefSoC;
+        if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
+          _house.EnforcePreferredSoC = enforcePrefSoC;
+
+        #endregion
+
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
-
-        // initialize local values with saved in HA
-        if (_prefBatterySoCEntity.State != null)
-          await UserStateChanged(_prefBatterySoCEntity, _prefBatterySoCEntity.State);
-        if (_forceChargeMaxPriceEntity.State != null)
-          await UserStateChanged(_forceChargeMaxPriceEntity, _forceChargeMaxPriceEntity.State);
-        if (_forceChargeTargetSoCEntity.State != null)
-          await UserStateChanged(_forceChargeTargetSoCEntity, _forceChargeTargetSoCEntity.State);
-        if (_enforcePreferredSocEntity.State != null)
-          await UserStateChanged(_enforcePreferredSocEntity, _enforcePreferredSocEntity.State);
-        if (_forceChargeEntity.State != null)
-          await UserStateChanged(_forceChargeEntity, _forceChargeEntity.State);
-        if (_overrideModeEntity.State != null)
-          await UserStateChanged(_overrideModeEntity, _overrideModeEntity.State);
 
         var manager = new Managers.Manager(_house);
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
@@ -473,8 +476,8 @@ namespace NetDeamon.apps.PVControl
           unit_of_measurement = "ct",
           mode = "slider",
         },
-        defaultValue: "0",
-        reRegister: true);
+        defaultValue: "25",
+        reRegister: reset);
 
       _forceChargeTargetSoCEntity = await RegisterSensor("number.pv_control_forcecharge_target_soc", "Force charge target SoC", "battery", "mdi:battery-alert",
         addConfig: new
