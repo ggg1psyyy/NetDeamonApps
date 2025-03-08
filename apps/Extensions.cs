@@ -203,6 +203,16 @@ namespace NetDeamon.apps
         resultValue = (T)result;
         return true;
       }
+      else if (typeof(T) == typeof(InverterModes))
+      {
+        dynamic result = InverterModes.automatic;
+        if (Enum.TryParse(entity.State, out InverterModes modeselect))
+          result = modeselect;
+        else
+          return false;
+        resultValue = (T)result;
+        return true;
+      }
       else
         return false;
     }
