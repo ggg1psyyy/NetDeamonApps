@@ -90,6 +90,10 @@ namespace NetDeamon.apps.PVControl
     /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
     /// </summary>
     public bool EnforcePreferredSoC { get; set; }
+    /// <summary>
+    /// UserSetting: Discharge if export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
+    /// </summary>
+    public bool OpportunisticDischarge { get; set; }
     public int PreferredMinBatterySoC { get; set; }
     public InverterModes OverrideMode { get; set; }
     public int ForceChargeMaxPrice { get; set; }
@@ -140,11 +144,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-#if DEBUG
-        DateTime now = DateTime.Now.Date.AddHours(2.1);
-#else
         DateTime now = DateTime.Now;
-#endif
         DateTime cheapestToday = CheapestImportWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
         if (OverrideMode != InverterModes.automatic)
@@ -171,6 +171,35 @@ namespace NetDeamon.apps.PVControl
           _currentMode = InverterModes.house_only;
           ForceChargeReason = ForceChargeReasons.ExportPriceNegative;
           return _currentMode;
+        }
+
+        // Opportunistic Discharge
+        if (OpportunisticDischarge)
+        {
+          // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
+          var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
+          if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour))
+          {
+            // default we stay at/above PreferredMinimalSoC
+            int minAllowedSoc = PreferredMinimalSoC;
+            // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
+            if ((CurrentPVPeriod == PVPeriods.InPVPeriod || CurrentPVPeriod == PVPeriods.BeforePV))
+              minAllowedSoc = AbsoluteMinimalSoC + 2;
+            // NeedToCharge is off and min SoC stays over minimum (+2 to prevent hysteresis)
+            if (!need.Item1 && need.Item3 >= minAllowedSoc + 2)
+            {
+              _currentMode = InverterModes.force_discharge;
+              ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
+              return _currentMode;
+            }
+            // if it's running turn it off when we reached the minimum
+            else if (ForceChargeReason == ForceChargeReasons.OpportunisticDischarge && _currentMode == InverterModes.force_discharge && (need.Item3 <= minAllowedSoc || need.Item1))
+            {
+              _currentMode = InverterModes.normal;
+              ForceChargeReason = ForceChargeReasons.None;
+              return _currentMode;
+            }
+          }
         }
 
         if (ForceCharge && now > cheapestToday.AddHours(-1) && now < cheapestToday.AddHours(2))

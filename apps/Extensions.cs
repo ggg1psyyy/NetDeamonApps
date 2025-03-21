@@ -44,6 +44,7 @@ namespace NetDeamon.apps
     ForcedChargeAtMinimumPrice,
     ImportPriceNegative,
     ExportPriceNegative,
+    OpportunisticDischarge,
     UserMode,
   }
   public enum RunHeavyLoadsStatus
@@ -229,7 +230,7 @@ namespace NetDeamon.apps
 
       return false;
     }
-    private static bool TurnOnOff(this Entity entity, bool On)
+    public static bool TurnOnOff(this Entity entity, bool On)
     {
       if (entity.TryGetStateValue(out bool curStatus))
       {
@@ -317,6 +318,24 @@ namespace NetDeamon.apps
       if (start == default) start = DateTime.MinValue;
       if (end == default) end = DateTime.MaxValue;
       return (int)Math.Round(list.Where(t => t.Key >= start && t.Key <= end).Average(s => s.Value), 0);
+    }
+    public static List<PriceTableEntry> GetLocalMaxima(this List<PriceTableEntry> list, DateTime start = default, DateTime end = default)
+    {
+      if (start == default) start = DateTime.MinValue;
+      if (end == default) end = DateTime.MaxValue;
+      List<PriceTableEntry> maxima = [];
+      List<PriceTableEntry> actList = list.Where(t => t.StartTime >= start && t.EndTime <= end).OrderBy(t => t.StartTime).ToList();
+      if (actList.Count > 2)
+      {
+        for (int i = 1; i < actList.Count - 1; i++)
+        {
+          if (actList[i].Price > actList[i - 1].Price && actList[i].Price > actList[i + 1].Price)
+          {
+            maxima.Add(actList[i]);
+          }
+        }
+      }
+      return maxima;
     }
     public static DateTime RoundToNearestQuarterHour(this DateTime time)
     {

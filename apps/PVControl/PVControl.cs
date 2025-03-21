@@ -51,6 +51,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _sumImportExportNetCostEntity = null!;
     private Entity _bestExportPriceEntity = null!;
     private Entity _bestImportPriceEntity = null!;
+    private Entity _enableOpportunisticExport = null!;
     #endregion
 
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
@@ -96,6 +97,8 @@ namespace NetDeamon.apps.PVControl
           _house.PreferredMinBatterySoC = prefSoC;
         if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
           _house.EnforcePreferredSoC = enforcePrefSoC;
+        if (_enableOpportunisticExport.TryGetStateValue(out bool enableOpp))
+          _house.OpportunisticDischarge = enableOpp;
 
         #endregion
 
@@ -105,9 +108,12 @@ namespace NetDeamon.apps.PVControl
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
+        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
 
         var manager = new Managers.Manager(_house);
+#if !DEBUG
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
+#endif 
 
 #if DEBUG
         var x = _house.ProposedMode;
@@ -124,6 +130,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (entity == null)
         return;
+      newState = newState.ToLower();
 
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
@@ -149,6 +156,11 @@ namespace NetDeamon.apps.PVControl
         _house.ForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceCharge ? "ON" : "OFF");
       }
+      if (entity.EntityId == _enableOpportunisticExport.EntityId && entity.State is not null)
+      {
+        _house.OpportunisticDischarge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.OpportunisticDischarge ? "ON" : "OFF");
+      }
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
         if (int.TryParse(newState, out int value))
@@ -161,9 +173,7 @@ namespace NetDeamon.apps.PVControl
           _house.ForceChargeTargetSoC = value;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
-#if DEBUG
-      PVCC_Logger.LogDebug("In Debug -> don't start scheduled operations");
-#else
+#if !DEBUG
       await ScheduledOperations(); 
 #endif
     }
@@ -463,6 +473,10 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
 
       _enforcePreferredSocEntity = await RegisterSensor("switch.pv_control_enforce_preferred_soc", "Enforce the preferred SoC", "switch", "mdi:battery-plus-variant",
+        defaultValue: "OFF",
+        reRegister: reset);
+
+      _enableOpportunisticExport = await RegisterSensor("switch.pv_control_enable_opportunistic_export", "Enable opportunistic Export", "switch", "mdi:home-export-outline",
         defaultValue: "OFF",
         reRegister: reset);
 
