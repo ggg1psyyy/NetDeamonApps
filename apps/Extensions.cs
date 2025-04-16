@@ -27,6 +27,7 @@ namespace NetDeamon.apps
     force_charge,
     grid_only,
     force_discharge,
+    feedin_priority,
     house_only,
   }
   public enum BatteryStatuses

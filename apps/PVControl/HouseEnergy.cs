@@ -16,7 +16,7 @@ namespace NetDeamon.apps.PVControl
     private float _lastImportEnergySum;
     private float _lastExportEnergySum;
     /// <summary>
-    /// Default Efficiency if not set in config
+    /// Default Efficiency if not set in config@
     /// </summary>
     private readonly float _defaultInverterEfficiency = 0.9f;
     public Prediction Prediction_Load
@@ -154,8 +154,8 @@ namespace NetDeamon.apps.PVControl
           return _currentMode;
         }
 
-        // negative import price completely covering network costs
-        if (CurrentEnergyImportPriceTotal < 0 && Math.Abs(CurrentEnergyImportPriceTotal) > CurrentEnergyImportPriceNetworkOnly)
+        // negative import price
+        if (CurrentEnergyImportPriceTotal < 0)
         {
           if (BatterySoc <= 90)
             _currentMode = InverterModes.force_charge;
@@ -183,12 +183,21 @@ namespace NetDeamon.apps.PVControl
             // default we stay at/above PreferredMinimalSoC
             int minAllowedSoc = PreferredMinimalSoC;
             // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
-            if ((CurrentPVPeriod == PVPeriods.InPVPeriod || CurrentPVPeriod == PVPeriods.BeforePV))
+            if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 3)))
               minAllowedSoc = AbsoluteMinimalSoC + 2;
+            PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv);
+            PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int house);
             // NeedToCharge is off and min SoC stays over minimum (+2 to prevent hysteresis)
             if (!need.Item1 && need.Item3 >= minAllowedSoc + 2)
             {
               _currentMode = InverterModes.force_discharge;
+              ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
+              return _currentMode;
+            }
+            // still no need to charge but battery already low, so we keep the inverter in feedin_priority mode as long as pv > load 
+            else if (!need.Item1 && pv > house + 200)
+            {
+              _currentMode = InverterModes.feedin_priority;
               ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
               return _currentMode;
             }
