@@ -10,6 +10,8 @@ namespace NetDeamon.apps.PVControl
     public Entity WarmwaterSetPointOnceEntity { get; set; } = null!;
     public Entity WarmwaterEnergyUsageEntity { get; set; } = null!;
     public Entity WarmwaterStartOnceEntity { get; set; } = null!;
+    public int WarmWaterEnergyNeededPerDegree { get; set; } = 100;
+    public int MinutesPerDegree { get; set; } = 2;
   }
 }
 
@@ -100,6 +102,9 @@ namespace NetDeamon.apps.PVControl.Managers
         && PVCC_Config.WarmwaterStartOnceEntity.TryGetStateValue(out bool isActive))
       {
         float diffToMin = curTemp - minTemp;
+        float diffToTarget = targetTemp - curTemp;
+        _PowerRequest.EstimatedEnergyNeeded = (int)(diffToTarget * PVCC_Config.WarmWaterEnergyNeededPerDegree);
+        _PowerRequest.EstimatedTimeNeeded = (int)(diffToTarget * PVCC_Config.MinutesPerDegree);
         if (diffToMin - minTemp < 5)
         {
         }

@@ -1,5 +1,8 @@
 ﻿using NetDaemon.Extensions.Scheduler;
+using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using static NetDeamon.apps.PVControl.PVControlCommon;
 
@@ -41,18 +44,34 @@ namespace NetDeamon.apps.PVControl.Managers
   {
     private readonly HouseEnergy _house;
     private readonly List<PowerRequest> _powerRequests;
+    private Entity _ManagerEntity = null!;
 
     public Manager(HouseEnergy house)
     {
       _house = house;
+#if !DEBUG
       PVCC_Scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
+#endif
       _powerRequests = [];
       _powerRequests.Add(new HeatpumpManager().Initialize());
 
       _ = ScheduledOperations();
     }
+
     private async Task ScheduledOperations()
     {
+      //if (_ManagerEntity is null)
+      //{
+      //  _ManagerEntity = await RegisterSensor("sensor.pv_control_managed_loads", "Managed individual loads", "None", "mdi:pac-man",
+      //    //addConfig: new
+      //    //{
+      //    //  unit_of_measurement = "€/kWh",
+      //    //},
+      //    defaultValue: _powerRequests.Count.ToString(),
+      //    reRegister: true
+      //  );
+      //}
+      //await PVCC_EntityManager.SetStateAsync(_ManagerEntity.EntityId, _powerRequests.Count.ToString());
       DateTime now = DateTime.Now;
       foreach (var powerRequest in _powerRequests)
       {
@@ -63,6 +82,11 @@ namespace NetDeamon.apps.PVControl.Managers
           powerRequest.LoadManager.Start();
         }
       }
+      //var attr_Manager = new
+      //{
+      //  loads = _powerRequests,
+      //};
+      //await PVCC_EntityManager.SetAttributesAsync(_ManagerEntity.EntityId, attr_Manager);
     }
   }
 }
