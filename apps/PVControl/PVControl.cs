@@ -110,7 +110,7 @@ namespace NetDeamon.apps.PVControl
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
 
-        var manager = new Managers.Manager(_house);
+        var manager = new Managers.LoadManager(_house);
 #if !DEBUG
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif 

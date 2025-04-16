@@ -40,13 +40,13 @@ namespace NetDeamon.apps.PVControl.Managers
     public void Pause();
     public void Update();
   }
-  public class Manager
+  public class LoadManager
   {
     private readonly HouseEnergy _house;
     private readonly List<PowerRequest> _powerRequests;
     private Entity _ManagerEntity = null!;
 
-    public Manager(HouseEnergy house)
+    public LoadManager(HouseEnergy house)
     {
       _house = house;
 #if !DEBUG
