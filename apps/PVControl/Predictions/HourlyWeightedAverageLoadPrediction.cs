@@ -9,13 +9,15 @@ namespace NetDeamon.apps.PVControl.Predictions
   {
     private readonly string _dbLocation;
     private readonly float _weightScaling;
-    public HourlyWeightedAverageLoadPrediction(string dbLocation, float weightScaling = 20f)
+    private readonly bool _baseLoadOnly;
+    public HourlyWeightedAverageLoadPrediction(string dbLocation, float weightScaling = 20f, bool baseLoadOnly = false)
     {
       _dbLocation = dbLocation;
       if (string.IsNullOrEmpty(_dbLocation) || !System.IO.File.Exists(_dbLocation))
         throw new ArgumentException("DBLocation missing or file not found");
 
       _weightScaling = weightScaling;
+      _baseLoadOnly = baseLoadOnly;
       Initialize("Load Prediction");
     }
     protected override Dictionary<DateTime, int> PopulateData()
@@ -31,7 +33,11 @@ namespace NetDeamon.apps.PVControl.Predictions
     private int GetHourlyHouseEnergyUsageHistory(int hour, DateTime now)
     {
       using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(string.Format("Data Source={0}", _dbLocation)));
-      var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new { Date = h.Timestamp, Value = h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / _weightScaling) }).ToList();
+      var weights = db.Hourlies.Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null).Select(h => new 
+      { 
+        Date = h.Timestamp, Value = _baseLoadOnly ? h.Houseenergy - h.Carcharge - h.Warmwaterenergy : h.Houseenergy, Weight = (float)Math.Exp(-Math.Abs((h.Timestamp - now).Days) / _weightScaling) 
+      }
+      ).ToList();
       float weightedSum = weights.Sum(w => w.Value is null ? 0 : (float)w.Value * w.Weight);
       float sumOfWeights = weights.Sum(w => w.Weight);
       float weightedAverage = weightedSum / sumOfWeights;

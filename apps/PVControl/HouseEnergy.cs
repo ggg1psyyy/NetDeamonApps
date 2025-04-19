@@ -390,6 +390,26 @@ namespace NetDeamon.apps.PVControl
       }
     }
     /// <summary>
+    /// How much power in W is available for additional loads
+    /// </summary>
+    public int AvailablePower
+    {
+      get
+      {
+        return 0;
+      }
+    }
+    /// <summary>
+    /// How much energy in Wh is available for additional loads
+    /// </summary>
+    public int AvailableEnergy
+    {
+      get
+      {
+        return 0;
+      }
+    }
+    /// <summary>
     /// Current State of Charge of the house battery in %
     /// </summary>
     public int BatterySoc

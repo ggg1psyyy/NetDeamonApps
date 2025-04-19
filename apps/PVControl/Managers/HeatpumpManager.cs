@@ -8,8 +8,8 @@ namespace NetDeamon.apps.PVControl
     public Entity WarmwaterTemperatureEntity { get; set; } = null!;
     public Entity WarmwaterSetPointNormalEntity { get; set; } = null!;
     public Entity WarmwaterSetPointOnceEntity { get; set; } = null!;
-    public Entity WarmwaterEnergyUsageEntity { get; set; } = null!;
     public Entity WarmwaterStartOnceEntity { get; set; } = null!;
+    public Entity HeatPumpLoadEntity { get; set; } = null!;
     public int WarmWaterEnergyNeededPerDegree { get; set; } = 100;
     public int MinutesPerDegree { get; set; } = 2;
   }
@@ -28,7 +28,6 @@ namespace NetDeamon.apps.PVControl.Managers
         LoadManager = this,
         CanBeInterrupted = true,
         RequestStatus = PowerReqestStatus.Idle,
-        RequestedUpdateRate = 15,
         LastUpdate = DateTime.Now,
         RequestDescription = "Heatpump - Warmwater",
       };
@@ -43,7 +42,7 @@ namespace NetDeamon.apps.PVControl.Managers
       else
         _PowerRequest.RequestStatus = PowerReqestStatus.Error;
     }
-    int _startEnergyUsage = 0;
+    //int _startEnergyUsage = 0;
     float _startWWTemp = 0;
     public void Start()
     {
@@ -54,9 +53,9 @@ namespace NetDeamon.apps.PVControl.Managers
       }
       else if (PVCC_Config.WarmwaterTemperatureEntity.TryGetStateValue(out _startWWTemp) && PVCC_Config.WarmwaterSetPointOnceEntity.TryGetStateValue(out float setValue))
       {
-        _startEnergyUsage = 0;
-        if (PVCC_Config.WarmwaterEnergyUsageEntity.TryGetStateValue(out int val))
-          _startEnergyUsage = val;
+        //_startEnergyUsage = 0;
+        //if (PVCC_Config.WarmwaterEnergyUsageEntity.TryGetStateValue(out int val))
+        //  _startEnergyUsage = val;
         if (_startWWTemp < (setValue - 8))
         {
           if (PVCC_Config.WarmwaterStartOnceEntity.TurnOn())
@@ -69,7 +68,7 @@ namespace NetDeamon.apps.PVControl.Managers
             _PowerRequest.RequestStatus = PowerReqestStatus.Error;
             PVCC_Logger.LogInformation("Error starting WarmWater");
           }
-          _PowerRequest.EnergyUsed = _startEnergyUsage;
+          //_PowerRequest.EnergyUsed = _startEnergyUsage;
         }
         else
           _PowerRequest.RequestStatus = PowerReqestStatus.Idle;
@@ -90,12 +89,17 @@ namespace NetDeamon.apps.PVControl.Managers
       else
         _PowerRequest.RequestStatus = PowerReqestStatus.Error;
 
-      if (PVCC_Config.WarmwaterEnergyUsageEntity.TryGetStateValue(out int val))
-        _PowerRequest.EnergyUsed = val - _startEnergyUsage;
+      //if (PVCC_Config.WarmwaterEnergyUsageEntity.TryGetStateValue(out int val))
+      //  _PowerRequest.EnergyUsed = val - _startEnergyUsage;
     }
 
     public void Update()
     {
+      if (!PVCC_Config.HeatPumpLoadEntity.TryGetStateValue(out _PowerRequest.CurrentManagedLoad))
+      {
+        _PowerRequest.RequestStatus = PowerReqestStatus.Error;
+        return;
+      }
       if (PVCC_Config.WarmwaterTemperatureEntity.TryGetStateValue(out float curTemp) 
         && PVCC_Config.WarmwaterSetPointOnceEntity.TryGetStateValue(out float targetTemp)
         && PVCC_Config.WarmwaterSetPointNormalEntity.TryGetStateValue(out float minTemp)

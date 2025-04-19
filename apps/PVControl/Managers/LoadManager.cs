@@ -21,6 +21,7 @@ namespace NetDeamon.apps.PVControl.Managers
   {
     public ILoadManager LoadManager;
     public PowerReqestStatus RequestStatus;
+    public int CurrentManagedLoad; // current load managed by this integration in W
     public int EstimatedEnergyNeeded; // in Wh
     public int EstimatedTimeNeeded; // in minutes
     public DateTime PreferedStartTime;
@@ -28,7 +29,6 @@ namespace NetDeamon.apps.PVControl.Managers
     public int EnergyUsed;
     public int RunTime;
     public bool CanBeInterrupted;
-    public int RequestedUpdateRate; // in minutes
     public DateTime LastUpdate;
     public string RequestDescription;
   }
@@ -49,44 +49,13 @@ namespace NetDeamon.apps.PVControl.Managers
     public LoadManager(HouseEnergy house)
     {
       _house = house;
-#if !DEBUG
-      PVCC_Scheduler.ScheduleCron("*/30 * * * * *", async () => await ScheduledOperations(), true);
-#endif
       _powerRequests = [];
       _powerRequests.Add(new HeatpumpManager().Initialize());
 
-      _ = ScheduledOperations();
     }
-
-    private async Task ScheduledOperations()
+    public void Update()
     {
-      //if (_ManagerEntity is null)
-      //{
-      //  _ManagerEntity = await RegisterSensor("sensor.pv_control_managed_loads", "Managed individual loads", "None", "mdi:pac-man",
-      //    //addConfig: new
-      //    //{
-      //    //  unit_of_measurement = "€/kWh",
-      //    //},
-      //    defaultValue: _powerRequests.Count.ToString(),
-      //    reRegister: true
-      //  );
-      //}
-      //await PVCC_EntityManager.SetStateAsync(_ManagerEntity.EntityId, _powerRequests.Count.ToString());
-      DateTime now = DateTime.Now;
-      foreach (var powerRequest in _powerRequests)
-      {
-        if (now.AddMinutes(-powerRequest.RequestedUpdateRate) > powerRequest.LastUpdate)
-          powerRequest.LoadManager.Update();
-        if (_house.IsNowCheapestImportWindowToday && powerRequest.RequestStatus != PowerReqestStatus.Running)
-        {
-          powerRequest.LoadManager.Start();
-        }
-      }
-      //var attr_Manager = new
-      //{
-      //  loads = _powerRequests,
-      //};
-      //await PVCC_EntityManager.SetAttributesAsync(_ManagerEntity.EntityId, attr_Manager);
+      Parallel.ForEach(_powerRequests, (powerRequest) => {powerRequest.LoadManager.Update();});
     }
   }
 }

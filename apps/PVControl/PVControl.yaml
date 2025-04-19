@@ -56,13 +56,14 @@ NetDeamon.apps.PVControl.PVConfig:
   #MinBatterySoCValue: 10
 
   # HeatpumpManager
+  # current Load (W)
+  HeatPumpLoadEntity: sensor.wp_power_total
   # current Warwater temperature (°C)
   WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
   # automatic Warmwater target temperature (°C)
   WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
   # manual Warmwater target temperature (°C)
   WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
-  WarmwaterEnergyUsageEntity: sensor.ww_energy_consumption_day
   WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
   # aproximate Energy used to heat up 1 degree of water (Wh)
   WarmWaterEnergyNeededPerDegree: 110

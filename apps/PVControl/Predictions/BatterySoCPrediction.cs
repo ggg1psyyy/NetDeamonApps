@@ -10,25 +10,30 @@ namespace NetDeamon.apps.PVControl.Predictions
     private readonly Prediction _netEnergyPrediction;
     private readonly Entity _currentSocEntity;
     private readonly int _battCapacity;
+    private readonly int _curSocStatic;
 
-    public BatterySoCPrediction(Prediction netEnergyPrediction, Entity currentSocEntity, int battCapacity)
+    public BatterySoCPrediction(Prediction netEnergyPrediction, Entity currentSocEntity, int battCapacity, int curSocStatic = -99)
     {
       _netEnergyPrediction = netEnergyPrediction;
       _currentSocEntity = currentSocEntity;
       _battCapacity = battCapacity;
+      _curSocStatic = curSocStatic;
       Initialize("Battery SoC Prediction");
     }
 
     protected override Dictionary<DateTime, int> PopulateData()
     {
       Dictionary<DateTime, int> result = [];
+      int curSoc = _curSocStatic;
       result.ClearAndCreateEmptyPredictionData();
-      if (!_currentSocEntity.TryGetStateValue(out int curSoc))
+      if (_curSocStatic < 0)
       {
-        PVCC_Logger.LogError("Could not get current SoC");
-        return [];
+        if (!_currentSocEntity.TryGetStateValue(out curSoc))
+        {
+          PVCC_Logger.LogError("Could not get current SoC");
+          return [];
+        }
       }
-
       int curEnergy = CalculateBatteryEnergyAtSoC(curSoc);
       int curIndex = _netEnergyPrediction.TodayAndTomorrow.Keys.ToList().IndexOf(_netEnergyPrediction.TodayAndTomorrow.Keys.FirstOrDefault(k => k >= DateTime.Now));
 
