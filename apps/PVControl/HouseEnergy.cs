@@ -147,13 +147,14 @@ namespace NetDeamon.apps.PVControl
         DateTime now = DateTime.Now;
         DateTime cheapestToday = CheapestImportWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
+#if !DEBUG
         if (OverrideMode != InverterModes.automatic)
         {
           ForceChargeReason = ForceChargeReasons.UserMode;
           _currentMode = OverrideMode;
           return _currentMode;
         }
-
+#endif
         // negative import price
         if (CurrentEnergyImportPriceTotal < 0)
         {
@@ -176,6 +177,16 @@ namespace NetDeamon.apps.PVControl
         // Opportunistic Discharge
         if (OpportunisticDischarge)
         {
+          // we are in PV period and will still reach 100% SoC
+          if (!need.Item1 && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
+            && WillReachMaxSocToday && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3)
+          {
+            // so we keep FeedInPriority mode
+            _currentMode = InverterModes.feedin_priority;
+            ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
+            return _currentMode;
+          }
+
           // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
           var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
           if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour))
@@ -183,26 +194,25 @@ namespace NetDeamon.apps.PVControl
             // default we stay at/above PreferredMinimalSoC
             int minAllowedSoc = PreferredMinimalSoC;
             // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
-            if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 3)))
+            if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 4)))
               minAllowedSoc = AbsoluteMinimalSoC + 2;
-            PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv);
-            PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int house);
+            
             // NeedToCharge is off and min SoC stays over minimum (+2 to prevent hysteresis)
-            if (!need.Item1 && need.Item3 >= minAllowedSoc + 2)
+            if (!need.Item1 && need.Item3 >= minAllowedSoc + 4)
             {
               _currentMode = InverterModes.force_discharge;
               ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
               return _currentMode;
             }
             // still no need to charge but battery already low, so we keep the inverter in feedin_priority mode as long as pv > load 
-            else if (!need.Item1 && pv > house + 200)
+            else if (!need.Item1 && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200)
             {
               _currentMode = InverterModes.feedin_priority;
               ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
               return _currentMode;
             }
             // if it's running turn it off when we reached the minimum
-            else if (ForceChargeReason == ForceChargeReasons.OpportunisticDischarge && _currentMode == InverterModes.force_discharge && (need.Item3 <= minAllowedSoc || need.Item1))
+            else if (ForceChargeReason == ForceChargeReasons.OpportunisticDischarge && _currentMode == InverterModes.force_discharge && (need.Item3 <= minAllowedSoc + 2 || need.Item1))
             {
               _currentMode = InverterModes.normal;
               ForceChargeReason = ForceChargeReasons.None;
@@ -860,6 +870,22 @@ namespace NetDeamon.apps.PVControl
           return PVPeriods.AfterPV;
         else
           return PVPeriods.InPVPeriod;
+      }
+    }
+    public bool WillReachMaxSocToday
+    {
+      get
+      {
+        var maxSocRestOfToday = Prediction_BatterySoC.Today.FirstMaxOrDefault(start: DateTime.Now);
+        return maxSocRestOfToday.Value >= 99;
+      }
+    }
+    public bool WillReachmaxSocTomorrow
+    {
+      get
+      {
+        var maxSocTomorrow = Prediction_BatterySoC.Tomorrow.FirstMaxOrDefault(start: DateTime.Now);
+        return maxSocTomorrow.Value >= 99;
       }
     }
     public void UpdatePredictions(bool all = false)
