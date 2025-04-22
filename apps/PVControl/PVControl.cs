@@ -219,6 +219,7 @@ namespace NetDeamon.apps.PVControl
         next_relevant_pv_charge = _house.FirstRelevantPVEnergyToday.ToISO8601(),
         avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         status = _house.BatteryStatus.ToString(),
+        time_on_max = _house.MaxSocDurationToday.ToString(CultureInfo.InvariantCulture) + " h",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
       #endregion

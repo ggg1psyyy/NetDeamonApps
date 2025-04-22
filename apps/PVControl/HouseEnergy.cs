@@ -177,9 +177,13 @@ namespace NetDeamon.apps.PVControl
         // Opportunistic Discharge
         if (OpportunisticDischarge)
         {
-          // we are in PV period and will still reach 100% SoC
+          // prevent hysteresis on feedin priority 
+          double maxSocDuration = (_currentMode == InverterModes.feedin_priority) ? 1.5 : 2.0;
+          // we are in PV period and have positive PV 
           if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
-            && MaxSocDurationToday > 1 && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3)
+            && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
+            // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow
+            && CurrentEnergyExportPriceTotal >= PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price)
           {
             // so we keep FeedInPriority mode
             _currentMode = InverterModes.feedin_priority;
@@ -877,7 +881,7 @@ namespace NetDeamon.apps.PVControl
           return PVPeriods.InPVPeriod;
       }
     }
-    public int MaxSocDurationToday
+    public double MaxSocDurationToday
     {
       get
       {
@@ -886,7 +890,7 @@ namespace NetDeamon.apps.PVControl
           return 0;
         var firstUnderMax = Prediction_BatterySoC.Today.FirstUnderOrDefault(99, maxSocRestOfToday.Key);
         var span = firstUnderMax.Key - maxSocRestOfToday.Key;
-        return (int) Math.Floor(span.TotalHours);
+        return span.TotalHours;
       }
     }
     public bool WillReachMaxSocToday
