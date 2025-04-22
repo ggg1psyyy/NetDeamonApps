@@ -179,7 +179,7 @@ namespace NetDeamon.apps.PVControl
         {
           // we are in PV period and will still reach 100% SoC
           if (!need.Item1 && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
-            && WillReachMaxSocToday && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3)
+            && MaxSocDurationToday > 0 && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3)
           {
             // so we keep FeedInPriority mode
             _currentMode = InverterModes.feedin_priority;
@@ -870,6 +870,18 @@ namespace NetDeamon.apps.PVControl
           return PVPeriods.AfterPV;
         else
           return PVPeriods.InPVPeriod;
+      }
+    }
+    public int MaxSocDurationToday
+    {
+      get
+      {
+        var maxSocRestOfToday = Prediction_BatterySoC.Today.FirstMaxOrDefault(start: DateTime.Now);
+        if (maxSocRestOfToday.Value < 99)
+          return 0;
+        var firstUnderMax = Prediction_BatterySoC.Today.FirstUnderOrDefault(99, maxSocRestOfToday.Key);
+        var span = firstUnderMax.Key - maxSocRestOfToday.Key;
+        return (int) Math.Floor(span.TotalHours);
       }
     }
     public bool WillReachMaxSocToday
