@@ -257,6 +257,7 @@ namespace NetDeamon.apps.PVControl
         minimal_estimated_SoC = needToCharge.EstimatedSoc.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = needToCharge.LatestChargeTime.ToISO8601(),
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
+        current_average_gridpower = _house.CurrentAverageGridPower.ToString(CultureInfo.InvariantCulture) + " W",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
       #endregion

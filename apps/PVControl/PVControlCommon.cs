@@ -110,6 +110,7 @@ namespace NetDeamon.apps.PVControl
     public Entity CurrentBatteryPowerEntity { get; set; } = null!;
     public float InverterEfficiency { get; set; } = default;
     public Entity TodayPVEnergyEntity { get; set; } = null!;
+    public Entity CurrentGridPowerEntity { get; set; } = null!;
     public List<Entity> ForecastPVEnergyTodayEntities { get; set; } = [];
     public List<Entity> ForecastPVEnergyTomorrowEntities { get; set; } =[];
     public Entity BatterySoCEntity { get; set; } = null!;

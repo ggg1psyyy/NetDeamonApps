@@ -32,6 +32,8 @@ NetDeamon.apps.PVControl.PVConfig:
   InverterEfficiency: 0.95
   # total PV production today (kWh)
   TodayPVEnergyEntity: sensor.solax_today_s_solar_energy
+  # current grid power usage import (-)/export (+)
+  CurrentGridPowerEntity: sensor.solax_measured_power
   # Total PV production forecast for today (kWH)
   ForecastPVEnergyTodayEntities: 
     - sensor.energy_production_today_3
@@ -58,11 +60,11 @@ NetDeamon.apps.PVControl.PVConfig:
   # HeatpumpManager
   # current Load (W)
   HeatPumpLoadEntity: sensor.wp_power_total
-  # current Warwater temperature (°C)
+  # current Warwater temperature (ï¿½C)
   WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
-  # automatic Warmwater target temperature (°C)
+  # automatic Warmwater target temperature (ï¿½C)
   WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
-  # manual Warmwater target temperature (°C)
+  # manual Warmwater target temperature (ï¿½C)
   WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
   WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
   # aproximate Energy used to heat up 1 degree of water (Wh)

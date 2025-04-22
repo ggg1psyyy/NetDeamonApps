@@ -13,6 +13,7 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _battChargeAverage;
     private readonly RunningIntAverage _LoadRunningAverage;
     private readonly RunningIntAverage _PVRunningAverage;
+    private readonly RunningIntAverage _GridRunningAverage;
     private float _lastImportEnergySum;
     private float _lastExportEnergySum;
     /// <summary>
@@ -48,6 +49,10 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
         _PVRunningAverage.AddValue(pv);
 
+      _GridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
+      if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
+        _GridRunningAverage.AddValue(grid);
+      
       if (PVCC_Config.DailyExportEnergyEntity is null || PVCC_Config.DailyImportEnergyEntity is null)
         throw new NullReferenceException("DailyEnergyEntities not available");
       if (PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float lastExportEnergySum))
@@ -75,6 +80,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentHouseLoadEntity));
       PVCC_Config.DailyExportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyExportEnergyEntity));
       PVCC_Config.DailyImportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyImportEnergyEntity));
+      PVCC_Config.CurrentGridPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentGridPowerEntity));
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
       _dailySoCPrediction = [];
@@ -137,6 +143,10 @@ namespace NetDeamon.apps.PVControl
           SumEnergyImportCostNetworkOnly += diff * CurrentEnergyImportPriceNetworkOnly;
         }
         _lastImportEnergySum = import / 1000;
+      }
+      if (entity.EntityId == PVCC_Config.CurrentGridPowerEntity?.EntityId && PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
+      {
+        _GridRunningAverage.AddValue(grid);
       }
     }
     private InverterModes _currentMode;
@@ -591,6 +601,13 @@ namespace NetDeamon.apps.PVControl
       get
       {
         return _PVRunningAverage.GetAverage();
+      }
+    }
+    public int CurrentAverageGridPower
+    {
+      get
+      {
+        return _GridRunningAverage.GetAverage() * -1;
       }
     }
     public PriceTableEntry BestChargeTime
