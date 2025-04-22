@@ -63,6 +63,8 @@ namespace NetDeamon.apps.PVControl
       PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler);
       if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
         PVCC_Config.DBLocation = "apps/DataLogger/energy_history.db";
+      
+      PVCC_Logger.LogInformation("DB Location: {loc}", PVCC_Config.DBFullLocation);
 
       if (!CheckConfiguration())
         throw new Exception("Error initializing configuration");
@@ -246,13 +248,13 @@ namespace NetDeamon.apps.PVControl
       #endregion
       #region NeedToCharge
       var needToCharge = _house.NeedToChargeFromExternal;
-      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.Item1 ? "ON" : "OFF");
+      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.NeedToCharge ? "ON" : "OFF");
       var attr_Charge = new
       {
         minimal_SoC_allowed = _house.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
         preferred_SoC = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
-        minimal_estimated_SoC = needToCharge.Item3.ToString(CultureInfo.InvariantCulture) + "%",
-        at_time = needToCharge.Item2.ToISO8601(),
+        minimal_estimated_SoC = needToCharge.EstimatedSoc.ToString(CultureInfo.InvariantCulture) + "%",
+        at_time = needToCharge.LatestChargeTime.ToISO8601(),
         estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);

@@ -3,10 +3,17 @@ using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Reflection;
 using System.Threading.Tasks;
 
 namespace NetDeamon.apps.PVControl
 {
+  public struct NeedToChargeResult
+  {
+    public bool NeedToCharge;
+    public DateTime LatestChargeTime;
+    public int EstimatedSoc;
+  }
   public class PVControlCommon
   {
     private PVControlCommon() { }
@@ -73,6 +80,18 @@ namespace NetDeamon.apps.PVControl
   public partial class PVConfig
   {
     public string DBLocation { get; set; } = default!;
+
+    public string DBFullLocation
+    {
+      get
+      {
+        if (System.IO.File.Exists(DBLocation))
+          return DBLocation;
+        // problems with debugging under rider, as it can't find the DB without full path entry
+        var path = Assembly.GetExecutingAssembly().Location;
+        return System.IO.Path.GetDirectoryName(path) + "\\" + DBLocation;
+      }
+    }
     public List<Entity> CurrentImportPriceEntities { get; set; } = null!;
     public float ImportPriceMultiplier { get; set; } = default;
     public float ImportPriceAddition { get; set; } = default;
