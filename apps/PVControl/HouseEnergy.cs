@@ -165,10 +165,21 @@ namespace NetDeamon.apps.PVControl
           return _currentMode;
         }
 #endif
+        // fix inverter problem, that it doesn't switch to battery if load is under ~200W
+        if (_currentMode == InverterModes.normal && CurrentAverageGridPower is > 50 and < 300 && BatterySoc > PreferredMinimalSoC)
+        {
+          // we just need to switch for a few seconds to force_discharge, afterwards the inverter keeps using the battery  
+          _currentMode = InverterModes.force_discharge;
+          ForceChargeReason = ForceChargeReasons.None;
+          PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery!");
+          _GridRunningAverage.Reset();
+          return _currentMode;
+        }
+        
         // negative import price
         if (CurrentEnergyImportPriceTotal < 0)
         {
-          if (BatterySoc <= 90)
+          if (BatterySoc <= 95)
             _currentMode = InverterModes.force_charge;
           else
             _currentMode = InverterModes.grid_only;
@@ -189,11 +200,16 @@ namespace NetDeamon.apps.PVControl
         {
           // prevent hysteresis on feedin priority 
           double maxSocDuration = (_currentMode == InverterModes.feedin_priority) ? 1.5 : 2.0;
+          // prices for now and the next two hours
+          float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;;
+          float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
+          float priceNextHourAndOne = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 2)).Price;
+          
           // we are in PV period and have positive PV 
           if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
             && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
-            // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow
-            && CurrentEnergyExportPriceTotal >= PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price)
+            // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow (because of sinusoidal nature of prices)
+            && priceNow >= priceNextHour && priceNextHour >= priceNextHourAndOne)
           {
             // so we keep FeedInPriority mode
             _currentMode = InverterModes.feedin_priority;

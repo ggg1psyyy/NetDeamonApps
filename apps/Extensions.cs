@@ -391,5 +391,11 @@ namespace NetDeamon.apps
         return int.MinValue;
       return (int)Math.Round(_Values.Average(v => v.value), 0);
     }
+
+    public void Reset()
+    {
+      _Values = [];
+      AddValue(0);
+    }
   }
 }

@@ -184,15 +184,18 @@ namespace NetDeamon.apps.PVControl
       PVCC_Logger.LogDebug("Entering Schedule");
       DateTime now = DateTime.Now;
       PVCC_Logger.LogDebug("Updating Predictions");
-      _house.UpdatePredictions();
       if (_house.Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
       {
         PVCC_Logger.LogError("Prediction doesn't start with today");
         _house.UpdatePredictions(true);
       }
+      else
+      {
+        _house.UpdatePredictions();
+      }
       PVCC_Logger.LogDebug("Finished Updating Predictions");
-      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       #region Mode
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       var nextCheapest = _house.BestChargeTime;
       var attr_Mode = new
       {
