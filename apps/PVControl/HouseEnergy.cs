@@ -207,7 +207,7 @@ namespace NetDeamon.apps.PVControl
           
           // we are in PV period and have positive PV 
           if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
-            && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal > 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
+            && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal >= 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
             // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow (because of sinusoidal nature of prices)
             && priceNow >= priceNextHour && priceNextHour >= priceNextHourAndOne)
           {
