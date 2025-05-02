@@ -181,9 +181,9 @@ namespace NetDeamon.apps.PVControl
     }
     private async Task ScheduledOperations()
     {
-      PVCC_Logger.LogDebug("Entering Schedule");
+      PVCC_Logger.LogTrace("Entering Schedule");
       DateTime now = DateTime.Now;
-      PVCC_Logger.LogDebug("Updating Predictions");
+      PVCC_Logger.LogTrace("Updating Predictions");
       if (_house.Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
       {
         PVCC_Logger.LogError("Prediction doesn't start with today");
@@ -193,7 +193,7 @@ namespace NetDeamon.apps.PVControl
       {
         _house.UpdatePredictions();
       }
-      PVCC_Logger.LogDebug("Finished Updating Predictions");
+      PVCC_Logger.LogTrace("Finished Updating Predictions");
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
       var nextCheapest = _house.BestChargeTime;
@@ -433,7 +433,7 @@ namespace NetDeamon.apps.PVControl
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
       #endregion
-      PVCC_Logger.LogDebug("Leave Schedule");
+      PVCC_Logger.LogTrace("Leave Schedule");
     }
     private bool CheckConfiguration()
     {

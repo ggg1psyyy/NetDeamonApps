@@ -19,6 +19,9 @@ NetDeamon.apps.PVControl.PVConfig:
   ExportPriceAddition: 0.0
   ExportPriceNetwork: 0.0
   ExportPriceTax: 0.0
+  # Inverter status/run mode
+  InverterStatusEntity: sensor.solax_run_mode
+  InverterStatusNormalString: "Normal Mode"
   # daily energy import
   DailyImportEnergyEntity: sensor.solax_today_s_import_energy
   # daily energy export

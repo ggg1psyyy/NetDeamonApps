@@ -147,7 +147,7 @@ namespace NetDeamon.apps
       }
       return 1;
     }
-    public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true) where T : struct
+    public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true)
     {
       resultValue = default;
       if (entity is null || entity.State is null)

@@ -14,6 +14,14 @@ namespace NetDeamon.apps.PVControl
     public DateTime LatestChargeTime;
     public int EstimatedSoc;
   }
+
+  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None)
+  {
+    public InverterModes Mode = mode;
+    public ForceChargeReasons ModeReason = modeReason;
+
+    //public String CurrentInverterStatus;
+  }
   public class PVControlCommon
   {
     private PVControlCommon() { }
@@ -103,6 +111,8 @@ namespace NetDeamon.apps.PVControl
     public float ExportPriceAddition { get; set; } = default;
     public float ExportPriceNetwork { get; set; } = default;
     public float ExportPriceTax { get; set; } = default;
+    public Entity InverterStatusEntity { get; set; } = null!;
+    public string InverterStatusNormalString { get; set; } = "Normal Mode";
     public Entity DailyImportEnergyEntity { get; set; } = null!;
     public Entity DailyExportEnergyEntity { get; set; } = null!;
     public Entity CurrentHouseLoadEntity { get; set; } = null!;
