@@ -11,9 +11,9 @@ namespace NetDeamon.apps.PVControl
   public class HouseEnergy
   {
     private readonly RunningIntAverage _battChargeAverage;
-    private readonly RunningIntAverage _LoadRunningAverage;
-    private readonly RunningIntAverage _PVRunningAverage;
-    private readonly RunningIntAverage _GridRunningAverage;
+    private readonly RunningIntAverage _loadRunningAverage;
+    private readonly RunningIntAverage _pvRunningAverage;
+    private readonly RunningIntAverage _gridRunningAverage;
     private float _lastImportEnergySum;
     private float _lastExportEnergySum;
     /// <summary>
@@ -37,21 +37,21 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
         _battChargeAverage.AddValue(bat);
 
-      _LoadRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
+      _loadRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
       if (PVCC_Config.CurrentHouseLoadEntity is null)
         throw new NullReferenceException("HouseLoadEntity not available");
       if (PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
-        _LoadRunningAverage.AddValue(load);
+        _loadRunningAverage.AddValue(load);
 
-      _PVRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
+      _pvRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
       if (PVCC_Config.CurrentPVPowerEntity is null)
         throw new NullReferenceException("CurrentPVPowerEntity not available");
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
-        _PVRunningAverage.AddValue(pv);
+        _pvRunningAverage.AddValue(pv);
 
-      _GridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
+      _gridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
-        _GridRunningAverage.AddValue(grid);
+        _gridRunningAverage.AddValue(grid);
       
       if (PVCC_Config.DailyExportEnergyEntity is null || PVCC_Config.DailyImportEnergyEntity is null)
         throw new NullReferenceException("DailyEnergyEntities not available");
@@ -68,7 +68,7 @@ namespace NetDeamon.apps.PVControl
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
 
-      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _LoadRunningAverage, _PVRunningAverage);
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage);
 
       if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
@@ -93,11 +93,11 @@ namespace NetDeamon.apps.PVControl
     /// </summary>
     public bool ForceCharge { get; set; }
     /// <summary>
-    /// Enforce the set preferred minimal Soc, if not enforced it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
+    /// Enforce the set preferred minimal Soc, if not enforced, it's allowed to go down to AbsoluteMinimalSoC to reach cheaper prices or PV charge
     /// </summary>
     public bool EnforcePreferredSoC { get; set; }
     /// <summary>
-    /// UserSetting: Discharge if export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
+    /// UserSetting: Discharge if the export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
     /// </summary>
     public bool OpportunisticDischarge { get; set; }
     public int PreferredMinBatterySoC { get; set; }
@@ -118,11 +118,11 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
       {
-        _LoadRunningAverage.AddValue(load);
+        _loadRunningAverage.AddValue(load);
       }
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
-        _PVRunningAverage.AddValue(pv);
+        _pvRunningAverage.AddValue(pv);
       }
       if (entity.EntityId == PVCC_Config.DailyExportEnergyEntity?.EntityId && PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float export))
       {
@@ -146,15 +146,14 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == PVCC_Config.CurrentGridPowerEntity?.EntityId && PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
       {
-        _GridRunningAverage.AddValue(grid);
+        _gridRunningAverage.AddValue(grid);
       }
     }
     private InverterModes _currentMode;
-    public InverterModes ProposedMode
+
+    private void CalculateCurrentMode()
     {
-      get
-      {
-        DateTime now = DateTime.Now;
+      DateTime now = DateTime.Now;
         DateTime cheapestToday = CheapestImportWindowToday.StartTime;
         var need = NeedToChargeFromExternal;
 #if !DEBUG
@@ -162,7 +161,7 @@ namespace NetDeamon.apps.PVControl
         {
           ForceChargeReason = ForceChargeReasons.UserMode;
           _currentMode = OverrideMode;
-          return _currentMode;
+          return;
         }
 #endif
         // fix inverter problem, that it doesn't switch to battery if load is under ~200W
@@ -172,19 +171,16 @@ namespace NetDeamon.apps.PVControl
           _currentMode = InverterModes.force_discharge;
           ForceChargeReason = ForceChargeReasons.None;
           PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery!");
-          _GridRunningAverage.Reset();
-          return _currentMode;
+          _gridRunningAverage.Reset();
+          return;
         }
         
         // negative import price
         if (CurrentEnergyImportPriceTotal < 0)
         {
-          if (BatterySoc <= 95)
-            _currentMode = InverterModes.force_charge;
-          else
-            _currentMode = InverterModes.grid_only;
+          _currentMode = BatterySoc <= 95 ? InverterModes.force_charge : InverterModes.grid_only;
           ForceChargeReason = ForceChargeReasons.ImportPriceNegative;
-          return _currentMode;
+          return;
         }
 
         // negative export price
@@ -192,7 +188,7 @@ namespace NetDeamon.apps.PVControl
         {
           _currentMode = InverterModes.house_only;
           ForceChargeReason = ForceChargeReasons.ExportPriceNegative;
-          return _currentMode;
+          return;
         }
 
         // Opportunistic Discharge
@@ -201,12 +197,12 @@ namespace NetDeamon.apps.PVControl
           // prevent hysteresis on feedin priority 
           double maxSocDuration = (_currentMode == InverterModes.feedin_priority) ? 1.5 : 2.0;
           // prices for now and the next two hours
-          float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;;
+          float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;
           float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
           float priceNextHourAndOne = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 2)).Price;
           
           // we are in PV period and have positive PV 
-          if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200
+          if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _pvRunningAverage.GetAverage() > _loadRunningAverage.GetAverage() + 200
             && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal >= 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
             // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow (because of sinusoidal nature of prices)
             && priceNow >= priceNextHour && priceNextHour >= priceNextHourAndOne)
@@ -214,14 +210,14 @@ namespace NetDeamon.apps.PVControl
             // so we keep FeedInPriority mode
             _currentMode = InverterModes.feedin_priority;
             ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
-            return _currentMode;
+            return;
           }
 
           // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
           var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
           if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour))
           {
-            // default we stay at/above PreferredMinimalSoC
+            // by default we stay at/above PreferredMinimalSoC
             int minAllowedSoc = PreferredMinimalSoC;
             // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
             if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 4)))
@@ -232,21 +228,21 @@ namespace NetDeamon.apps.PVControl
             {
               _currentMode = InverterModes.force_discharge;
               ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
-              return _currentMode;
+              return;
             }
             // still no need to charge but battery already low, so we keep the inverter in feedin_priority mode as long as pv > load 
-            else if (!need.NeedToCharge && _PVRunningAverage.GetAverage() > _LoadRunningAverage.GetAverage() + 200)
+            else if (!need.NeedToCharge && _pvRunningAverage.GetAverage() > _loadRunningAverage.GetAverage() + 200)
             {
               _currentMode = InverterModes.feedin_priority;
               ForceChargeReason = ForceChargeReasons.OpportunisticDischarge;
-              return _currentMode;
+              return;
             }
-            // if it's running turn it off when we reached the minimum
+            // if it's running, turn it off when we reached the minimum
             else if (ForceChargeReason == ForceChargeReasons.OpportunisticDischarge && _currentMode == InverterModes.force_discharge && (need.EstimatedSoc <= minAllowedSoc + 2 || need.NeedToCharge))
             {
               _currentMode = InverterModes.normal;
               ForceChargeReason = ForceChargeReasons.None;
-              return _currentMode;
+              return;
             }
           }
         }
@@ -256,7 +252,7 @@ namespace NetDeamon.apps.PVControl
           // don't recalculate if charging already started
           if (ForceChargeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && _currentMode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
           {
-            return _currentMode;
+            return;
           }
           int socAtBestTime = Prediction_BatterySoC.Today.GetEntryAtTime(cheapestToday).Value;
           int chargeTime = CalculateChargingDurationA(socAtBestTime, 100, PVCC_Config.MaxBatteryChargePower);
@@ -267,7 +263,7 @@ namespace NetDeamon.apps.PVControl
           {
             if (rankBefore < rankAfter)
             {
-              if (PriceListImport.Where(p => p.StartTime == chargeStart.AddHours(-1)).FirstOrDefault().Price < ForceChargeMaxPrice)
+              if (PriceListImport.FirstOrDefault(p => p.StartTime == chargeStart.AddHours(-1)).Price < ForceChargeMaxPrice)
                 chargeStart = cheapestToday.AddMinutes(-(chargeTime - 50));
             }
           }
@@ -277,7 +273,7 @@ namespace NetDeamon.apps.PVControl
             //PVCC_Logger.LogInformation("ForceCharge cheapestToday starttime now: {start}", chargeStart);
             _currentMode = InverterModes.force_charge;
             ForceChargeReason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
-            return _currentMode;
+            return;
           }
         }
 
@@ -285,30 +281,38 @@ namespace NetDeamon.apps.PVControl
           need.NeedToCharge
           // stay 30 seconds away from extremes, to make sure we have the same time as the provider
           && DateTime.Now > BestChargeTime.StartTime.AddSeconds(30) && DateTime.Now < BestChargeTime.EndTime.AddSeconds(-30)
-          // don't charge over 98% SoC as it get's really slow and inefficient and don't start over 96%
+          // don't charge over 98% SoC as it gets really slow and inefficient and don't start over 96%
           && (_currentMode == InverterModes.force_charge && BatterySoc <= 98 || _currentMode != InverterModes.force_charge && BatterySoc <= 96)
           )
         {
-          // if chargetime is in the latest quarter of the current hour and next hour is cheaper, it's better to just import energy normally, without force charging
+          // if chargetime is in the latest quarter of the current hour and the next hour is cheaper, it's better to just import energy normally, without force charging
           if ((ForceChargeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || ForceChargeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
             CurrentPriceRank > GetPriceRank(now.AddHours(1)) && need.LatestChargeTime.Date == now.Date && need.LatestChargeTime.Hour == now.Hour && need.LatestChargeTime.Minute >= 45)
           {
             _currentMode = InverterModes.normal;
-            return _currentMode;
+            return;
           }
           else
           { 
             _currentMode = InverterModes.force_charge;
-            return _currentMode;
+            return;
           }
         }
 
-        _currentMode = InverterModes.normal;
+        //_currentMode = InverterModes.normal;
+    }
+    public InverterModes ProposedMode
+    {
+      get
+      {
+        CalculateCurrentMode();
         return _currentMode;
       }
     }
     private NeedToChargeResult _needToChargeFromExternalCache;
+#if !DEBUG
     private DateTime _lastCalculatedNeedToCharge;
+#endif
     /// <summary>
     /// returns:
     /// * Do we need to charge from grid
@@ -321,7 +325,7 @@ namespace NetDeamon.apps.PVControl
       {
         DateTime now = DateTime.Now;
 #if !DEBUG
-        // cache the result for 5 seconds, so that it's only calulated once per run
+        // cache the result for 5 seconds so that it's only calulated once per run
         if (_lastCalculatedNeedToCharge != default && Math.Abs((now - _lastCalculatedNeedToCharge).TotalSeconds) < 5)
         {
           return _needToChargeFromExternalCache;
@@ -360,7 +364,9 @@ namespace NetDeamon.apps.PVControl
           LatestChargeTime = minReached.Key.AddMinutes(-quarterhoursTilCharge*15), 
           EstimatedSoc = minReached.Value
         };
+#if !DEBUG
         _lastCalculatedNeedToCharge = now;
+#endif
         return _needToChargeFromExternalCache;
       }
     }
@@ -457,25 +463,16 @@ namespace NetDeamon.apps.PVControl
     /// <summary>
     /// Current State of Charge of the house battery in %
     /// </summary>
-    public int BatterySoc
-    {
-      get
-      {
-        return PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
-      }
-    }
+    public int BatterySoc => PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
+
     /// <summary>
     /// Minimal SoC of battery which may not be used normally
     /// if override is active, we try not to go below, but allow if it's cheaper to wait, but we can never go under AbsoluteMinimalSoC (Inverter set limit)
     /// </summary>
-    public int PreferredMinimalSoC
-    {
-      get
-      {
-        // Preferred can never be lower than AbsoluteMinimalSoC
-        return Math.Max(PreferredMinBatterySoC, AbsoluteMinimalSoC);
-      }
-    }
+    public int PreferredMinimalSoC =>
+      // Preferred can never be lower than AbsoluteMinimalSoC
+      Math.Max(PreferredMinBatterySoC, AbsoluteMinimalSoC);
+
     public int AbsoluteMinimalSoC
     {
       get
@@ -487,13 +484,8 @@ namespace NetDeamon.apps.PVControl
         return minAllowedSoC + 2;
       }
     }
-    private float InverterEfficiency
-    {
-      get
-      {
-        return PVCC_Config.InverterEfficiency != default ? PVCC_Config.InverterEfficiency : _defaultInverterEfficiency;
-      }
-    }
+    private float InverterEfficiency => PVCC_Config.InverterEfficiency != default ? PVCC_Config.InverterEfficiency : _defaultInverterEfficiency;
+
     /// <summary>
     /// BatteryCapacity in Wh
     /// </summary>
@@ -508,13 +500,13 @@ namespace NetDeamon.apps.PVControl
       }
     }
     /// <summary>
-    /// return the batterystatus acoording to the current average charge power
+    /// return the batterystatus according to the current average charge power
     /// </summary>
     public BatteryStatuses BatteryStatus
     {
       get
       {
-        if (CurrentAverageBatteryChargeDischargePower > -10 && CurrentAverageBatteryChargeDischargePower < 10)
+        if (CurrentAverageBatteryChargeDischargePower is > -10 and < 10)
           return BatteryStatuses.idle;
         else if (CurrentAverageBatteryChargeDischargePower > 0)
           return BatteryStatuses.charging;
@@ -531,20 +523,10 @@ namespace NetDeamon.apps.PVControl
     /// <summary>
     /// Currently usable energy in battery down to <see cref="AbsoluteMinimalSoC"/> or <see cref="PreferredMinimalSoC"/> depending on <see cref="EnforcePreferredSoC"/> in Wh
     /// </summary>
-    public int UsableBatteryEnergy
-    {
-      get
-      {
-        return CalculateBatteryEnergyAtSoC(BatterySoc, EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC);
-      }
-    }
-    public int ReserveBatteryEnergy
-    {
-      get
-      {
-        return CalculateBatteryEnergyAtSoC(EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC, 0);
-      }
-    }
+    public int UsableBatteryEnergy => CalculateBatteryEnergyAtSoC(BatterySoc, EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC);
+
+    public int ReserveBatteryEnergy => CalculateBatteryEnergyAtSoC(EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC, 0);
+
     public DateTime FirstRelevantPVEnergyToday
     {
       get
@@ -581,7 +563,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        if (CurrentAverageBatteryChargeDischargePower > -10 && CurrentAverageBatteryChargeDischargePower < 10)
+        if (CurrentAverageBatteryChargeDischargePower is > -10 and < 10)
           return 0;
         else if (CurrentAverageBatteryChargeDischargePower > 0)
           return CalculateChargingDurationWh(BatterySoc, 100, CurrentAverageBatteryChargeDischargePower);
@@ -591,41 +573,16 @@ namespace NetDeamon.apps.PVControl
           return 0;
       }
     }
-    public int EstimatedChargeTimeAtMinima
-    {
-      get
-      {
-        return CalculateChargingDurationA(NeedToChargeFromExternal.EstimatedSoc, 100, PVCC_Config.MaxBatteryChargePower);
-      }
-    }
-    public int CurrentAverageBatteryChargeDischargePower
-    {
-      get
-      {
-        return _battChargeAverage.GetAverage();
-      }
-    }
-    public int CurrentAverageHouseLoad
-    {
-      get
-      {
-        return _LoadRunningAverage.GetAverage();
-      }
-    }
-    public int CurrentAveragePVPower
-    {
-      get
-      {
-        return _PVRunningAverage.GetAverage();
-      }
-    }
-    public int CurrentAverageGridPower
-    {
-      get
-      {
-        return _GridRunningAverage.GetAverage() * -1;
-      }
-    }
+    public int EstimatedChargeTimeAtMinima => CalculateChargingDurationA(NeedToChargeFromExternal.EstimatedSoc, 100, PVCC_Config.MaxBatteryChargePower);
+
+    public int CurrentAverageBatteryChargeDischargePower => _battChargeAverage.GetAverage();
+
+    public int CurrentAverageHouseLoad => _loadRunningAverage.GetAverage();
+
+    public int CurrentAveragePVPower => _pvRunningAverage.GetAverage();
+
+    public int CurrentAverageGridPower => _gridRunningAverage.GetAverage() * -1;
+
     public PriceTableEntry BestChargeTime
     {
       get
@@ -663,19 +620,19 @@ namespace NetDeamon.apps.PVControl
     {
       if (minSoc < 0)
         minSoc = PreferredMinimalSoC;
-      int pred_soc_at_startTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(startTime).Value;
-      int diff = pred_soc_at_startTime - startSoc;
-      var pred_new = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
-      return pred_new.FirstUnderOrDefault(minSoc, start: startTime).Key;
+      int pred_Soc_At_StartTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(startTime).Value;
+      int diff = pred_Soc_At_StartTime - startSoc;
+      var pred_New = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
+      return pred_New.FirstUnderOrDefault(minSoc, start: startTime).Key;
     }
     public int CalculateSocNeedeedToReachTime(DateTime startTime, DateTime endTime, int minSoc = -1)
     {
       if (minSoc < 0)
         minSoc = PreferredMinimalSoC;
-      int pred_soc_at_endTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(endTime).Value;
-      int diff = pred_soc_at_endTime - minSoc;
-      var pred_new = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
-      return pred_new.GetEntryAtTime(startTime).Value;
+      int pred_Soc_At_EndTime = Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(endTime).Value;
+      int diff = pred_Soc_At_EndTime - minSoc;
+      var pred_New = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
+      return pred_New.GetEntryAtTime(startTime).Value;
     }
     private List<PriceTableEntry> UpcomingPriceList
     {
@@ -715,28 +672,17 @@ namespace NetDeamon.apps.PVControl
     }
     private int GetPriceRank(DateTime dateTime)
     {
-      var priceRankAtTime = PriceListRanked.Where(r => r.Value.StartTime.Hour == dateTime.Hour).FirstOrDefault();
+      var priceRankAtTime = PriceListRanked.FirstOrDefault(r => r.Value.StartTime.Hour == dateTime.Hour);
       return priceRankAtTime.Key;
     }
     private int GetPricePercentage(DateTime dateTime)
     {
-      var pricePercentageAtTime = PriceListPercentage.Where(r => r.Item2.StartTime.Hour == dateTime.Hour).FirstOrDefault();
-      return pricePercentageAtTime is null ? -1 : pricePercentageAtTime.Item1;
+      var pricePercentageAtTime = PriceListPercentage.FirstOrDefault(r => r.Item2.StartTime.Hour == dateTime.Hour);
+      return pricePercentageAtTime?.Item1 ?? -1;
     }
-    public int CurrentPriceRank
-    {
-      get
-      {
-        return GetPriceRank(DateTime.Now);
-      }
-    }
-    public int CurrentPricePercentage
-    {
-      get
-      {
-        return GetPricePercentage(DateTime.Now);
-      }
-    }
+    public int CurrentPriceRank => GetPriceRank(DateTime.Now);
+
+    public int CurrentPricePercentage => GetPricePercentage(DateTime.Now);
     private List<PriceTableEntry> _priceListCache;
     private void UpdatePriceList()
     {
@@ -809,37 +755,16 @@ namespace NetDeamon.apps.PVControl
       get
       {
         var now = DateTime.Now;
-        return PriceListNetto.Where(p => p.StartTime <= now && p.EndTime >= now).FirstOrDefault().Price;
+        return PriceListNetto.FirstOrDefault(p => p.StartTime <= now && p.EndTime >= now).Price;
       }
     }
-    public float CurrentEnergyImportPriceTotal
-    {
-      get
-      {
-        return CalculateBruttoPriceImport(CurrentEnergyPriceNetto, true);
-      }
-    }
-    public float CurrentEnergyImportPriceEnergyOnly
-    {
-      get
-      {
-        return CalculateBruttoPriceImport(CurrentEnergyPriceNetto, false);
-      }
-    }
-    public float CurrentEnergyImportPriceNetworkOnly
-    {
-      get
-      {
-        return PVCC_Config.ImportPriceNetwork * (1 + PVCC_Config.ImportPriceTax);
-      }
-    }
-    public float CurrentEnergyExportPriceTotal
-    {
-      get
-      {
-        return CalculateBruttoPriceExport(CurrentEnergyPriceNetto, true);
-      }
-    }
+    public float CurrentEnergyImportPriceTotal => CalculateBruttoPriceImport(CurrentEnergyPriceNetto, true);
+
+    public float CurrentEnergyImportPriceEnergyOnly => CalculateBruttoPriceImport(CurrentEnergyPriceNetto, false);
+
+    public float CurrentEnergyImportPriceNetworkOnly => PVCC_Config.ImportPriceNetwork * (1 + PVCC_Config.ImportPriceTax);
+
+    public float CurrentEnergyExportPriceTotal => CalculateBruttoPriceExport(CurrentEnergyPriceNetto, true);
     public float SumEnergyImportCostEnergyOnly { get; set; } = 0.0f;
     public float SumEnergyImportCostNetworkOnly { get; set; } = 0.0f;
     public float SumEnergyImportCostTotal { get; set; } = 0.0f;
@@ -956,7 +881,7 @@ namespace NetDeamon.apps.PVControl
     private void UpdateSnapshots()
     {
       DateTime now = DateTime.Now;
-      if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || now.Hour == 0 && now.Minute == 1 || (now - LastSnapshotUpdate).TotalMinutes > 24 * 60)
+      if (_dailySoCPrediction.Count == 0 || _dailyChargePrediction.Count == 0 || _dailyDischargePrediction.Count == 0 || now is { Hour: 0, Minute: 1 } || (now - LastSnapshotUpdate).TotalMinutes > 24 * 60)
       {
         _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
         _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();
