@@ -167,9 +167,11 @@ namespace NetDeamon.apps.PVControl
 #if !DEBUG
       if (OverrideMode != InverterModes.automatic)
       {
-        ForceChargeReason = ForceChargeReasons.UserMode;
-        _currentMode = OverrideMode;
-        return;
+        var mode = OverrideMode;
+        var reason = ForceChargeReasons.UserMode;
+        if (currentMode.Mode != mode && debugOut)
+          PVCC_Logger.LogDebug("Override mode active - Switching to {InverterModes}", mode);
+        return new InverterState(mode, reason);
       }
 #endif
       // fix inverter problem, that it doesn't switch to battery if load is under ~200W
