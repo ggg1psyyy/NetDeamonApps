@@ -157,13 +157,31 @@ namespace NetDeamon.apps.PVControl
       {
         PVCC_Logger.LogInformation("Inverter RunMode changed from {CurrentInverterRunMode} to {InverterStatus}", _currentInverterRunMode, inverterStatus);
         _currentInverterRunMode = inverterStatus;
+        // if the inverter switches back to normal mode, we send the reset signal before switching back to the selected mode
+        if (_currentInverterRunMode == PVCC_Config.InverterStatusNormalString)
+        {
+          _resetCounter = 2;
+          PVCC_Logger.LogInformation("Inverter returned to normal run mode, sending {ResetCounter} reset signal(s)", _resetCounter);
+          _currentMode = new InverterState(InverterModes.reset, ForceChargeReasons.None);
+        }
       }
     }
-    private InverterState _currentMode;
+
+    private int _resetCounter = 0;
+    private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None);
     private InverterState CalculateNewInverterMode(InverterState currentMode, NeedToChargeResult need, bool debugOut = false)
     {
       DateTime now = DateTime.Now;
       DateTime cheapestToday = CheapestImportWindowToday.StartTime;
+      
+      // send the reset signal until the counter reaches 0
+      if (_currentMode.Mode == InverterModes.reset && _resetCounter > 0)
+      {
+        PVCC_Logger.LogDebug("Reset signal active (Counter: {count}) - Switching to {InverterModes}", _resetCounter, InverterModes.reset);
+        _resetCounter--;
+        return new InverterState(InverterModes.reset, ForceChargeReasons.None);
+      }
+      
 #if !DEBUG
       if (OverrideMode != InverterModes.automatic)
       {
@@ -174,11 +192,11 @@ namespace NetDeamon.apps.PVControl
         return new InverterState(mode, reason);
       }
 #endif
-      // fix inverter problem, that it doesn't switch to battery if load is under ~200W
+      // fix the inverter problem that it doesn't switch to battery if the load is under ~200W
       if (currentMode.Mode == InverterModes.normal && CurrentAverageGridPower is > 50 and < 300 && BatterySoc > PreferredMinimalSoC)
       {
         // we just need to switch for a few seconds to force_discharge, afterwards the inverter keeps using the battery  
-        PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery!");
+        PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery! Grid: {grid}, PV: {pv}, Load: {load}, Soc: {soc}", CurrentAverageGridPower, CurrentAveragePVPower, CurrentAverageHouseLoad, BatterySoc);
         _gridRunningAverage.Reset();
         return new InverterState(InverterModes.force_discharge, ForceChargeReasons.None);
       }
@@ -319,13 +337,15 @@ namespace NetDeamon.apps.PVControl
         else
         { 
           var mode = InverterModes.force_charge;
-          var reason = ForceChargeReasons.None;
+          var reason = need.EstimatedSoc <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
           if (currentMode.Mode != mode && debugOut)
             PVCC_Logger.LogDebug("NeedToCharge now - Switching to {InverterModes}", mode);
           return new InverterState(mode, reason);
         }
       }
-      return currentMode;
+      if (currentMode.Mode != InverterModes.normal && debugOut)
+        PVCC_Logger.LogDebug("No special situation - Switching to {InverterModes}", InverterModes.normal);
+      return new InverterState(InverterModes.normal, ForceChargeReasons.None);
     }
     public InverterModes ProposedMode
     {
@@ -358,9 +378,7 @@ namespace NetDeamon.apps.PVControl
           return _needToChargeFromExternalCache;
         }
 #endif
-        ForceChargeReason = ForceChargeReasons.None;
         var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
-
         int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
         if (_currentMode.Mode == InverterModes.force_charge)
           // while charging increase minCharge to prevent hysteresis
@@ -381,27 +399,21 @@ namespace NetDeamon.apps.PVControl
 
         // We need to force charge if we estimate to fall to minCharge before we reach max or max < 100
         bool needCharge = minUnderDefined && (minBeforeMax || !maxOver100);
-        if (needCharge)
-          ForceChargeReason = minSoC <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
         // be very pessimistic and substract 10% of the targettime, so we are relatively sure to reach the next price minima 
         int quarterhoursTilCharge = (int)(((minReached.Key - now).TotalMinutes * 0.1)/ 15);
-        _needToChargeFromExternalCache = new NeedToChargeResult()
-        {
-          NeedToCharge = needCharge, 
-          LatestChargeTime = minReached.Key.AddMinutes(-quarterhoursTilCharge*15), 
-          EstimatedSoc = minReached.Value
-        };
+        _needToChargeFromExternalCache = new NeedToChargeResult(
+          needToCharge: needCharge,
+          latestChargeTime: minReached.Key.AddMinutes(-quarterhoursTilCharge * 15),
+          estimatedSoc: minReached.Value);
 #if !DEBUG
         _lastCalculatedNeedToCharge = now;
 #endif
         return _needToChargeFromExternalCache;
       }
     }
-    private ForceChargeReasons _forceChargeReason;
     public ForceChargeReasons ForceChargeReason
     {
-      get => OverrideMode == InverterModes.automatic ? _forceChargeReason : ForceChargeReasons.UserMode;
-      private set => _forceChargeReason = value;
+      get => _currentMode.ModeReason;
     }
     public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
     /// <summary>

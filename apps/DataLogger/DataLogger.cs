@@ -104,7 +104,7 @@ namespace PVControl
     /// <returns></returns>
     private async Task ScheduleRun()
     {
-      _logger.LogDebug("Entered ScheduleRun");
+      _logger.LogTrace("Entered ScheduleRun");
       DateTime now = DateTime.Now;
       DateTime lastRunDaily = await GetLastLogTimeStamp("daily");
       DateTime lastRunHourly = await GetLastLogTimeStamp("hourly");
@@ -149,7 +149,7 @@ namespace PVControl
         await InsertDaily(lastRunDaily);
         lastRunDaily = lastRunDaily.AddDays(1);
       }
-      _logger.LogDebug("Finished ScheduleRun");
+      _logger.LogTrace("Finished ScheduleRun");
     }
     private async Task<DateTime> GetLastLogTimeStamp(string tableName)
     {
@@ -289,7 +289,7 @@ namespace PVControl
         _ = await insertCommand.ExecuteNonQueryAsync();
         await con.CloseAsync();
       }
-      _logger.LogInformation("Finished storing values");
+      _logger.LogTrace("Finished storing values");
     }
     private async void AddFloatTask(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
     {

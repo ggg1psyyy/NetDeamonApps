@@ -13,14 +13,19 @@ namespace NetDeamon.apps.PVControl
     public bool NeedToCharge;
     public DateTime LatestChargeTime;
     public int EstimatedSoc;
+
+    public NeedToChargeResult(int estimatedSoc, DateTime latestChargeTime, bool needToCharge)
+    {
+      EstimatedSoc = estimatedSoc;
+      LatestChargeTime = latestChargeTime;
+      NeedToCharge = needToCharge;
+    }
   }
 
   public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None)
   {
     public InverterModes Mode = mode;
     public ForceChargeReasons ModeReason = modeReason;
-
-    //public String CurrentInverterStatus;
   }
   public class PVControlCommon
   {
