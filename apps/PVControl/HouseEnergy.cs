@@ -247,7 +247,7 @@ namespace NetDeamon.apps.PVControl
 
         // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
         var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
-        if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour))
+        if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour) && CurrentEnergyExportPriceTotal / 100 >= ForceChargeMaxPrice)
         {
           // by default we stay at/above PreferredMinimalSoC
           int minAllowedSoc = PreferredMinimalSoC;
@@ -411,10 +411,7 @@ namespace NetDeamon.apps.PVControl
         return _needToChargeFromExternalCache;
       }
     }
-    public ForceChargeReasons ForceChargeReason
-    {
-      get => _currentMode.ModeReason;
-    }
+    public ForceChargeReasons ForceChargeReason => _currentMode.ModeReason;
     public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
     /// <summary>
     /// Tells if it's a good time to run heavy loads now

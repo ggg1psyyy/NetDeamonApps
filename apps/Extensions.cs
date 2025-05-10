@@ -289,7 +289,7 @@ namespace NetDeamon.apps
         tempList = tempList.Where(l => l.Key >= start).ToDictionary();
       if (end != default)
         tempList = tempList.Where(l => l.Key <= end).ToDictionary();
-      return tempList.Where(l => l.Value <= underValue).FirstOrDefault();
+      return tempList.FirstOrDefault(l => l.Value <= underValue);
     }
     public static KeyValuePair<DateTime, int> GetEntryAtTime(this Dictionary<DateTime, int> list, DateTime time)
     {
