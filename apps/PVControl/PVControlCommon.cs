@@ -22,10 +22,11 @@ namespace NetDeamon.apps.PVControl
     }
   }
 
-  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None)
+  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true)
   {
     public InverterModes Mode = mode;
     public ForceChargeReasons ModeReason = modeReason;
+    public bool BatteryChargeEnable = batteryChargeEnable;
   }
   public class PVControlCommon
   {

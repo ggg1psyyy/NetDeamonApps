@@ -210,15 +210,25 @@ namespace NetDeamon.apps.PVControl
           PVCC_Logger.LogDebug("Negative Importprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyImportPriceTotal, mode);
         return new InverterState(mode, reason);
       }
-
+      
       // negative export price
       if (CurrentEnergyExportPriceTotal < 0)
       {
         var mode = InverterModes.house_only;
         var reason = ForceChargeReasons.ExportPriceNegative;
+        // disable battery charge if there will be negative import prices coming up today
+        bool battChargeEnable = !NegativeImportPriceUpcomingToday;
+        if (currentMode.BatteryChargeEnable != battChargeEnable && debugOut)
+        {
+          if (battChargeEnable)
+            PVCC_Logger.LogDebug("Enabling battery charge again");
+          else
+            PVCC_Logger.LogDebug("Negative import price incoming, switching battery charge off");
+        }
+
         if (currentMode.Mode != mode && debugOut)
           PVCC_Logger.LogDebug("Negative Exportprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyExportPriceTotal, mode);
-        return new InverterState(mode, reason);
+        return new InverterState(mode, reason, battChargeEnable);
       }
 
       // Opportunistic Discharge
@@ -247,9 +257,10 @@ namespace NetDeamon.apps.PVControl
 
         // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
         var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
-        if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour) && CurrentEnergyExportPriceTotal / 100 >= ForceChargeMaxPrice)
+        if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour) &&
+            (CurrentEnergyExportPriceTotal >= ForceChargeMaxPrice || NegativeImportPriceUpcomingToday))
         {
-          // by default we stay at/above PreferredMinimalSoC
+          // by default, we stay at/above PreferredMinimalSoC
           int minAllowedSoc = PreferredMinimalSoC;
           // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
           if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 4)))
@@ -274,7 +285,7 @@ namespace NetDeamon.apps.PVControl
             return new InverterState(mode, reason);
           }
           // if it's running, turn it off when we reached the minimum
-          else if (ForceChargeReason == ForceChargeReasons.OpportunisticDischarge && currentMode.Mode == InverterModes.force_discharge && (need.EstimatedSoc <= minAllowedSoc + 2 || need.NeedToCharge))
+          else if (currentMode.ModeReason == ForceChargeReasons.OpportunisticDischarge && currentMode.Mode == InverterModes.force_discharge && (need.EstimatedSoc <= minAllowedSoc + 2 || need.NeedToCharge))
           {
             var mode = InverterModes.normal;
             var reason = ForceChargeReasons.None;
@@ -288,7 +299,7 @@ namespace NetDeamon.apps.PVControl
       if (ForceCharge && now > cheapestToday.AddHours(-1) && now < cheapestToday.AddHours(2))
       {
         // don't recalculate if charging already started
-        if (ForceChargeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && currentMode.Mode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
+        if (currentMode.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && currentMode.Mode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
         {
           return currentMode;
         }
@@ -325,7 +336,7 @@ namespace NetDeamon.apps.PVControl
         )
       {
         // if chargetime is in the latest quarter of the current hour and the next hour is cheaper, it's better to just import energy normally, without force charging
-        if ((ForceChargeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || ForceChargeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
+        if ((currentMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || currentMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
           CurrentPriceRank > GetPriceRank(now.AddHours(1)) && need.LatestChargeTime.Date == now.Date && need.LatestChargeTime.Hour == now.Hour && need.LatestChargeTime.Minute >= 45)
         {
           var mode = InverterModes.normal;
@@ -347,13 +358,13 @@ namespace NetDeamon.apps.PVControl
         PVCC_Logger.LogDebug("No special situation - Switching to {InverterModes}", InverterModes.normal);
       return new InverterState(InverterModes.normal, ForceChargeReasons.None);
     }
-    public InverterModes ProposedMode
+    public InverterState ProposedState
     {
       get
       {
         var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, true);
         _currentMode = newMode;
-        return _currentMode.Mode;
+        return _currentMode;
       }
     }
     private NeedToChargeResult _needToChargeFromExternalCache;
@@ -411,7 +422,6 @@ namespace NetDeamon.apps.PVControl
         return _needToChargeFromExternalCache;
       }
     }
-    public ForceChargeReasons ForceChargeReason => _currentMode.ModeReason;
     public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
     /// <summary>
     /// Tells if it's a good time to run heavy loads now
@@ -553,6 +563,7 @@ namespace NetDeamon.apps.PVControl
 
       }
     }
+    
     /// <summary>
     /// remaining PV yield forecast for today in WH
     /// </summary>
@@ -628,6 +639,16 @@ namespace NetDeamon.apps.PVControl
           return UpcomingPriceList.Where(p => p.StartTime <= need.LatestChargeTime).OrderBy(p => p.Price).First();
         else
           return UpcomingPriceList.OrderBy(p => p.Price).First();
+      }
+    }
+
+    public bool NegativeImportPriceUpcomingToday
+    {
+      get
+      {
+        var now = DateTime.Now;
+        var negativeImportPrices = PriceListImport.Where(p => p.StartTime.Date == now.Date && p.Price < 0).ToList();
+        return negativeImportPrices.Count > 0 && negativeImportPrices.FirstOrDefault().StartTime > now;
       }
     }
     private int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)

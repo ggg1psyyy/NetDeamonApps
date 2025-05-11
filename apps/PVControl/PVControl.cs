@@ -20,6 +20,7 @@ namespace NetDeamon.apps.PVControl
     private HouseEnergy _house = null!;
     #region Created Entities
     private Entity _modeEntity = null!;
+    private Entity _battChargeEnabledEntity = null!;
     private Entity _battery_RemainingTimeEntity = null!;
     private Entity _battery_RemainingEnergyEntity = null!;
     private Entity _needToChargeFromGridTodayEntity = null!;
@@ -118,7 +119,7 @@ namespace NetDeamon.apps.PVControl
 #endif 
 
 #if DEBUG
-        var x = _house.ProposedMode;
+        var x = _house.ProposedState;
         _house.UpdatePredictions(true);
 #endif
 
@@ -194,17 +195,19 @@ namespace NetDeamon.apps.PVControl
         _house.UpdatePredictions();
       }
       PVCC_Logger.LogTrace("Finished Updating Predictions");
+      var inverterState = _house.ProposedState;
       #region Mode
-      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, _house.ProposedMode.ToString());
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
       var nextCheapest = _house.BestChargeTime;
       var attr_Mode = new
       {
         next_charge_window_start = nextCheapest.StartTime.ToISO8601(),
         next_charge_window_end = nextCheapest.EndTime.ToISO8601(),
         price = nextCheapest.Price.ToString(CultureInfo.InvariantCulture),
-        charge_Reason = _house.ForceChargeReason.ToString(),
+        charge_Reason = inverterState.ModeReason.ToString(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
+      await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       #endregion
       #region RunHeavyLoads
       await PVCC_EntityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
@@ -529,6 +532,10 @@ namespace NetDeamon.apps.PVControl
       _modeEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.normal.ToString(),
+        reRegister: reset);
+      
+      _battChargeEnabledEntity = await RegisterSensor("binary_sensor.pv_control_battery_charging_enabled", "Battery Charging Eabled", "power", "mdi:power-plug-battery-outline",
+        defaultValue: "ON",
         reRegister: reset);
 
       _RunHeavyLoadsNowEntity = await RegisterSensor("sensor.pv_control_run_heavyloads_now", "Run heavy loads now", "ENUM", "mdi:ev-station",
