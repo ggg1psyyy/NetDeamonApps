@@ -168,14 +168,13 @@ namespace NetDeamon.apps.PVControl
     }
 
     private int _resetCounter = 0;
-    private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None);
-    private InverterState CalculateNewInverterMode(InverterState currentMode, NeedToChargeResult need, bool debugOut = false)
+    private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
+    private InverterState CalculateNewInverterMode(InverterState currentMode, NeedToChargeResult need, DateTime now, bool debugOut = false)
     {
-      DateTime now = DateTime.Now;
       DateTime cheapestToday = CheapestImportWindowToday.StartTime;
       
       // send the reset signal until the counter reaches 0
-      if (_currentMode.Mode == InverterModes.reset && _resetCounter > 0)
+      if (currentMode.Mode == InverterModes.reset && _resetCounter > 0)
       {
         PVCC_Logger.LogDebug("Reset signal active (Counter: {count}) - Switching to {InverterModes}", _resetCounter, InverterModes.reset);
         _resetCounter--;
@@ -362,7 +361,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, true);
+        var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, DateTime.Now, true);
         _currentMode = newMode;
         return _currentMode;
       }
