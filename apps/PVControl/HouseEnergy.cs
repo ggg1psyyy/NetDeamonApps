@@ -361,7 +361,11 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, DateTime.Now, true);
+        var now = DateTime.Now;
+        #if DEBUG
+        now = now.Date.AddHours(7).AddMinutes(5);
+        #endif
+        var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, now, true);
         _currentMode = newMode;
         return _currentMode;
       }

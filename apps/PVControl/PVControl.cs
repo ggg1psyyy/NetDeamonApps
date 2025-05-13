@@ -563,7 +563,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€",
-          state_class = "total_increasing",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
@@ -572,7 +572,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€",
-          state_class = "total_increasing",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
@@ -581,7 +581,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€",
-          state_class = "total_increasing",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
@@ -590,7 +590,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€",
-          state_class = "total_increasing",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
