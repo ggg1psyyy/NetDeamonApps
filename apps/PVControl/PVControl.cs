@@ -74,7 +74,7 @@ namespace NetDeamon.apps.PVControl
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
-      if (await RegisterControlSensors())
+      if (await RegisterControlSensors(false))
       {
         _house = new HouseEnergy();
         #region Load settings from HA if available
@@ -608,7 +608,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€/kWh",
-          state_class = "measurement",
+          state_class = "total", // state class 'measurement' which is impossible considering device class ('monetary') ... why the hell ever ...
         },
         defaultValue: "0",
         reRegister: reset);
@@ -617,7 +617,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           unit_of_measurement = "€/kWh",
-          state_class = "measurement",
+          state_class = "total",
         },
         defaultValue: "0",
         reRegister: reset);
