@@ -203,7 +203,7 @@ namespace NetDeamon.apps.PVControl
       // negative import price
       if (CurrentEnergyImportPriceTotal < 0)
       {
-        var mode = BatterySoc <= 95 ? InverterModes.force_charge : InverterModes.grid_only;
+        var mode = BatterySoc <= 95 ? InverterModes.force_charge_grid_only : InverterModes.grid_only;
         var reason = ForceChargeReasons.ImportPriceNegative;
         if (currentMode.Mode != mode && debugOut)
           PVCC_Logger.LogDebug("Negative Importprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyImportPriceTotal, mode);

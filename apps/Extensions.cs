@@ -25,6 +25,7 @@ namespace NetDeamon.apps
     automatic,
     normal,
     force_charge,
+    force_charge_grid_only,
     grid_only,
     force_discharge,
     feedin_priority,
