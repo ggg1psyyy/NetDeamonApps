@@ -10,7 +10,7 @@ NetDeamon.apps.PVControl.PVConfig:
     - sensor.epex_spot_data_price_3
   ImportPriceMultiplier: 1.0
   ImportPriceAddition: 1.2
-  ImportPriceNetwork: 7.07
+  ImportPriceNetwork: 10.0
   ImportPriceTax: 0.2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.epex_spot_data_price
