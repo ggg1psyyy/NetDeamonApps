@@ -485,7 +485,7 @@ namespace NetDeamon.apps.PVControl
         {
           PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float totalImportEnergy);
           PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
-          var basePriceEntry = _house.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.EndTime < _nextQuarterHour);
+          var basePriceEntry = _house.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);
           var basePrice = basePriceEntry.Price;
           Costs currentCost = new Costs
           {
@@ -502,9 +502,9 @@ namespace NetDeamon.apps.PVControl
           };
           await db.InsertAsync(currentCost);
           _lastCostsEntry = currentCost;
+          PVCC_Logger.LogDebug("Saved energy costs to DB - PriceEntry: {pr}", basePriceEntry.StartTime + " - " + basePriceEntry.EndTime);
         }
         _nextQuarterHour = now.GetNextQuarterHour();
-        PVCC_Logger.LogDebug("Saved energy costs to DB");
       }
       #endregion
       PVCC_Logger.LogTrace("Leave Schedule");
