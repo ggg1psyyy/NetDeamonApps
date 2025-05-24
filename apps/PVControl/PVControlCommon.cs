@@ -22,6 +22,13 @@ namespace NetDeamon.apps.PVControl
     }
   }
 
+  public struct SystemState(int pVPower, int houseLoad, int soC, InverterState inverterState, int pvPower)
+  {
+    public int PVPower = pvPower;
+    public int HouseLoad = houseLoad;
+    public int SoC = soC;
+    public InverterState InverterState = inverterState;
+  }
   public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true)
   {
     public InverterModes Mode = mode;
@@ -99,11 +106,12 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        if (System.IO.File.Exists(DBLocation))
-          return DBLocation;
-        // problems with debugging under rider, as it can't find the DB without full path entry
+        #if DEBUG
         var path = Assembly.GetExecutingAssembly().Location;
         return System.IO.Path.GetDirectoryName(path) + "\\" + DBLocation;
+        #else
+        return DBLocation;
+        #endif
       }
     }
     public List<Entity> CurrentImportPriceEntities { get; set; } = null!;
@@ -159,5 +167,20 @@ namespace NetDeamon.apps.PVControl
         return maxPower;
       }
     }
+    public string EnergyCostDBLocation { get; set; } = default!;
+    public string EnergyCostDBFullLocation
+    {
+      get
+      {
+        #if DEBUG
+        var path = Assembly.GetExecutingAssembly().Location;
+        return System.IO.Path.GetDirectoryName(path) + "\\" + EnergyCostDBLocation;
+        #else
+        return EnergyCostDBLocation;
+        #endif
+      }
+    }
+    public Entity TotalImportEnergyEntity { get; set; } = null!;
+    public Entity TotalExportEnergyEntity { get; set; } = null!;
   }
 }

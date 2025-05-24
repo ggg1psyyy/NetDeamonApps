@@ -20,6 +20,8 @@
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </None>
+        <Compile Remove="apps\PVControl\Simulate.cs" />
+        <None Include="apps\PVControl\Simulate.cs" />
     </ItemGroup>
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
         <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon4' folder for add-on or your custom folder to deploy." Importance="high" />
@@ -27,7 +29,7 @@
         
     <ItemGroup>
         <PackageReference Include="linq2db.SQLite.MS" Version="5.4.1" />
-        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.4" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.5" />
         <PackageReference Include="NetDaemon.AppModel" Version="25.18.1" />
         <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="25.18.1" />
         <PackageReference Include="NetDaemon.Runtime" Version="25.18.1" />
@@ -36,9 +38,5 @@
         <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="25.18.1" />
         <PackageReference Include="NetDaemon.Extensions.Logging" Version="25.18.1" />
         <PackageReference Include="NetDaemon.Extensions.Tts" Version="25.18.1" />
-    </ItemGroup>
-        
-    <ItemGroup>
-      <Folder Include="apps\PVControl\Db\" />
     </ItemGroup>
 </Project>

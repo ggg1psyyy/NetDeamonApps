@@ -59,7 +59,11 @@ NetDeamon.apps.PVControl.PVConfig:
   MinBatterySoCEntity: sensor.solax_battery_actual_min_soc
   # Min SoC to keep (%) direct value (if both are used, sensor has priority)
   #MinBatterySoCValue: 10
-
+  # Energycost logging
+  # DB location
+  EnergyCostDBLocation: "apps/PVControl/energy_costs.db"
+  TotalImportEnergyEntity: sensor.solax_grid_import_total
+  TotalExportEnergyEntity: sensor.solax_grid_export_total
   # HeatpumpManager
   # current Load (W)
   HeatPumpLoadEntity: sensor.wp_power_total

@@ -6,6 +6,9 @@ using System.Linq;
 using System.Reactive.Concurrency;
 using System.Threading;
 using System.Threading.Tasks;
+using LinqToDB;
+using Microsoft.Data.Sqlite;
+using PVControl;
 using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl
@@ -54,7 +57,11 @@ namespace NetDeamon.apps.PVControl
     private Entity _bestImportPriceEntity = null!;
     private Entity _enableOpportunisticExport = null!;
     #endregion
-
+    private CancellationToken _cancelToken;
+    private String _energyLogDBConnectionString = "Data Source=";
+    private bool _logEnergy = false;
+    private DateTime _nextQuarterHour = DateTime.Now.GetNextQuarterHour();
+    private Costs _lastCostsEntry = new();
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
@@ -104,7 +111,42 @@ namespace NetDeamon.apps.PVControl
           _house.OpportunisticDischarge = enableOpp;
 
         #endregion
-
+        #region Cost Logging DB
+        // only enable if DB location is set
+        if (!string.IsNullOrWhiteSpace(PVCC_Config.EnergyCostDBLocation))
+        {
+          _energyLogDBConnectionString += PVCC_Config.EnergyCostDBFullLocation;
+          PVCC_Logger.LogInformation("Energy Log DB Location: {loc} - Energy logging enabled", PVCC_Config.EnergyCostDBFullLocation);
+          await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
+          {
+            db.CreateTable<Costs>(tableOptions: TableOptions.CheckExistence);
+            _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault();
+            if (_lastCostsEntry is null)
+            {
+              _lastCostsEntry = new Costs
+              {
+                Timestamp = DateTime.Now,
+                GridExport = 0,
+                GridImport = 0,
+                GridExportTotal = PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float export) ? export : 0.0f,
+                GridImportTotal = PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float import) ? import : 0.0f,
+                BasePrice = 0,
+                ExportPriceProvider = 0,
+                ExportPriceTotal = 0,
+                ImportPriceProvider = 0,
+                ImportPriceTotal = 0,
+              };
+              db.Insert(_lastCostsEntry);
+              PVCC_Logger.LogInformation("No existing entries found in DB, creating new entry with timestamp {ts}", _lastCostsEntry.Timestamp);
+            }
+            else
+            {
+              PVCC_Logger.LogInformation("Last timestamp found: {ts}, continuing from there", _lastCostsEntry.Timestamp);
+            }
+          }
+          _logEnergy = true;
+        }
+        #endregion
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
@@ -435,6 +477,35 @@ namespace NetDeamon.apps.PVControl
         end_time = _house.CheapestImportWindowToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
+      #endregion
+      #region cost logging
+      if (_logEnergy && now >= _nextQuarterHour)
+      {
+        await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
+        {
+          PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float totalImportEnergy);
+          PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
+          var basePriceEntry = _house.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.EndTime < _nextQuarterHour);
+          var basePrice = basePriceEntry.Price;
+          Costs currentCost = new Costs
+          {
+            Timestamp = _nextQuarterHour,
+            GridImportTotal = totalImportEnergy,
+            GridExportTotal = totalExportEnergy,
+            GridImport = totalImportEnergy - _lastCostsEntry.GridImportTotal,
+            GridExport = totalExportEnergy - _lastCostsEntry.GridExportTotal,
+            BasePrice = basePrice,
+            ImportPriceProvider = _house.CalculateBruttoPriceImport(basePrice, false),
+            ImportPriceTotal = _house.CalculateBruttoPriceImport(basePrice, true),
+            ExportPriceProvider = _house.CalculateBruttoPriceExport(basePrice, false),
+            ExportPriceTotal = _house.CalculateBruttoPriceExport(basePrice, true),
+          };
+          await db.InsertAsync(currentCost);
+          _lastCostsEntry = currentCost;
+        }
+        _nextQuarterHour = now.GetNextQuarterHour();
+        PVCC_Logger.LogDebug("Saved energy costs to DB");
+      }
       #endregion
       PVCC_Logger.LogTrace("Leave Schedule");
     }

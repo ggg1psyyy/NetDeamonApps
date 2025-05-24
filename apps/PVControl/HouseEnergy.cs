@@ -748,7 +748,7 @@ namespace NetDeamon.apps.PVControl
     {
       _priceListCache = [];
     }
-    private List<PriceTableEntry> PriceListNetto
+    public List<PriceTableEntry> PriceListNetto
     {
       get
       {
@@ -802,11 +802,11 @@ namespace NetDeamon.apps.PVControl
         }
       }
     }
-    private float CalculateBruttoPriceExport(float nettoPrice, bool inclNetworkPrice)
+    public float CalculateBruttoPriceExport(float nettoPrice, bool inclNetworkPrice)
     {
       return (nettoPrice * PVCC_Config.ExportPriceMultiplier + PVCC_Config.ExportPriceAddition + (inclNetworkPrice ? PVCC_Config.ExportPriceNetwork : 0)) * (1 + PVCC_Config.ExportPriceTax);
     }
-    private float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice)
+    public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice)
     {
       return (nettoPrice * PVCC_Config.ImportPriceMultiplier + PVCC_Config.ImportPriceAddition + (inclNetworkPrice ? PVCC_Config.ImportPriceNetwork : 0)) * (1 + PVCC_Config.ImportPriceTax);
     }

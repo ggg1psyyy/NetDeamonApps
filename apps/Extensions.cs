@@ -346,6 +346,18 @@ namespace NetDeamon.apps
       int remainder = minutes % 15;
       return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes - remainder, 0);
     }
+
+    public static DateTime GetNextQuarterHour(this DateTime time)
+    {
+      int remainder = time.Minute % 15;
+      int minutesToAdd = (15 - remainder) % 15;
+      DateTime nextQuarter = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, 0, 0).AddMinutes(minutesToAdd);
+      if (nextQuarter <= time)
+      {
+        nextQuarter = nextQuarter.AddMinutes(15);
+      }
+      return nextQuarter;
+    }
     public static void ClearAndCreateEmptyPredictionData(this Dictionary<DateTime, int> data)
     {
       data.Clear();
