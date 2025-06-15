@@ -72,7 +72,7 @@ namespace NetDeamon.apps.PVControl
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
 
-      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage);
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, true);
 
       if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
@@ -238,13 +238,11 @@ namespace NetDeamon.apps.PVControl
         // prices for now and the next two hours
         float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;
         float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
-        float priceNextHourAndOne = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 2)).Price;
         
         // we are in PV period and have positive PV 
-        if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && _pvRunningAverage.GetAverage() > _loadRunningAverage.GetAverage() + 200
-          && MaxSocDurationToday > maxSocDuration && CurrentEnergyExportPriceTotal >= 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
-          // only if it's getting cheaper, otherwise it's better to fill up and sell the overflow (because of sinusoidal nature of prices)
-          && priceNow >= priceNextHour && priceNextHour >= priceNextHourAndOne)
+        if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && MaxSocDurationToday > maxSocDuration 
+            && priceNow >= 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
+            )
         {
           // so we keep FeedInPriority mode
           var mode = InverterModes.feedin_priority;
@@ -362,9 +360,6 @@ namespace NetDeamon.apps.PVControl
       get
       {
         var now = DateTime.Now;
-        #if DEBUG
-        now = now.Date.AddHours(7).AddMinutes(5);
-        #endif
         var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, now, true);
         _currentMode = newMode;
         return _currentMode;
@@ -632,6 +627,11 @@ namespace NetDeamon.apps.PVControl
     public int CurrentAveragePVPower => _pvRunningAverage.GetAverage();
 
     public int CurrentAverageGridPower => _gridRunningAverage.GetAverage() * -1;
+
+    public void AddAverageGridPowerValue(int value)
+    {
+      _gridRunningAverage.AddValue(value);
+    }
 
     public PriceTableEntry BestChargeTime
     {

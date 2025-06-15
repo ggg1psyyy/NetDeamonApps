@@ -28,11 +28,9 @@ namespace NetDeamon.apps.PVControl.Predictions
     {
       Dictionary<DateTime, int> result = [];
       var now = DateTime.Now;
-      float multLoad = 1f;
-      float multPV = 1f;
-      float scaling = 0.95f;
-      float threshhold = 0.1f;
-      bool needRecalc = true;
+      int diffLoad = 0;
+      int diffPV = 0;
+      int quarterHourCount = 4;
       foreach (var item in _LoadPrediction.TodayAndTomorrow)
       {
         if (!_SolarForecast.TodayAndTomorrow.TryGetValue(item.Key, out int value))
@@ -40,31 +38,20 @@ namespace NetDeamon.apps.PVControl.Predictions
           value = 0;
           PVCC_Logger.LogError("Could not find SolarForeCast for {date}", item.Key);
         }
-        // adjust for actual values and slowly revert to original prediction
+        // adjust for actual values and revert to the original prediction over an hour
         int predictedLoad = item.Value;
         int predictedPV = value;
-        if (item.Key >= now && _AdjustToRunningAverage)
+        if (item.Key >= now && _AdjustToRunningAverage && quarterHourCount > 0)
         {
-          if (needRecalc)
-          {
-            float avgLoad = _CurrentLoad.GetAverage() / 4;
-            float avgPV = _CurrentPV.GetAverage() / 4;
+          int avgLoad = _CurrentLoad.GetAverage() / 4;
+          int avgPV = _CurrentPV.GetAverage() / 4;
 
-            multLoad = predictedLoad != 0 ? (float)avgLoad / predictedLoad : 1;
-            multPV = predictedPV != 0 ? (float)avgPV / predictedPV : 1;
-            needRecalc = false;
-          }
+          diffLoad = (avgLoad - predictedLoad) * 1/4 * quarterHourCount;
+          diffPV = (avgPV - predictedPV) * 1/4 * quarterHourCount;
 
-          predictedLoad = (int)Math.Round(predictedLoad * multLoad, 0);
-          predictedPV = (int)Math.Round(predictedPV * multPV, 0);
-          if (multLoad != 1.0f)
-            multLoad = multLoad > 1f ? multLoad * scaling : multLoad / scaling;
-          if (multPV != 1.0f)
-            multPV = multPV > 1f ? multPV * scaling : multPV / scaling;
-          if (Math.Abs(multLoad - 1) < threshhold)
-            multLoad = 1.0f;
-          if (Math.Abs(multPV - 1) < threshhold)
-            multPV = 1.0f;
+          quarterHourCount--;
+          predictedLoad += diffLoad;
+          predictedPV += diffPV;
         }
         result.Add(item.Key, predictedPV - predictedLoad);
       }

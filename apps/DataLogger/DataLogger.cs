@@ -405,17 +405,6 @@ namespace PVControl
         _ = await createTableCommand.ExecuteNonQueryAsync();
         await SetDbVersion(con, currentDBVersion);
       }
-      //if (actualDBVersion < 4)
-      //{
-      //  var alterTableCommand = con.CreateCommand();
-      //  alterTableCommand.CommandText =
-      //    @"
-      //    ALTER TABLE hourly ADD COLUMN carsoc INTEGER;
-      //    ALTER TABLE daily ADD COLUMN carsoc INTEGER;
-      //  ";
-      //  _ = await alterTableCommand.ExecuteNonQueryAsync();
-      //  await SetDbVersion(con, 4);
-      //}
       await con.CloseAsync();
     }
     private static async Task SetDbVersion(SqliteConnection con, int version)

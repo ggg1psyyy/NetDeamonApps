@@ -237,6 +237,9 @@ namespace NetDeamon.apps.PVControl
         _house.UpdatePredictions();
       }
       PVCC_Logger.LogTrace("Finished Updating Predictions");
+      // update Grid Values for Inverter Check, as it won't update if it stays the same
+      if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
+        _house.AddAverageGridPowerValue(grid);
       var inverterState = _house.ProposedState;
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
