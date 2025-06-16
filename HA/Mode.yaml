@@ -1,0 +1,240 @@
+alias: PV Control - Mode Settings
+description: ""
+triggers:
+  - entity_id:
+      - sensor.pv_control_mode
+    to: force_charge
+    id: FORCE_CHARGE
+    trigger: state
+  - entity_id:
+      - sensor.pv_control_mode
+    to: normal
+    id: NORMAL
+    trigger: state
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_mode
+    to: grid_only
+    id: GRID_ONLY
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_mode
+    to: force_discharge
+    id: FORCE_DISCHARCGE
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_mode
+    to: house_only
+    id: HOUSE_ONLY
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_mode
+    id: FEEDIN
+    to: feedin_priority
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_mode
+    to: reset
+    id: RESET
+  - entity_id:
+      - sensor.pv_control_mode
+    to: force_charge_grid_only
+    id: FORCE_CHARGE_GRID_ONLY
+    trigger: state
+conditions: []
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ trigger.from_state.state == \"grid_only\" }}"
+    then:
+      - action: button.press
+        metadata: {}
+        data: {}
+        target:
+          entity_id: button.solax_system_on
+      - delay:
+          hours: 0
+          minutes: 0
+          seconds: 45
+          milliseconds: 0
+  - if:
+      - condition: template
+        value_template: "{{ trigger.from_state.state == \"house_only\" }}"
+    then:
+      - action: number.set_value
+        metadata: {}
+        data:
+          value: "8000"
+        target:
+          entity_id: number.solax_export_control_user_limit
+  - if:
+      - condition: template
+        value_template: "{{ trigger.from_state.state == \"force_charge_grid_only\" }}"
+    then:
+      - action: select.select_option
+        metadata: {}
+        data:
+          option: Disabled
+        target:
+          entity_id: select.solax_modbus_power_control_direct
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - RESET
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "8000"
+            target:
+              entity_id: number.solax_export_control_user_limit
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Self Use Mode
+            target:
+              entity_id: select.solax_charger_use_mode
+          - action: button.press
+            metadata: {}
+            data: {}
+            target:
+              entity_id: button.solax_system_on
+      - conditions:
+          - condition: trigger
+            id:
+              - FORCE_CHARGE
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Force Charge
+            target:
+              entity_id: select.solax_manual_mode_select
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Manual Mode
+            target:
+              entity_id: select.solax_charger_use_mode
+      - conditions:
+          - condition: trigger
+            id:
+              - NORMAL
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Self Use Mode
+            target:
+              entity_id: select.solax_charger_use_mode
+            enabled: true
+      - conditions:
+          - condition: trigger
+            id:
+              - FORCE_DISCHARCGE
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Force Discharge
+            target:
+              entity_id: select.solax_manual_mode_select
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Manual Mode
+            target:
+              entity_id: select.solax_charger_use_mode
+      - conditions:
+          - condition: trigger
+            id:
+              - GRID_ONLY
+        sequence:
+          - action: button.press
+            metadata: {}
+            data: {}
+            target:
+              entity_id: button.solax_system_off
+      - conditions:
+          - condition: trigger
+            id:
+              - HOUSE_ONLY
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Self Use Mode
+            target:
+              entity_id: select.solax_charger_use_mode
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "10"
+            target:
+              entity_id: number.solax_export_control_user_limit
+      - conditions:
+          - condition: trigger
+            id:
+              - FEEDIN
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Feedin Priority
+            target:
+              entity_id: select.solax_charger_use_mode
+      - conditions:
+          - condition: trigger
+            id:
+              - FORCE_CHARGE_GRID_ONLY
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "0"
+            target:
+              entity_id:
+                - number.solax_remotecontrol_timeout_direct
+                - number.solax_remotecontrol_active_power_direct
+                - number.solax_remotecontrol_charge_discharge_power_direct
+                - number.solax_remotecontrol_duration_direct
+                - number.solax_remotecontrol_push_mode_power_direct
+                - number.solax_remotecontrol_reactive_power_direct
+                - number.solax_remotecontrol_target_energy_direct
+                - number.solax_remotecontrol_target_soc_direct
+                - number.solax_remotecontrol_timeout_8_9_direct
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 2
+              milliseconds: 0
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "100"
+            target:
+              entity_id: number.solax_remotecontrol_target_soc_9_direct
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "0"
+            target:
+              entity_id:
+                - number.solax_remotecontrol_pv_power_limit_direct
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "-10000"
+            target:
+              entity_id:
+                - number.solax_remotecontrol_push_mode_power_8_9_direct
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Individual Setting – Target SOC Mode
+            target:
+              entity_id: select.solax_modbus_power_control_direct
+variables:
+  old_state: "{{ trigger.from_state.state }}"
+mode: single

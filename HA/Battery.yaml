@@ -1,0 +1,39 @@
+alias: PV Control - Battery Settings
+description: ""
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_battery_charging_enabled
+    to: "off"
+    id: BATT_DISABLE
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_battery_charging_enabled
+    to: "on"
+    id: BATT_ENABLE
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - BATT_ENABLE
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "30"
+            target:
+              entity_id: number.solax_battery_charge_max_current
+      - conditions:
+          - condition: trigger
+            id:
+              - BATT_DISABLE
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "0"
+            target:
+              entity_id: number.solax_battery_charge_max_current
+mode: single
