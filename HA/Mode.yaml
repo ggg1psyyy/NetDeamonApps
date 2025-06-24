@@ -76,7 +76,9 @@ actions:
         data:
           option: Disabled
         target:
-          entity_id: select.solax_modbus_power_control_direct
+          entity_id:
+            - select.solax_modbus_power_control_direct
+            - select.solax_remote_control_power_control_mode_direct
   - choose:
       - conditions:
           - condition: trigger
@@ -240,7 +242,9 @@ actions:
             data:
               option: Individual Setting – Target SOC Mode
             target:
-              entity_id: select.solax_modbus_power_control_direct
+              entity_id:
+                - select.solax_modbus_power_control_direct
+                - select.solax_remote_control_power_control_mode_direct
 variables:
   old_state: "{{ trigger.from_state.state }}"
 mode: single
