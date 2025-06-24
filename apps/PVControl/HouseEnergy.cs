@@ -156,14 +156,14 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == PVCC_Config.InverterStatusEntity?.EntityId && PVCC_Config.InverterStatusEntity.TryGetStateValue(out string inverterStatus))
       {
         PVCC_Logger.LogInformation("Inverter RunMode changed from {CurrentInverterRunMode} to {InverterStatus}", _currentInverterRunMode, inverterStatus);
-        _currentInverterRunMode = inverterStatus;
-        // if the inverter switches back to normal mode, we send the reset signal before switching back to the selected mode
-        if (_currentInverterRunMode == PVCC_Config.InverterStatusNormalString)
+        // if the inverter switches back to normal mode (but not from remote mode), we send the reset signal before switching back to the selected mode
+        if (_currentInverterRunMode != "Normal (R)" && inverterStatus == PVCC_Config.InverterStatusNormalString)
         {
           _resetCounter = 2;
           PVCC_Logger.LogInformation("Inverter returned to normal run mode, sending {ResetCounter} reset signal(s)", _resetCounter);
           _currentMode = new InverterState(InverterModes.reset, ForceChargeReasons.None);
         }
+        _currentInverterRunMode = inverterStatus;
       }
     }
 
