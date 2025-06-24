@@ -203,7 +203,8 @@ namespace NetDeamon.apps.PVControl
       // negative import price
       if (CurrentEnergyImportPriceTotal < 0)
       {
-        var mode = BatterySoc <= 95 ? InverterModes.force_charge_grid_only : InverterModes.grid_only;
+        // it seems the remote mode 9 keeps the PV off after reaching the target SoC, so we don't need to switch the inverter off as long as PV stays off
+        var mode = (BatterySoc <= 95 || CurrentAveragePVPower < 100) ? InverterModes.force_charge_grid_only : InverterModes.grid_only;
         var reason = ForceChargeReasons.ImportPriceNegative;
         if (currentMode.Mode != mode && debugOut)
           PVCC_Logger.LogDebug("Negative Importprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyImportPriceTotal, mode);
