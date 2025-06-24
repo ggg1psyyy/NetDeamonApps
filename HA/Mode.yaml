@@ -95,6 +95,12 @@ actions:
               option: Self Use Mode
             target:
               entity_id: select.solax_charger_use_mode
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Disabled
+            target:
+              entity_id: select.solax_modbus_power_control_direct
           - action: button.press
             metadata: {}
             data: {}
