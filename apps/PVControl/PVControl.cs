@@ -175,6 +175,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (entity == null)
         return;
+      PVCC_Logger.LogDebug("Entering UserStateChanged - Entity: {ent}, newState: {state}", entity.EntityId, newState);
       newState = newState.ToLower();
 
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)

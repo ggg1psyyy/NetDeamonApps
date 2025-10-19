@@ -242,7 +242,7 @@ namespace NetDeamon.apps.PVControl
         
         // we are in PV period and have positive PV 
         if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && MaxSocDurationToday > maxSocDuration 
-            && priceNow >= 0 && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
+            && priceNow >= 1 && priceNow >= priceNextHour && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
             )
         {
           // so we keep FeedInPriority mode
