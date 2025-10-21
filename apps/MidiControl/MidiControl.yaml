@@ -19,34 +19,250 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
       - 48-55 # radial leds / output only!
     
   Mappings:
-    # floor modifier
+    # faders modifier (for this faders are the only control which need modifiers as there are only 8)
     - ControlEntity: null
       MidiControl:
         ControlStyle: led
         ButtonID: 93
       Options:
         IsModifier: true
-        ModifierName: floor
-        ModifierValue: eg
+        ModifierName: faders
+        ModifierValue: cover_eg
     - ControlEntity: null
       MidiControl:
         ControlStyle: led
         ButtonID: 94
       Options:
         IsModifier: true
-        ModifierName: floor
-        ModifierValue: og
+        ModifierName: faders
+        ModifierValue: cover_og
+        
+    # covers eg
+    - ControlEntity: cover.wohnzimmerrollo_links
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 1
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg 
+    - ControlEntity: cover.wohnzimmerrollo_rechts
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 2
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg
+    - ControlEntity: cover.rollo_essen
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 3
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg
+    - ControlEntity: cover.rollo_kuche
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 4
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg
+    - ControlEntity: cover.rollos_eg
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 7
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg
+    - ControlEntity: cover.rollos_alle
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 8
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_eg
+    # covers og
+    - ControlEntity: cover.rollo_galerie
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 1
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollo_bad
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 2
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollo_schlafen
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 3
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollo_arbeit_sud
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 4
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollo_arbeit_west
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 5
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollo_gastezimmer
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 6
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollos_og
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 7
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    - ControlEntity: cover.rollos_alle
+      MidiControl:
+        ControlStyle: fader
+        FaderID: 8
+      Options:
+        ModifierName: faders
+        ModifierValue: cover_og
+    
+    # lighs og
     - ControlEntity: light.galerie
       MidiControl:
         ControlStyle: led
         ButtonID: 24
-      Options:
-        ModifierName: floor
-        ModifierValue: og
     - ControlEntity: light.treppe_eg_og
       MidiControl:
         ControlStyle: led
-        ButtonID: 24
+        ButtonID: 25
+    - ControlEntity: light.schlafzimmer
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 26
+        
+    # lights cellar
+    - ControlEntity: light.treppe_kg_eg
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 30
+    - ControlEntity: light.keller
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 31
+        
+    # lights eg (on/off)
+    - ControlEntity: light.tv_licht
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 16
+    - ControlEntity: light.esp_tv_ambient_light
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 17
+    - ControlEntity: light.terasse
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 23
+    - ControlEntity: light.eingang
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 22
+        
+    # lights eg (dimmable)
+    - ControlEntity: light.kuche_licht
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 32
       Options:
-        ModifierName: floor
-        ModifierValue: eg
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 16
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 48
+    - ControlEntity: light.essen_licht
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 34
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 18
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 50
+    - ControlEntity: light.wohnzimmer_lampe_licht
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 35
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 19
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 51
+    - ControlEntity: light.esp_led_tv_leds # ambient leds
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 36
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 20
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 52
+    - ControlEntity: light.esp_led_tv_leds_left
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 37
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 21
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 53
+    - ControlEntity: light.esp_led_tv_leds_top
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 38
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 22
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 54
+    - ControlEntity: light.esp_led_tv_leds_right
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 39
+      Options:
+        RangeParameter: brightness
+        RangeInput:
+          ControlStyle: radial
+          RadialID: 23
+        RangeOutput:
+          ControlStyle: radial
+          RadialID: 55
+        

@@ -237,16 +237,16 @@ public class MidiControl : IAsyncInitializable
             case "noteon":
             case "noteoff":
             case "led":
-                entitiesFound = _config.Mappings.Where(m => m.MidiControl.Note == msg.note).ToList();
+                entitiesFound = _config.Mappings.Where(m => m.MidiControl.MidiType.Equals("led", StringComparison.InvariantCultureIgnoreCase) && m.MidiControl.Note == msg.note).ToList();
                 break;
             case "pitchbend":
             case "fader":
-                entitiesFound = _config.Mappings.Where(m => m.MidiControl.Channel == msg.channel).ToList();
+                entitiesFound = _config.Mappings.Where(m => m.MidiControl.MidiType.Equals("fader", StringComparison.InvariantCultureIgnoreCase) && m.MidiControl.Channel == msg.channel).ToList();
                 break;
             case "controlchange":
             case "radial":
-                entitiesFound = _config.Mappings.Where(m =>
-                    m.MidiControl.Controller == msg.controller || m.Options?.RangeInput?.Controller == msg.controller).ToList();
+                entitiesFound = _config.Mappings.Where(m => (m.MidiControl.MidiType.Equals("radial", StringComparison.InvariantCultureIgnoreCase) && m.MidiControl.Controller == msg.controller) 
+                                                            || ((m.Options?.RangeInput?.MidiType.Equals("radial", StringComparison.InvariantCultureIgnoreCase) ?? false) && m.Options?.RangeInput?.Controller == msg.controller)).ToList();
                 break;
             default:
                 entitiesFound = [];
