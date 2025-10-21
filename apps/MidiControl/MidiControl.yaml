@@ -1,0 +1,52 @@
+NetDeamon.apps.MidiControl.MidiControlConfig:
+  Mqtt:
+    Topic: "midi/bcf2000/in"
+    RadialNumLeds: 11
+    FaderIDs:
+      - 1-8 # motorized faders
+    ButtonIDs:
+      - 32-39 # radial push
+      - 16-23 # top row
+      - 24-31 # second row
+      - 42    # edit
+      - 43    # learn
+      - 44    # store
+      - 45    # edit
+      - 46-47 # preset left/right (no leds!)
+      - 91-94 #bottom right 4 buttons 
+    RadialIDs:
+      - 16-23 # radial encoders / input only!
+      - 48-55 # radial leds / output only!
+    
+  Mappings:
+    # floor modifier
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 93
+      Options:
+        IsModifier: true
+        ModifierName: floor
+        ModifierValue: eg
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 94
+      Options:
+        IsModifier: true
+        ModifierName: floor
+        ModifierValue: og
+    - ControlEntity: light.galerie
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 24
+      Options:
+        ModifierName: floor
+        ModifierValue: og
+    - ControlEntity: light.treppe_eg_og
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 24
+      Options:
+        ModifierName: floor
+        ModifierValue: eg

@@ -233,12 +233,64 @@ namespace NetDeamon.apps
 
       return false;
     }
+    public static bool TryGetDeviceClass(this Entity entity, out string deviceClass)
+    {
+      deviceClass = null!;
+      if (entity is null)
+        return false;
+      else if (entity.EntityState is null || entity.EntityState.Attributes is null)
+      {
+        return false;
+      }
+
+      if ((bool)entity?.Attributes?.ContainsKey("device_class"))
+      {
+        deviceClass = entity?.Attributes?["device_class"]?.ToString();
+        return true;
+      }
+      return false;
+    }
+    public static bool TryGetCoverPosition(this Entity entity, out int position)
+    {
+      position = 0;
+      if (entity is null)
+        return false;
+      else if (entity.EntityState is null || entity.EntityState.Attributes is null)
+      {
+        return false;
+      }
+
+      if ((bool)entity?.Attributes?.ContainsKey("current_position"))
+      {
+        return int.TryParse(entity?.Attributes?["current_position"]?.ToString(), out position);
+      }
+      return false;
+    }
+    public static bool SetCoverPosition(this Entity entity, int position)
+    {
+      if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "cover")
+        return false;
+      entity.HaContext.CallService("cover", "set_cover_position", data: new { entity_id = entity.EntityId , position = position });
+      return true;
+    }
+    public static string GetEntityPlatform(this Entity entity)
+    {
+      if (entity is null || string.IsNullOrWhiteSpace(entity.EntityId))
+        return string.Empty;
+      return entity.EntityId.Split('.').FirstOrDefault() ?? string.Empty;
+    }
+    public static bool ToggleLight(this Entity entity)
+    {
+      if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
+        return false;
+      entity.TryGetStateValue(out bool curStatus);
+      return entity.TurnOnOff(!curStatus);
+    }
     public static bool TurnOnOff(this Entity entity, bool On)
     {
       if (entity.TryGetStateValue(out bool curStatus))
       {
         entity.CallService(On ? "turn_on" : "turn_off");
-        //await PVCC_EntityManager.SetStateAsync(entity.EntityId, On ? "ON": "OFF");
         System.Threading.Thread.Sleep(100);
         entity.TryGetStateValue(out curStatus);
         return curStatus == On;
@@ -253,6 +305,39 @@ namespace NetDeamon.apps
     public static bool TurnOff(this Entity entity)
     {
       return TurnOnOff(entity, false);
+    }
+
+    public static bool TryGetBrightness(this Entity entity, out int brightness)
+    {
+      brightness = -1;
+      if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
+        return false;
+      
+      if ((bool)entity?.Attributes?.ContainsKey("brightness"))
+      {
+        return int.TryParse(entity?.Attributes?["brightness"]?.ToString(), out brightness);
+      }
+      return false;
+    }
+
+    public static int SetBrightness(this Entity entity, int brightness)
+    {
+      if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
+        return -1;
+      
+      entity.HaContext.CallService("light", "turn_on", data: new { entity_id = entity.EntityId , brightness = brightness });
+      if (entity.TryGetBrightness(out int newBrightness))
+        return newBrightness;
+      
+      return -1;
+    }
+    public static bool TryGetSupportedColorModes(this Entity entity, out List<string> supportedColorModes)
+    {
+      supportedColorModes = [];
+      if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
+        return false;
+      
+      return true;
     }
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
     {
@@ -366,6 +451,42 @@ namespace NetDeamon.apps
         data.Add(time, 0);
       }
     }
+    
+    #region General Things
+
+    public static bool TryParseToIntList(this List<string> list, out List<int> numbers)
+    {
+      numbers = [];
+      if (list != null && list.Count > 0)
+      {
+        foreach (var item in list)
+        {
+          if (item.Contains('-'))
+          {
+            // Parse range like "1-5"
+            var parts = item.Split('-');
+            if (parts.Length == 2 && 
+                int.TryParse(parts[0], out int start) && 
+                int.TryParse(parts[1], out int end))
+            {
+              for (int i = start; i <= end; i++)
+              {
+                numbers.Add(i);
+              }
+            }
+          }
+          else if (int.TryParse(item, out int value))
+          {
+            // Single value
+            numbers.Add(value);
+          }
+        }
+
+        return true;
+      }
+      return false;
+    }
+    #endregion
   }
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
   {
