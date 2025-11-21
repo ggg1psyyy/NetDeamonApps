@@ -48,6 +48,7 @@ namespace NetDeamon.apps
     ImportPriceNegative,
     ExportPriceNegative,
     OpportunisticDischarge,
+    NextHourCheaper,
     UserMode,
   }
   public enum RunHeavyLoadsStatus
@@ -233,9 +234,9 @@ namespace NetDeamon.apps
 
       return false;
     }
-    public static bool TryGetDeviceClass(this Entity entity, out string deviceClass)
+    public static bool TryGetAttribute(this Entity entity, string attributeName, out string attribute)
     {
-      deviceClass = null!;
+      attribute = string.Empty;
       if (entity is null)
         return false;
       else if (entity.EntityState is null || entity.EntityState.Attributes is null)
@@ -243,10 +244,10 @@ namespace NetDeamon.apps
         return false;
       }
 
-      if ((bool)entity?.Attributes?.ContainsKey("device_class"))
+      if ((bool)entity?.Attributes?.ContainsKey(attributeName))
       {
-        deviceClass = entity?.Attributes?["device_class"]?.ToString();
-        return true;
+        attribute = entity?.Attributes?[attributeName]?.ToString();
+        return attribute != null;
       }
       return false;
     }
@@ -306,7 +307,32 @@ namespace NetDeamon.apps
     {
       return TurnOnOff(entity, false);
     }
+    public static bool TryGetIconString(this Entity entity, out string icon)
+    {
+      icon = "mdi:crosshairs-question";
+      if (entity is null)
+        return false;
+      else if (entity.EntityState is null || entity.EntityState.Attributes is null)
+      {
+        return false;
+      }
 
+      if (entity.TryGetAttribute("icon", out string iconString))
+        icon = iconString;
+      else
+      {
+        if (!entity.TryGetStateValue(out string state))
+          state = string.Empty;
+        
+        icon = entity.GetEntityPlatform().ToLowerInvariant() switch
+        {
+          "cover" => "mdi:roller-shade",
+          "light" => state == "on" ? "mdi:lightbulb-on" : "mdi:lightbulb-off",
+          _ => icon
+        };
+      }
+      return true;
+    }
     public static bool TryGetBrightness(this Entity entity, out int brightness)
     {
       brightness = -1;
@@ -336,7 +362,10 @@ namespace NetDeamon.apps
       supportedColorModes = [];
       if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
         return false;
-      
+      if (entity.TryGetAttribute("supported_color_modes", out string modes))
+      {
+        supportedColorModes = modes.Split(' ').ToList();
+      }
       return true;
     }
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
@@ -453,7 +482,6 @@ namespace NetDeamon.apps
     }
     
     #region General Things
-
     public static bool TryParseToIntList(this List<string> list, out List<int> numbers)
     {
       numbers = [];
@@ -485,6 +513,13 @@ namespace NetDeamon.apps
         return true;
       }
       return false;
+    }
+
+    public static string Truncate(this string str, int maxLength)
+    {
+      if (maxLength <= 0)
+        return "";
+      return str.Substring(0,  Math.Min(str.Length, maxLength));
     }
     #endregion
   }

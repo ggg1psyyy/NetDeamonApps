@@ -168,6 +168,7 @@ namespace NetDeamon.apps.PVControl
     }
 
     private int _resetCounter = 0;
+    private int _problemCounter = 0;
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private InverterState CalculateNewInverterMode(InverterState currentMode, NeedToChargeResult need, DateTime now, bool debugOut = false)
     {
@@ -194,12 +195,18 @@ namespace NetDeamon.apps.PVControl
       // fix the inverter problem that it doesn't switch to battery if the load is under ~200W
       if (currentMode.Mode == InverterModes.normal && CurrentAverageGridPower is > 50 and < 300 && BatterySoc > PreferredMinimalSoC)
       {
+        // wait at least 1 minute (4 calls)
+        if (_problemCounter <= 4)
+        {
+          _problemCounter++;
+          return currentMode;
+        }
         // we just need to switch for a few seconds to force_discharge, afterwards the inverter keeps using the battery  
         PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery! Grid: {grid}, PV: {pv}, Load: {load}, Soc: {soc}", CurrentAverageGridPower, CurrentAveragePVPower, CurrentAverageHouseLoad, BatterySoc);
         _gridRunningAverage.Reset();
         return new InverterState(InverterModes.force_discharge, ForceChargeReasons.None);
       }
-      
+      _problemCounter = 0;
       // negative import price
       if (CurrentEnergyImportPriceTotal < 0)
       {
@@ -333,14 +340,16 @@ namespace NetDeamon.apps.PVControl
         && (currentMode.Mode == InverterModes.force_charge && BatterySoc <= 98 || currentMode.Mode != InverterModes.force_charge && BatterySoc <= 96)
         )
       {
-        // if chargetime is in the latest quarter of the current hour and the next hour is cheaper, it's better to just import energy normally, without force charging
-        if ((currentMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima || currentMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima) &&
-          CurrentPriceRank > GetPriceRank(now.AddHours(1)) && need.LatestChargeTime.Date == now.Date && need.LatestChargeTime.Hour == now.Hour && need.LatestChargeTime.Minute >= 45)
+        // when we need to charge but the next hour is cheaper, it's better to just import energy normally, without force charging
+        if (CurrentPriceRank > GetPriceRank(now.AddHours(1)))
         {
-          var mode = InverterModes.normal;
-          var reason = ForceChargeReasons.None;
+          var mode = (EnforcePreferredSoC && BatterySoc <= PreferredMinimalSoC)
+            // keep battery over preferred minima
+            ? InverterModes.grid_only
+            : InverterModes.normal;
+          var reason = ForceChargeReasons.NextHourCheaper;
           if (currentMode.Mode != mode && debugOut)
-            PVCC_Logger.LogDebug("Don't charge in last quarter hour if next hour is cheaper - Switching to {InverterModes}", mode);
+            PVCC_Logger.LogDebug("Don't charge now as next hour is cheaper - Switching to {InverterModes}", mode);
           return new InverterState(mode, reason);
         }
         else
@@ -394,8 +403,8 @@ namespace NetDeamon.apps.PVControl
           // while charging increase minCharge to prevent hysteresis
           minSoC++;
 
-        // when do we reach mincharge
-        var minReached = estSoC.FirstUnderOrDefault(minSoC, start: now);
+        // when do we reach mincharge (it's possible that we're already under minSoc if the user changes something, or we were offline
+        var minReached = BatterySoc < minSoC ? new KeyValuePair<DateTime, int>(now, BatterySoc): estSoC.FirstUnderOrDefault(minSoC, start: now);
         if (minReached.Key == default)
           // we don't reach minima, so what's the lowest
           minReached = estSoC.FirstMinOrDefault(start: now);
