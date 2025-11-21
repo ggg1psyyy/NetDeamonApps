@@ -5,12 +5,12 @@ NetDeamon.apps.PVControl.PVConfig:
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
   # since these fail sometimes you can have multiple different sources, order = priority
   CurrentImportPriceEntities: 
+    - sensor.epex_spot_data_price_3
     - sensor.epex_spot_data_price
     - sensor.epex_spot_data_price_2
-    - sensor.epex_spot_data_price_3
   ImportPriceMultiplier: 1.0
   ImportPriceAddition: 1.2
-  ImportPriceNetwork: 10.0
+  ImportPriceNetwork: 7.992
   ImportPriceTax: 0.2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.epex_spot_data_price
