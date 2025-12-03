@@ -238,14 +238,15 @@ namespace NetDeamon.apps.PVControl
         return new InverterState(mode, reason, battChargeEnable);
       }
 
+      // prices for now and the next two hours
+      float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;
+      float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
+      
       // Opportunistic Discharge
       if (OpportunisticDischarge)
       {
         // prevent hysteresis on feedin priority 
         double maxSocDuration = (currentMode.Mode == InverterModes.feedin_priority) ? 1.5 : 2.0;
-        // prices for now and the next two hours
-        float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;
-        float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
         
         // we are in PV period and have positive PV 
         if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && MaxSocDurationToday > maxSocDuration 
@@ -341,7 +342,7 @@ namespace NetDeamon.apps.PVControl
         )
       {
         // when we need to charge but the next hour is cheaper, it's better to just import energy normally, without force charging
-        if (CurrentPriceRank > GetPriceRank(now.AddHours(1)))
+        if (priceNow > priceNextHour)
         {
           var mode = (EnforcePreferredSoC && BatterySoc <= PreferredMinimalSoC)
             // keep battery over preferred minima
@@ -742,7 +743,7 @@ namespace NetDeamon.apps.PVControl
     }
     private int GetPriceRank(DateTime dateTime)
     {
-      var priceRankAtTime = PriceListRanked.FirstOrDefault(r => r.Value.StartTime.Hour == dateTime.Hour);
+      var priceRankAtTime = PriceListRanked.FirstOrDefault(r => r.Value.StartTime.Date == dateTime.Date && r.Value.StartTime.Hour == dateTime.Hour);
       return priceRankAtTime.Key;
     }
     private int GetPricePercentage(DateTime dateTime)
