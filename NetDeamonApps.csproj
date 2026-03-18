@@ -16,7 +16,7 @@
         <None Update="$(MSBuildProjectDir)appsettings.json">
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
-        <None Update="$(MSBuildProjectDir)**\*.yaml">
+        <None Update="$(MSBuildProjectDir)apps\**\*.yaml">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </None>
@@ -40,6 +40,7 @@
         <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="25.42.0" />
         <PackageReference Include="NetDaemon.Extensions.Logging" Version="25.42.0" />
         <PackageReference Include="NetDaemon.Extensions.Tts" Version="25.42.0" />
+        <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
     </ItemGroup>
         
     <ItemGroup>

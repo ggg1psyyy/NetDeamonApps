@@ -18,10 +18,16 @@ namespace NetDeamon.apps.PVControl.Predictions
     }
     protected override Dictionary<DateTime, int> PopulateData()
     {
+      // Start with a full 192-slot zero template so the result always covers the required window,
+      // even when HA entities haven't refreshed yet for the new day (e.g. right after midnight).
+      // Entity data is overlaid on top; any out-of-window entries are stripped so the count stays at 192.
       Dictionary<DateTime, int> completeForecast = [];
+      completeForecast.ClearAndCreateEmptyPredictionData();
       completeForecast = completeForecast.CombineForecastLists(GetPVForecastFromEntities(_todayForecastEntities));
       completeForecast = completeForecast.CombineForecastLists(GetPVForecastFromEntities(_tomorrowForeCastEntities));
-      return completeForecast;
+      var windowStart = DateTime.Now.Date;
+      var windowEnd = DateTime.Now.AddDays(2).Date;
+      return completeForecast.Where(kv => kv.Key >= windowStart && kv.Key < windowEnd).ToDictionary();
     }
     private static Dictionary<DateTime, int> GetPVForecastFromEntities(List<Entity>? entities)
     {

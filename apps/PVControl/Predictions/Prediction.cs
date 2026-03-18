@@ -112,5 +112,10 @@ namespace NetDeamon.apps.PVControl.Predictions
     {
       DataContainer.PredictionData = PopulateData();
     }
+    /// <summary>Directly sets prediction data from an external source (e.g. simulation output), bypassing PopulateData().</summary>
+    public void UpdateData(Dictionary<DateTime, int> data)
+    {
+      DataContainer.PredictionData = data;
+    }
   }
 }

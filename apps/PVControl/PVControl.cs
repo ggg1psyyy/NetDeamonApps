@@ -244,12 +244,17 @@ namespace NetDeamon.apps.PVControl
       var inverterState = _house.ProposedState;
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
-      var nextCheapest = _house.BestChargeTime;
+      // Derive next planned grid-charge window from the simulation timeline.
+      var nextChargeSlot = _house.SimulationTimeline
+        .FirstOrDefault(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
+      var nextChargePrice = nextChargeSlot != null
+        ? _house.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
+        : default;
       var attr_Mode = new
       {
-        next_charge_window_start = nextCheapest.StartTime.ToISO8601(),
-        next_charge_window_end = nextCheapest.EndTime.ToISO8601(),
-        price = nextCheapest.Price.ToString(CultureInfo.InvariantCulture),
+        next_charge_window_start = (nextChargePrice.StartTime != default ? nextChargePrice.StartTime : nextChargeSlot?.Time ?? now).ToISO8601(),
+        next_charge_window_end = (nextChargePrice.EndTime != default ? nextChargePrice.EndTime : (nextChargeSlot?.Time.AddHours(1) ?? now.AddHours(1))).ToISO8601(),
+        price = nextChargePrice.Price.ToString(CultureInfo.InvariantCulture),
         charge_Reason = inverterState.ModeReason.ToString(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
@@ -300,29 +305,48 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
       #endregion
       #region NeedToCharge
-      var needToCharge = _house.NeedToChargeFromExternal;
-      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, needToCharge.NeedToCharge ? "ON" : "OFF");
+      bool simNeedToCharge = _house.SimulationTimeline.Any(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
+      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, simNeedToCharge ? "ON" : "OFF");
+      var futureSoCEntries = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).ToList();
+      var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.BatterySoc;
+      var simMinSoCTime = futureSoCEntries.Count > 0 ? futureSoCEntries.MinBy(s => s.Value).Key : now;
       var attr_Charge = new
       {
         minimal_SoC_allowed = _house.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
         preferred_SoC = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
-        minimal_estimated_SoC = needToCharge.EstimatedSoc.ToString(CultureInfo.InvariantCulture) + "%",
-        at_time = needToCharge.LatestChargeTime.ToISO8601(),
-        estimated_charge_time = _house.EstimatedChargeTimeAtMinima.ToString(CultureInfo.InvariantCulture) + " min",
+        minimal_estimated_SoC = simMinSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        at_time = simMinSoCTime.ToISO8601(),
         current_average_gridpower = _house.CurrentAverageGridPower.ToString(CultureInfo.InvariantCulture) + " W",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
       #endregion
       #region Prediction
-      var curPredSoc = _house.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
+      var curPredSoc = _house.Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(now);
       if (curPredSoc.Key != default)
       {
         await PVCC_EntityManager.SetStateAsync(_info_PredictedSoCEntity.EntityId, curPredSoc.Value.ToString(CultureInfo.InvariantCulture));
+        // Build a mode lookup from the live simulation timeline for data_actual
+        var simModeLookup = _house.SimulationTimeline.ToDictionary(s => s.Time, s => s.State.Mode.ToString());
+        var snapshotModes = _house.DailyModePredictionTodayAndTomorrow;
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
           last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
-          data = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, soc = s.Value }),
+          // Live simulation: SoC + mode for every slot today and tomorrow.
+          // Slots before "now" have no simulation mode (back-filled SoC only) → shown as "past".
+          data_actual = _house.Prediction_BatterySoC.TodayAndTomorrow.Select(s => new
+          {
+            datetime = s.Key.ToISO8601(),
+            soc = s.Value,
+            mode = simModeLookup.TryGetValue(s.Key, out var simMode) ? simMode : "past",
+          }),
+          // Midnight snapshot: SoC + mode as predicted at the start of the day.
+          data_snapshot = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new
+          {
+            datetime = s.Key.ToISO8601(),
+            soc = s.Value,
+            mode = snapshotModes.TryGetValue(s.Key, out var snapMode) ? snapMode : "unknown",
+          }),
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
       }

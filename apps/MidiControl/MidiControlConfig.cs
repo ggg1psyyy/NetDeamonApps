@@ -7,8 +7,16 @@ namespace NetDeamon.apps.MidiControl;
 
 public class MidiControlConfig
 {
+    public List<StatusPage> StatusPages { get; set; } = [];
+    public int StatusUpdateInterval { get; set; } // in seconds 0=off
     public MqttConfig Mqtt { get; set; } = new();
     public List<EntityMapping> Mappings { get; set; } = new();
+}
+
+public class StatusPage
+{
+    public string Title { get; set; } = string.Empty;
+    public List<Entity> StatusEntities { get; set; } = [];
 }
 public class MqttConfig
 {
@@ -63,5 +71,5 @@ public class MappingOptions
     public string? ModifierName { get; set; } // use a modifier (button) to access this value
     public string? ModifierValue { get; set; } // which value of the modifier is needed 
     public bool? IsModifier { get; set; } = false; // this (button) is the modifier itself
-    
+    public string? SpecialAttribute { get; set; }
 }

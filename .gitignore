@@ -363,3 +363,9 @@ MigrationBackup/
 FodyWeavers.xsd
 /appsettings.json
 /apps/DataLogger/energy_history.db
+
+# JetBrains Rider
+.idea/
+
+# Claude Code
+.claude/

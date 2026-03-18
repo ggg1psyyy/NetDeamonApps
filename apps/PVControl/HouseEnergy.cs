@@ -1,5 +1,6 @@
 ﻿using NetDaemon.HassModel.Entities;
 using NetDeamon.apps.PVControl.Predictions;
+using NetDeamon.apps.PVControl.Simulator;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -170,265 +171,93 @@ namespace NetDeamon.apps.PVControl
     private int _resetCounter = 0;
     private int _problemCounter = 0;
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
-    private InverterState CalculateNewInverterMode(InverterState currentMode, NeedToChargeResult need, DateTime now, bool debugOut = false)
+    private List<SimulationSlot> _simulationResult = [];
+
+    /// <summary>
+    /// Runs the two-day forward simulation (today 00:00 – tomorrow 23:45) and updates all
+    /// predictions from its output. Call this instead of UpdatePredictions() each cycle.
+    /// </summary>
+    public void RunSimulation(List<ExtraLoad>? extraLoads = null)
     {
-      DateTime cheapestToday = CheapestImportWindowToday.StartTime;
-      
-      // send the reset signal until the counter reaches 0
-      if (currentMode.Mode == InverterModes.reset && _resetCounter > 0)
-      {
-        PVCC_Logger.LogDebug("Reset signal active (Counter: {count}) - Switching to {InverterModes}", _resetCounter, InverterModes.reset);
-        _resetCounter--;
-        return new InverterState(InverterModes.reset, ForceChargeReasons.None);
-      }
-      
-#if !DEBUG
-      if (OverrideMode != InverterModes.automatic)
-      {
-        var mode = OverrideMode;
-        var reason = ForceChargeReasons.UserMode;
-        if (currentMode.Mode != mode && debugOut)
-          PVCC_Logger.LogDebug("Override mode active - Switching to {InverterModes}", mode);
-        return new InverterState(mode, reason);
-      }
-#endif
-      // fix the inverter problem that it doesn't switch to battery if the load is under ~200W
-      if (currentMode.Mode == InverterModes.normal && CurrentAverageGridPower is > 50 and < 300 && BatterySoc > PreferredMinimalSoC)
-      {
-        // wait at least 1 minute (4 calls)
-        if (_problemCounter <= 4)
-        {
-          _problemCounter++;
-          return currentMode;
-        }
-        // we just need to switch for a few seconds to force_discharge, afterwards the inverter keeps using the battery  
-        PVCC_Logger.LogInformation("Inverter didn't automatically switch to Battery! Grid: {grid}, PV: {pv}, Load: {load}, Soc: {soc}", CurrentAverageGridPower, CurrentAveragePVPower, CurrentAverageHouseLoad, BatterySoc);
-        _gridRunningAverage.Reset();
-        return new InverterState(InverterModes.force_discharge, ForceChargeReasons.None);
-      }
-      _problemCounter = 0;
-      // negative import price
-      if (CurrentEnergyImportPriceTotal < 0)
-      {
-        // it seems the remote mode 9 keeps the PV off after reaching the target SoC, so we don't need to switch the inverter off as long as PV stays off
-        var mode = (BatterySoc <= 95 || CurrentAveragePVPower < 100) ? InverterModes.force_charge_grid_only : InverterModes.grid_only;
-        var reason = ForceChargeReasons.ImportPriceNegative;
-        if (currentMode.Mode != mode && debugOut)
-          PVCC_Logger.LogDebug("Negative Importprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyImportPriceTotal, mode);
-        return new InverterState(mode, reason);
-      }
-      
-      // negative export price
-      if (CurrentEnergyExportPriceTotal < 0)
-      {
-        var mode = InverterModes.house_only;
-        var reason = ForceChargeReasons.ExportPriceNegative;
-        // disable battery charge if there will be negative import prices coming up today
-        bool battChargeEnable = !NegativeImportPriceUpcomingToday;
-        if (currentMode.BatteryChargeEnable != battChargeEnable && debugOut)
-        {
-          if (battChargeEnable)
-            PVCC_Logger.LogDebug("Enabling battery charge again");
-          else
-            PVCC_Logger.LogDebug("Negative import price incoming, switching battery charge off");
-        }
+      // Update upstream predictions first
+      var now = DateTime.Now;
+      // Check the START of the 48h window, not Today.First().
+      // After midnight, Today still returns the second half of yesterday's window (e.g. 03/18 entries
+      // from a 03/17–03/18 dataset), so Today.First().Key.Date == now.Date is true and load never
+      // refreshes — leaving stale 03/17 entries that solar forecast no longer covers.
+      if (Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
+        Prediction_Load.UpdateData();
+      Prediction_PV.UpdateData();
+      Prediction_NetEnergy.UpdateData();
 
-        if (currentMode.Mode != mode && debugOut)
-          PVCC_Logger.LogDebug("Negative Exportprice {F} ct/kWh - Switching to {InverterModes}", CurrentEnergyExportPriceTotal, mode);
-        return new InverterState(mode, reason, battChargeEnable);
+      var input = new SimulationInput
+      {
+        StartTime = now,
+        StartSocPercent = BatterySoc,
+        BatteryCapacityWh = BatteryCapacity,
+        AbsoluteMinSocPercent = AbsoluteMinimalSoC,
+        PreferredMinSocPercent = PreferredMinimalSoC,
+        EnforcePreferredSoc = EnforcePreferredSoC,
+        MaxChargePowerAmps = PVCC_Config.MaxBatteryChargePower,
+        InverterEfficiency = InverterEfficiency,
+        ImportPrices = PriceListImport,
+        ExportPrices = PriceListExport,
+        LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
+        PVPredictionWh = Prediction_PV.TodayAndTomorrow,
+        ExtraLoads = extraLoads ?? [],
+        ForceCharge = ForceCharge,
+        OpportunisticDischarge = OpportunisticDischarge,
+        ForceChargeMaxPriceCt = ForceChargeMaxPrice,
+        ForceChargeTargetSocPercent = ForceChargeTargetSoC,
+        OverrideMode = OverrideMode,
+        CurrentMode = _currentMode,
+        CurrentResetCounter = _resetCounter,
+        CurrentAverageGridPowerW = CurrentAverageGridPower,
+      };
+
+      _simulationResult = PVSimulator.Simulate(input);
+
+      // Build the two-day SoC dict for Prediction_BatterySoC:
+      //   - simulation covers now→end-of-tomorrow (filled below from _simulationResult)
+      //   - past slots of today (midnight→now) are back-filled by reversing net-energy
+      var fullSoC = new Dictionary<DateTime, int>();
+      fullSoC.ClearAndCreateEmptyPredictionData(); // fills today 00:00 → tomorrow 23:45 with 0s
+
+      var startSlot = now.RoundToNearestQuarterHour();
+      foreach (var slot in _simulationResult)
+        if (fullSoC.ContainsKey(slot.Time))
+          fullSoC[slot.Time] = slot.SoC;
+
+      // Backward fill past slots (midnight → now) by reversing net-energy integration
+      int backEnergy = BatterySoc * BatteryCapacity / 100;
+      var pastSlots = fullSoC.Keys.Where(k => k < startSlot).OrderByDescending(k => k).ToList();
+      foreach (var t in pastSlots)
+      {
+        int netWh = Prediction_NetEnergy.TodayAndTomorrow.GetValueOrDefault(t, 0);
+        backEnergy = Math.Clamp(backEnergy - netWh, 0, BatteryCapacity);
+        fullSoC[t] = backEnergy * 100 / BatteryCapacity;
       }
 
-      // prices for now and the next two hours
-      float priceNow = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour)).Price;
-      float priceNextHour = PriceListExport.FirstOrDefault(x => x.StartTime == now.Date.AddHours(now.Hour + 1)).Price;
-      
-      // Opportunistic Discharge
-      if (OpportunisticDischarge)
-      {
-        // prevent hysteresis on feedin priority 
-        double maxSocDuration = (currentMode.Mode == InverterModes.feedin_priority) ? 1.5 : 2.0;
-        
-        // we are in PV period and have positive PV 
-        if (!need.NeedToCharge && CurrentPVPeriod == PVPeriods.InPVPeriod && MaxSocDurationToday > maxSocDuration 
-            && priceNow >= 1 && priceNow >= priceNextHour && BatterySoc > (EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC) + 3
-            )
-        {
-          // so we keep FeedInPriority mode
-          var mode = InverterModes.feedin_priority;
-          var reason = ForceChargeReasons.OpportunisticDischarge;
-          if (currentMode.Mode != mode && debugOut)
-            PVCC_Logger.LogDebug("In PV period, still reaching 100% SoC - Switching to {InverterModes}", mode);
-          return new InverterState(mode, reason);
-        }
-
-        // since the price distribution is mostly sinusoidal over a day, we choose only the two highest maxima every day
-        var sellPriceMaxima = PriceListExport.GetLocalMaxima(end:now.Date.AddDays(1)).OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
-        if (sellPriceMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour) &&
-            (CurrentEnergyExportPriceTotal >= ForceChargeMaxPrice || NegativeImportPriceUpcomingToday))
-        {
-          // by default, we stay at/above PreferredMinimalSoC
-          int minAllowedSoc = PreferredMinimalSoC;
-          // if the time is shortly before or in the solar time, we can go down to AbsoluteMinimalSoC
-          if ((CurrentPVPeriod == PVPeriods.InPVPeriod || (CurrentPVPeriod == PVPeriods.BeforePV && (FirstRelevantPVEnergyToday - now).TotalHours is > 0 and < 4)))
-            minAllowedSoc = AbsoluteMinimalSoC + 2;
-          
-          // NeedToCharge is off and min SoC stays over minimum (+4 to prevent hysteresis)
-          if (!need.NeedToCharge && need.EstimatedSoc >= minAllowedSoc + 4)
-          {
-            var mode = InverterModes.force_discharge;
-            var reason = ForceChargeReasons.OpportunisticDischarge;
-            if (currentMode.Mode != mode && debugOut)
-              PVCC_Logger.LogDebug("No need to charge, SoC stays over {soc}% - Switching to {InverterModes}", minAllowedSoc + 4, mode);
-            return new InverterState(mode, reason);
-          }
-          // still no need to charge but battery already low, so we keep the inverter in feedin_priority mode as long as pv > load 
-          else if (!need.NeedToCharge && _pvRunningAverage.GetAverage() > _loadRunningAverage.GetAverage() + 200)
-          {
-            var mode = InverterModes.feedin_priority;
-            var reason = ForceChargeReasons.OpportunisticDischarge;
-            if (currentMode.Mode != mode && debugOut)
-              PVCC_Logger.LogDebug("Still reaching 100% SoC - Switching to {InverterModes}", mode);
-            return new InverterState(mode, reason);
-          }
-          // if it's running, turn it off when we reached the minimum
-          else if (currentMode.ModeReason == ForceChargeReasons.OpportunisticDischarge && currentMode.Mode == InverterModes.force_discharge && (need.EstimatedSoc <= minAllowedSoc + 2 || need.NeedToCharge))
-          {
-            var mode = InverterModes.normal;
-            var reason = ForceChargeReasons.None;
-            if (currentMode.Mode != mode && debugOut)
-              PVCC_Logger.LogDebug("Reached minimal allowed SoC {soc}% or NeedToCharge - Switching to {InverterModes}", minAllowedSoc + 2, mode);
-            return new InverterState(mode, reason);
-          }
-        }
-      }
-
-      if (ForceCharge && now > cheapestToday.AddHours(-1) && now < cheapestToday.AddHours(2))
-      {
-        // don't recalculate if charging already started
-        if (currentMode.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice && currentMode.Mode == InverterModes.force_charge && BatterySoc <= Math.Min(98, ForceChargeTargetSoC+2))
-        {
-          return currentMode;
-        }
-        int socAtBestTime = Prediction_BatterySoC.Today.GetEntryAtTime(cheapestToday).Value;
-        int chargeTime = CalculateChargingDurationA(socAtBestTime, 100, PVCC_Config.MaxBatteryChargePower);
-        int rankBefore = GetPriceRank(cheapestToday.AddHours(-1));
-        int rankAfter = GetPriceRank(cheapestToday.AddHours(1));
-        DateTime chargeStart = cheapestToday;
-        if (chargeTime > 60)
-        {
-          if (rankBefore < rankAfter)
-          {
-            if (PriceListImport.FirstOrDefault(p => p.StartTime == chargeStart.AddHours(-1)).Price < ForceChargeMaxPrice)
-              chargeStart = cheapestToday.AddMinutes(-(chargeTime - 50));
-          }
-        }
-        if (now > chargeStart && now < chargeStart.AddMinutes(chargeTime+10) && BatterySoc < Math.Min(96, ForceChargeTargetSoC))
-        {
-          //PVCC_Logger.LogInformation("ForceCharge cheapestToday starttime now: {start}", chargeStart);
-          var mode = InverterModes.force_charge;
-          var reason = ForceChargeReasons.ForcedChargeAtMinimumPrice;
-          if (currentMode.Mode != mode && debugOut)
-            PVCC_Logger.LogDebug("Charging in cheapest slot  - Switching to {InverterModes}", mode);
-          return new InverterState(mode, reason);
-        }
-      }
-
-      if (
-        need.NeedToCharge
-        // stay 30 seconds away from extremes, to make sure we have the same time as the provider
-        && DateTime.Now > BestChargeTime.StartTime.AddSeconds(30) && DateTime.Now < BestChargeTime.EndTime.AddSeconds(-30)
-        // don't charge over 98% SoC as it gets really slow and inefficient and don't start over 96%
-        && (currentMode.Mode == InverterModes.force_charge && BatterySoc <= 98 || currentMode.Mode != InverterModes.force_charge && BatterySoc <= 96)
-        )
-      {
-        // when we need to charge but the next hour is cheaper, it's better to just import energy normally, without force charging
-        if (priceNow > priceNextHour)
-        {
-          var mode = (EnforcePreferredSoC && BatterySoc <= PreferredMinimalSoC)
-            // keep battery over preferred minima
-            ? InverterModes.grid_only
-            : InverterModes.normal;
-          var reason = ForceChargeReasons.NextHourCheaper;
-          if (currentMode.Mode != mode && debugOut)
-            PVCC_Logger.LogDebug("Don't charge now as next hour is cheaper - Switching to {InverterModes}", mode);
-          return new InverterState(mode, reason);
-        }
-        else
-        { 
-          var mode = InverterModes.force_charge;
-          var reason = need.EstimatedSoc <= AbsoluteMinimalSoC + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima;
-          if (currentMode.Mode != mode && debugOut)
-            PVCC_Logger.LogDebug("NeedToCharge now - Switching to {InverterModes}", mode);
-          return new InverterState(mode, reason);
-        }
-      }
-      if (currentMode.Mode != InverterModes.normal && debugOut)
-        PVCC_Logger.LogDebug("No special situation - Switching to {InverterModes}", InverterModes.normal);
-      return new InverterState(InverterModes.normal, ForceChargeReasons.None);
+      Prediction_BatterySoC.UpdateData(fullSoC);
     }
+
     public InverterState ProposedState
     {
       get
       {
         var now = DateTime.Now;
-        var newMode = CalculateNewInverterMode(_currentMode, NeedToChargeFromExternal, now, true);
-        _currentMode = newMode;
+        if (_simulationResult.Count == 0)
+          return _currentMode;
+
+        var currentSlot = _simulationResult.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
+                          ?? _simulationResult.First();
+        _currentMode = currentSlot.State;
+
+        // Propagate reset counter: if simulation chose reset for this slot the counter decrements
+        if (_currentMode.Mode == InverterModes.reset && _resetCounter > 0)
+          _resetCounter--;
+
         return _currentMode;
-      }
-    }
-    private NeedToChargeResult _needToChargeFromExternalCache;
-#if !DEBUG
-    private DateTime _lastCalculatedNeedToCharge;
-#endif
-    /// <summary>
-    /// returns:
-    /// * Do we need to charge from grid
-    /// * When do we reach minimal Soc
-    /// * what's the estimated SoC at this time
-    /// </summary>
-    public NeedToChargeResult NeedToChargeFromExternal
-    {
-      get
-      {
-        DateTime now = DateTime.Now;
-#if !DEBUG
-        // cache the result for 5 seconds so that it's only calulated once per run
-        if (_lastCalculatedNeedToCharge != default && Math.Abs((now - _lastCalculatedNeedToCharge).TotalSeconds) < 5)
-        {
-          return _needToChargeFromExternalCache;
-        }
-#endif
-        var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
-        int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
-        if (_currentMode.Mode == InverterModes.force_charge)
-          // while charging increase minCharge to prevent hysteresis
-          minSoC++;
-
-        // when do we reach mincharge (it's possible that we're already under minSoc if the user changes something, or we were offline
-        var minReached = BatterySoc < minSoC ? new KeyValuePair<DateTime, int>(now, BatterySoc): estSoC.FirstUnderOrDefault(minSoC, start: now);
-        if (minReached.Key == default)
-          // we don't reach minima, so what's the lowest
-          minReached = estSoC.FirstMinOrDefault(start: now);
-
-        // what's the next max
-        var maxReached = estSoC.FirstMaxOrDefault(start: now);
-
-        bool minBeforeMax = minReached.Key < maxReached.Key;
-        bool minUnderDefined = minReached.Value <= minSoC;
-        bool maxOver100 = maxReached.Value >= 100;
-
-        // We need to force charge if we estimate to fall to minCharge before we reach max or max < 100
-        bool needCharge = minUnderDefined && (minBeforeMax || !maxOver100);
-        // be very pessimistic and substract 10% of the targettime, so we are relatively sure to reach the next price minima 
-        int quarterhoursTilCharge = (int)(((minReached.Key - now).TotalMinutes * 0.1)/ 15);
-        _needToChargeFromExternalCache = new NeedToChargeResult(
-          needToCharge: needCharge,
-          latestChargeTime: minReached.Key.AddMinutes(-quarterhoursTilCharge * 15),
-          estimatedSoc: minReached.Value);
-#if !DEBUG
-        _lastCalculatedNeedToCharge = now;
-#endif
-        return _needToChargeFromExternalCache;
       }
     }
     public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
@@ -629,8 +458,6 @@ namespace NetDeamon.apps.PVControl
           return 0;
       }
     }
-    public int EstimatedChargeTimeAtMinima => CalculateChargingDurationA(NeedToChargeFromExternal.EstimatedSoc, 100, PVCC_Config.MaxBatteryChargePower);
-
     public int CurrentAverageBatteryChargeDischargePower => _battChargeAverage.GetAverage();
 
     public int CurrentAverageHouseLoad => _loadRunningAverage.GetAverage();
@@ -644,17 +471,8 @@ namespace NetDeamon.apps.PVControl
       _gridRunningAverage.AddValue(value);
     }
 
-    public PriceTableEntry BestChargeTime
-    {
-      get
-      {
-        var need = NeedToChargeFromExternal;
-        if (need.NeedToCharge)
-          return UpcomingPriceList.Where(p => p.StartTime <= need.LatestChargeTime).OrderBy(p => p.Price).First();
-        else
-          return UpcomingPriceList.OrderBy(p => p.Price).First();
-      }
-    }
+    /// <summary>The simulation timeline (now → end of tomorrow) from the last RunSimulation() call.</summary>
+    public IReadOnlyList<SimulationSlot> SimulationTimeline => _simulationResult;
 
     public bool NegativeImportPriceUpcomingToday
     {
@@ -704,14 +522,6 @@ namespace NetDeamon.apps.PVControl
       int diff = pred_Soc_At_EndTime - minSoc;
       var pred_New = Prediction_BatterySoC.TodayAndTomorrow.Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff)).ToDictionary();
       return pred_New.GetEntryAtTime(startTime).Value;
-    }
-    private List<PriceTableEntry> UpcomingPriceList
-    {
-      get
-      {
-        DateTime currentHour = DateTime.Now.Date.AddHours(DateTime.Now.Hour);
-        return PriceListImport.Where(p => p.StartTime >= currentHour).OrderBy(p => p.StartTime).ToList();
-      }
     }
     private Dictionary<int, PriceTableEntry> PriceListRanked
     {
@@ -940,12 +750,7 @@ namespace NetDeamon.apps.PVControl
     }
     public void UpdatePredictions(bool all = false)
     {
-      DateTime now = DateTime.Now;
-      if ((Prediction_Load.Today.First().Key.Date < now.Date && now.Second >= 30) || all)
-        Prediction_Load.UpdateData();
-      Prediction_PV.UpdateData();
-      Prediction_NetEnergy.UpdateData();
-      Prediction_BatterySoC.UpdateData();
+      RunSimulation();
     }
     #region daily snapshot for comparing
     public DateTime LastSnapshotUpdate { get; private set; } = default;
@@ -956,18 +761,31 @@ namespace NetDeamon.apps.PVControl
       {
         _dailyChargePrediction = Prediction_PV.TodayAndTomorrow.GetRunningSumsDaily();
         _dailyDischargePrediction = Prediction_Load.TodayAndTomorrow.GetRunningSumsDaily();
-        var netPrediction = new NetEnergyPrediction(Prediction_PV, Prediction_Load, null!, null!, false);
-        _dailySoCPrediction = new BatterySoCPrediction(netPrediction, PVCC_Config.BatterySoCEntity, BatteryCapacity).TodayAndTomorrow;
+        // Snapshot the current simulation result so we can later compare prediction vs. reality.
+        // RunSimulation() is always called before UpdateSnapshots() in the 15-min cycle,
+        // so Prediction_BatterySoC and _simulationResult already reflect the latest simulation.
+        _dailySoCPrediction = new Dictionary<DateTime, int>(Prediction_BatterySoC.TodayAndTomorrow);
+        // Also snapshot the inverter mode per slot so the snapshot data set is self-contained.
+        _dailyModePrediction = _simulationResult.ToDictionary(s => s.Time, s => s.State.Mode.ToString());
         LastSnapshotUpdate = now;
       }
     }
     private Dictionary<DateTime, int> _dailySoCPrediction;
+    private Dictionary<DateTime, string> _dailyModePrediction = [];
     public Dictionary<DateTime, int> DailyBatterySoCPredictionTodayAndTomorrow
     {
       get
       {
         UpdateSnapshots();
         return _dailySoCPrediction;
+      }
+    }
+    public Dictionary<DateTime, string> DailyModePredictionTodayAndTomorrow
+    {
+      get
+      {
+        UpdateSnapshots();
+        return _dailyModePrediction;
       }
     }
     private Dictionary<DateTime, int> _dailyChargePrediction;

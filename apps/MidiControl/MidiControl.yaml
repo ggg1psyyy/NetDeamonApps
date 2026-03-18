@@ -1,4 +1,24 @@
 NetDeamon.apps.MidiControl.MidiControlConfig:
+  StatusPages:
+    - Title: Power
+      StatusEntities:
+      - sensor.date_time
+      - sensor.wp_aussentemperatur
+      - sensor.solax_pv_power_total
+      - sensor.solax_house_load
+      - sensor.solax_battery_capacity
+      - sensor.solax_measured_power
+      - sensor.energy_import_cost_brutto_day
+    - Title: Temperatures
+      StatusEntities:
+        - sensor.temperatur_wohnen
+        - sensor.temperatur_schlafzimmer
+        - sensor.temperatur_bad
+        - sensor.temperatur_arbeitszimmer
+        - sensor.temperatur_gastezimmer
+        - sensor.temperatur_keller
+        - sensor.wp_warmwasser_temperatur
+  StatusUpdateInterval: 5
   Mqtt:
     Topic: "midi/bcf2000/in"
     RadialNumLeds: 11
@@ -19,7 +39,38 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
       - 48-55 # radial leds / output only!
     
   Mappings:
-    # faders modifier (for this faders are the only control which need modifiers as there are only 8)
+    # reset Device
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 45
+      Options:
+        SpecialAttribute: reset
+    # sine wave ;)
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 43
+      Options:
+        SpecialAttribute: sinewave
+    # Statuspage switcher
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 46
+      Options:
+        IsModifier: true
+        ModifierName: StatusPage
+        ModifierValue: prev
+    - ControlEntity: null
+      MidiControl:
+        ControlStyle: led
+        ButtonID: 47
+      Options:
+        IsModifier: true
+        ModifierName: StatusPage
+        ModifierValue: next
+    # faders modifier (for now faders are the only control which need modifiers as there are only 8)
     - ControlEntity: null
       MidiControl:
         ControlStyle: led
@@ -27,7 +78,7 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
       Options:
         IsModifier: true
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     - ControlEntity: null
       MidiControl:
         ControlStyle: led
@@ -35,7 +86,7 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
       Options:
         IsModifier: true
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
         
     # covers eg
     - ControlEntity: cover.wohnzimmerrollo_links
@@ -44,42 +95,42 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
         FaderID: 1
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg 
+        ModifierValue: cover-eg 
     - ControlEntity: cover.wohnzimmerrollo_rechts
       MidiControl:
         ControlStyle: fader
         FaderID: 2
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     - ControlEntity: cover.rollo_essen
       MidiControl:
         ControlStyle: fader
         FaderID: 3
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     - ControlEntity: cover.rollo_kuche
       MidiControl:
         ControlStyle: fader
         FaderID: 4
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     - ControlEntity: cover.rollos_eg
       MidiControl:
         ControlStyle: fader
         FaderID: 7
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     - ControlEntity: cover.rollos_alle
       MidiControl:
         ControlStyle: fader
         FaderID: 8
       Options:
         ModifierName: faders
-        ModifierValue: cover_eg
+        ModifierValue: cover-eg
     # covers og
     - ControlEntity: cover.rollo_galerie
       MidiControl:
@@ -87,56 +138,56 @@ NetDeamon.apps.MidiControl.MidiControlConfig:
         FaderID: 1
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollo_bad
       MidiControl:
         ControlStyle: fader
         FaderID: 2
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollo_schlafen
       MidiControl:
         ControlStyle: fader
         FaderID: 3
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollo_arbeit_sud
       MidiControl:
         ControlStyle: fader
         FaderID: 4
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollo_arbeit_west
       MidiControl:
         ControlStyle: fader
         FaderID: 5
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollo_gastezimmer
       MidiControl:
         ControlStyle: fader
         FaderID: 6
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollos_og
       MidiControl:
         ControlStyle: fader
         FaderID: 7
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     - ControlEntity: cover.rollos_alle
       MidiControl:
         ControlStyle: fader
         FaderID: 8
       Options:
         ModifierName: faders
-        ModifierValue: cover_og
+        ModifierValue: cover-og
     
     # lighs og
     - ControlEntity: light.galerie
