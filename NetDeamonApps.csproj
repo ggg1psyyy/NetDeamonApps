@@ -21,6 +21,7 @@
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </None>
         <Compile Remove="apps\PVControl\Simulate.cs" />
+        <Compile Remove="NetDeamonApps.Tests\**" />
         <None Include="apps\PVControl\Simulate.cs" />
         <Compile Remove="HA\**" />
         <None Remove="HA\**" />

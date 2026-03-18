@@ -5,7 +5,7 @@ VisualStudioVersion = 17.12.35309.182
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetDeamonApps", "NetDeamonApps.csproj", "{450A7CBB-8945-4508-9817-B577D99D36A9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetDeamonApps.Tests", "..\NetDeamonApps.Tests\NetDeamonApps.Tests.csproj", "{370310B1-F00E-47EF-A50E-105E2D1747A7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetDeamonApps.Tests", "NetDeamonApps.Tests\NetDeamonApps.Tests.csproj", "{370310B1-F00E-47EF-A50E-105E2D1747A7}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
