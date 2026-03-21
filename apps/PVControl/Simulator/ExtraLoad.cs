@@ -1,3 +1,5 @@
+using System;
+
 namespace NetDeamon.apps.PVControl.Simulator;
 
 /// <summary>
@@ -8,8 +10,14 @@ namespace NetDeamon.apps.PVControl.Simulator;
 /// </summary>
 public class ExtraLoad
 {
-  /// <summary>Human-readable name shown in diagnostics (e.g. "Car charging").</summary>
+  /// <summary>Human-readable name shown in diagnostics (e.g. "EV Charger").</summary>
   public string Name { get; init; } = "";
+
+  /// <summary>
+  /// Scheduling priority integer (higher = wins in conflict resolution).
+  /// Emergency mode always overrides regardless of this value. For future use.
+  /// </summary>
+  public int Priority { get; init; } = 10;
 
   /// <summary>Wall-clock time when this load switches on.</summary>
   public DateTime StartTime { get; init; }

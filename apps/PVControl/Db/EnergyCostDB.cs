@@ -25,6 +25,6 @@ namespace PVControl
 
         partial void InitDataContext();
 
-        public ITable<Costs?> CostEntries  => this.GetTable<Costs>();
+        public ITable<Costs> CostEntries  => this.GetTable<Costs>();
     }
 }

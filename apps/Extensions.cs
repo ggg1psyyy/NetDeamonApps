@@ -1,4 +1,5 @@
-﻿using NetDaemon.Client;
+﻿using System;
+using NetDaemon.Client;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Globalization;
@@ -74,6 +75,14 @@ namespace NetDeamon.apps
     BeforePV,
     InPVPeriod,
     AfterPV,
+  }
+  public enum LoadSchedulingMode
+  {
+    Off,
+    Optimal,
+    Priority,
+    PriorityPlus,
+    Emergency,
   }
   public struct SensorData
   {
@@ -152,7 +161,7 @@ namespace NetDeamon.apps
     }
     public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true)
     {
-      resultValue = default;
+      resultValue = default!;
       if (entity is null || entity.State is null)
       {
         return false;
@@ -216,6 +225,16 @@ namespace NetDeamon.apps
         resultValue = (T)result;
         return true;
       }
+      else if (typeof(T) == typeof(LoadSchedulingMode))
+      {
+        dynamic result = LoadSchedulingMode.Off;
+        if (Enum.TryParse(entity.State, out LoadSchedulingMode modeselect))
+          result = modeselect;
+        else
+          return false;
+        resultValue = (T)result;
+        return true;
+      }
       else
         return false;
     }
@@ -244,9 +263,9 @@ namespace NetDeamon.apps
         return false;
       }
 
-      if ((bool)entity?.Attributes?.ContainsKey(attributeName))
+      if (entity.Attributes!.ContainsKey(attributeName))
       {
-        attribute = entity?.Attributes?[attributeName]?.ToString();
+        attribute = entity.Attributes[attributeName]?.ToString() ?? string.Empty;
         return attribute != null;
       }
       return false;
@@ -261,7 +280,7 @@ namespace NetDeamon.apps
         return false;
       }
 
-      if ((bool)entity?.Attributes?.ContainsKey("current_position"))
+      if (entity.Attributes!.ContainsKey("current_position"))
       {
         return int.TryParse(entity?.Attributes?["current_position"]?.ToString(), out position);
       }
@@ -339,7 +358,7 @@ namespace NetDeamon.apps
       if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
         return false;
       
-      if ((bool)entity?.Attributes?.ContainsKey("brightness"))
+      if (entity.Attributes!.ContainsKey("brightness"))
       {
         return int.TryParse(entity?.Attributes?["brightness"]?.ToString(), out brightness);
       }
@@ -562,6 +581,10 @@ namespace NetDeamon.apps
       return (int)Math.Round(_Values.Average(v => v.value), 0);
     }
 
+    public int CurrentAverage
+    {
+      get => GetAverage();
+    }
     public void Reset()
     {
       _Values = [];

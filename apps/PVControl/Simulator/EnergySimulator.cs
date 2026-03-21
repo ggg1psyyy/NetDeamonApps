@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -30,10 +31,10 @@ namespace NetDeamon.apps.PVControl.Simulator;
 /// The first slot's InverterState becomes the live inverter command.
 /// Extra loads (car charging etc.) can be injected to see their impact on the plan.
 /// </summary>
-public static class PVSimulator
+public static class EnergySimulator
 {
   private const int SlotMinutes = 15;
-  private const int ChargeVoltage = 240; // V — assumed fixed for charge power calculations
+  private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
 
   /// <summary>
   /// Runs the full simulation and returns one <see cref="SimulationSlot"/> per 15-minute
@@ -306,7 +307,7 @@ public static class PVSimulator
         .OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
 
       if (sellMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour)
-          && (exportPriceNow >= input.ForceChargeMaxPriceCt || NegativeImportUpcoming(input.ImportPrices, now)))
+          && (exportPriceNow >= input.ForceChargeMaxPrice || NegativeImportUpcoming(input.ImportPrices, now)))
       {
         // Near solar time we can go lower (absolute minimum), otherwise stay at preferred
         int minAllowedSoc = input.PreferredMinSocPercent;
@@ -358,7 +359,7 @@ public static class PVSimulator
         if (chargeTime > 60 && rankBefore < rankAfter)
         {
           var priceHourBefore = input.ImportPrices.FirstOrDefault(p => p.StartTime == chargeStart.AddHours(-1));
-          if (priceHourBefore.Price < input.ForceChargeMaxPriceCt)
+          if (priceHourBefore.Price < input.ForceChargeMaxPrice)
             chargeStart = cheapestToday.StartTime.AddMinutes(-(chargeTime - 50));
         }
 

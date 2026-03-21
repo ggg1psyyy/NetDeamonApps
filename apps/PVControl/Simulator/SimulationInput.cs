@@ -1,9 +1,10 @@
+using System;
 using System.Collections.Generic;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
 /// <summary>
-/// All inputs required by <see cref="PVSimulator.Simulate"/>.
+/// All inputs required by <see cref="EnergySimulator.Simulate"/>.
 /// This is a pure-data object with no dependencies on Home Assistant or any live state —
 /// the caller (HouseEnergy.RunSimulation) is responsible for reading current sensor values
 /// and populating this before each simulation run.
@@ -104,11 +105,11 @@ public class SimulationInput
   public required bool OpportunisticDischarge { get; init; }
 
   /// <summary>
-  /// The import price ceiling (ct/kWh) above which opportunistic discharge is triggered.
+  /// The import price ceiling (€/kWh) above which opportunistic discharge is triggered.
   /// Also used as the upper limit for user-initiated force charge: we never force-charge
   /// at a price above this value.
   /// </summary>
-  public required int ForceChargeMaxPriceCt { get; init; }
+  public required float ForceChargeMaxPrice { get; init; }
 
   /// <summary>
   /// Target SoC % for user-initiated force charging (ForceCharge switch).

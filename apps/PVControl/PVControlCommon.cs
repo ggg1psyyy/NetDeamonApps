@@ -1,10 +1,14 @@
-﻿using NetDaemon.Extensions.MqttEntityManager;
+﻿using System;
+using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
 using System.Dynamic;
 using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using NetDaemon.AppModel;
+using NetDaemon.HassModel;
 
 namespace NetDeamon.apps.PVControl
 {
@@ -22,7 +26,7 @@ namespace NetDeamon.apps.PVControl
     }
   }
 
-  public struct SystemState(int pVPower, int houseLoad, int soC, InverterState inverterState, int pvPower)
+  public struct SystemState(int houseLoad, int soC, InverterState inverterState, int pvPower)
   {
     public int PVPower = pvPower;
     public int HouseLoad = houseLoad;
@@ -79,7 +83,7 @@ namespace NetDeamon.apps.PVControl
         {
           foreach (var property in addConfig.GetType().GetProperties())
           {
-            ((IDictionary<string, object>)dynamicConfig)[property.Name] = property.GetValue(addConfig);
+            ((IDictionary<string, object>)dynamicConfig)[property.Name] = property.GetValue(addConfig)!;
           }
         }
         dynamicConfig.device = device;
