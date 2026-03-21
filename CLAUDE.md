@@ -20,6 +20,10 @@ dotnet test ../NetDeamonApps.Tests/  # Run unit tests (from repo root)
 
 The test project lives at `../NetDeamonApps.Tests/` (sibling directory to the repo). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with valid HA host/token.
 
+## Testing Requirements
+
+**Every new or changed feature/function must be accompanied by a corresponding test.** If the logic is testable without HA (pure computation, data transformation, decision logic), add or update a test in `NetDeamonApps.Tests`. If HA integration makes unit testing impractical, document why in a comment near the test class.
+
 ## Tests
 
 `NetDeamonApps.Tests` (xUnit) covers pure-logic components that don't need HA:

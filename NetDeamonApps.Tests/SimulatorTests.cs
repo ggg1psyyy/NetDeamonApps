@@ -73,7 +73,7 @@ public class SimulatorTests : TestBase
       PVPredictionWh            = pv,
       ForceCharge               = forceCharge,
       OpportunisticDischarge    = false,
-      ForceChargeMaxPriceCt     = 25,
+      ForceChargeMaxPrice       = 0.25f,
       ForceChargeTargetSocPercent = 100,
       OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
@@ -90,7 +90,7 @@ public class SimulatorTests : TestBase
     // endSlot = startSlot.Date.AddDays(2) = 2025-06-17 00:00 (exclusive)
     // Last slot = 2025-06-16 23:45, count = 39h * 4 = 156
     var start = new DateTime(2025, 6, 15, 9, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(start));
+    var slots = EnergySimulator.Simulate(BuildInput(start));
 
     Assert.Equal(start, slots.First().Time);
     Assert.Equal(new DateTime(2025, 6, 16, 23, 45, 0), slots.Last().Time);
@@ -103,7 +103,7 @@ public class SimulatorTests : TestBase
   public void StartAtMidnight_SlotsCoverExactlyTwoDays()
   {
     var start = new DateTime(2025, 6, 16, 0, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(start));
+    var slots = EnergySimulator.Simulate(BuildInput(start));
 
     Assert.Equal(start, slots.First().Time);
     Assert.Equal(new DateTime(2025, 6, 17, 23, 45, 0), slots.Last().Time);
@@ -117,7 +117,7 @@ public class SimulatorTests : TestBase
     // endSlot = startSlot.Date.AddDays(2) = 2025-06-17 00:00 (exclusive).
     // Count = (2025-06-17 - 2025-06-15 23:45) / 15 min = 101 slots.
     var start = new DateTime(2025, 6, 15, 23, 45, 0);
-    var slots = PVSimulator.Simulate(BuildInput(start));
+    var slots = EnergySimulator.Simulate(BuildInput(start));
 
     Assert.Equal(start, slots.First().Time);
     Assert.Equal(new DateTime(2025, 6, 16, 23, 45, 0), slots.Last().Time);
@@ -128,7 +128,7 @@ public class SimulatorTests : TestBase
   public void AllSlotsAre15MinutesApart()
   {
     var start = new DateTime(2025, 3, 18, 9, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(start));
+    var slots = EnergySimulator.Simulate(BuildInput(start));
 
     for (int i = 1; i < slots.Count; i++)
       Assert.Equal(TimeSpan.FromMinutes(15), slots[i].Time - slots[i - 1].Time);
@@ -141,7 +141,7 @@ public class SimulatorTests : TestBase
   {
     // Battery at 90% with no load and no PV — well above floor, no need to charge
     var start = new DateTime(2025, 6, 15, 9, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(start, startSocPct: 90, loadWhPerSlot: 0));
+    var slots = EnergySimulator.Simulate(BuildInput(start, startSocPct: 90, loadWhPerSlot: 0));
 
     Assert.DoesNotContain(slots, s => s.State.Mode == InverterModes.force_charge);
   }
@@ -152,7 +152,7 @@ public class SimulatorTests : TestBase
     // Battery at 15% (just above 12% floor), heavy load, no PV → needs grid charge.
     // Cheap hour is 02:00 — verify force_charge appears at that hour.
     var start = new DateTime(2025, 6, 15, 20, 0, 0); // 20:00, before the 02:00 cheap window
-    var slots = PVSimulator.Simulate(BuildInput(
+    var slots = EnergySimulator.Simulate(BuildInput(
       start,
       startSocPct: 15,
       loadWhPerSlot: 300,
@@ -173,7 +173,7 @@ public class SimulatorTests : TestBase
     // SoC at exactly the floor (20%), no PV, cheap hour at 02:00.
     // Between now (20:00) and 02:00 the simulator should hold with grid_only, not force_charge.
     var start = new DateTime(2025, 6, 15, 20, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(
+    var slots = EnergySimulator.Simulate(BuildInput(
       start,
       startSocPct: 20,
       loadWhPerSlot: 300,
@@ -197,7 +197,7 @@ public class SimulatorTests : TestBase
   {
     // Plenty of PV (1000 Wh/slot = 4 kW), low load → battery should charge in normal mode
     var start = new DateTime(2025, 6, 15, 10, 0, 0); // daytime
-    var slots = PVSimulator.Simulate(BuildInput(
+    var slots = EnergySimulator.Simulate(BuildInput(
       start,
       startSocPct: 30,
       loadWhPerSlot: 100,
@@ -216,7 +216,7 @@ public class SimulatorTests : TestBase
   {
     // Even without any charging the simulator must clamp battery discharge at AbsoluteMinSocPercent
     var start = new DateTime(2025, 6, 15, 9, 0, 0);
-    var slots = PVSimulator.Simulate(BuildInput(
+    var slots = EnergySimulator.Simulate(BuildInput(
       start,
       startSocPct: 50,
       absMinSocPct: 12,

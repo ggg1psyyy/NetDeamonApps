@@ -22,6 +22,9 @@
         </None>
         <Compile Remove="apps\PVControl\Simulate.cs" />
         <Compile Remove="NetDeamonApps.Tests\**" />
+        <None Remove="NetDeamonApps.Tests\**" />
+        <Content Remove="NetDeamonApps.Tests\**" />
+        <EmbeddedResource Remove="NetDeamonApps.Tests\**" />
         <None Include="apps\PVControl\Simulate.cs" />
         <Compile Remove="HA\**" />
         <None Remove="HA\**" />

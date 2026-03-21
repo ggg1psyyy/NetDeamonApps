@@ -1,47 +1,102 @@
-# PVControl
-An application to optimize (external) energy usage by monitoring and predicting battery SoC, houseload and PV charge.
-It tries to always keep the battery SoC over the defined minima by checking if there will be enough PV charge or otherwise instruct to charge the battery at the cheapest times.
-PVControl itself doesn't do anything but calculate the different entity states. You have to use the provided information and use automations to take advantage of this.
+# NetDeamonApps
 
-## Entities which should be used in automations
-### sensor.pv_control_mode
-This is the main information and has 3 possible values:
-* "normal": normal operation, nothing special is happening
-* "force_charge": instruct your inverter to charge the battery from grid. According to the prediction it's not possible to keep the SoC over the minima and now is the cheapest period to charge
-* "grid_only": use as much grid power as possible (disable PV, charge the battery, use only grid power). This is only active if energy prices are negative, depending on your tarif you could even be paying for feedin
-### sensor.pv_control_run_heavyloads_now
-This sensor tells if it's a good time to use heavy loads now (washing machine, dishwasher, heatpump, etc) and also has 3 possible values:
-* "Yes": use all the load you want, the battery will get full via PV charge
-* "IfNecessary": only use needed loads, the battery won't reach 100% SoC but also will not go down to your preferred minima
-* "No": try to avoid using loads, as it's predicted that the battery SoC will go under absolute minima
+NetDaemon4 home automation apps for Home Assistant, written in C# (.NET 9.0).
 
-## Entities which could be used in automations
-### binary_sensor.pv_control_need_to_charge_from_grid_today
-This sensor just tells if it's necessary to charge the battery from grid today or if we can keep the SoC over the absolute minima until the next PV period
+> Developed with assistance from [Claude Code](https://claude.ai/code) (Anthropic) — used throughout for architecture decisions, bug diagnosis, code generation, and test authoring.
 
-## Option entities
-### select.pv_control_mode_override
-Allows to manually override the current mode
-### number.pv_control_preferredbatterycharge
-The preferred minimal battery SoC, used as a lower limit for "pv_control_run_heavyloads_now"-"IfNecessary"
-### switch.pv_control_enforce_preferred_soc
-If active the application will keep the SoC always over the preferred SoC by charging from grid if necessary. Comparable to the "Backup Mode" of most inverters.
-### switch.pv_control_force_charge_at_cheapest_period
-If active the system will charge everday at the lowest price even if it wouldn't be necessary to keep the SoC over the minima
-### number.pv_control_max_price_for_forcecharge
-Only force charge at cheapest price if the price is below this value
-### number.pv_control_forcecharge_target_soc
-Don't charge over this SoC when force_charging in cheapest period_
+---
 
-## Info entities
-Most of the other provided entities are just for information and are only relevant if you're a stickler for information overload like myself
+## Apps
 
-## Entity attributes
-all sensors have edditional information in the attributes, which again can be ignored
+### PVControl
+Optimizes battery usage and grid import costs using dynamic EPEX Spot pricing, PV forecasts (OpenMeteo), and historical load data.
 
-## Prediction
-Class to encapsulate different predictions and forecasts.
-For the load there only is a (weighted) average prediction available for now, but the logged data is meant to use some sort of ML/AI to predict the load more efficiently.
+The app runs a forward simulation every 15 minutes to predict battery SoC over the next 48 hours and decides the optimal inverter mode. All decisions are derived from this simulation — no separate heuristics.
 
-# DataLogger
-This part logs the most important sensor information into a sqlite db to use for prediction.
+**How it works:**
+- Forecasts house load from historical SQLite data (weighted average)
+- Fetches PV forecast from OpenMeteo HA entities
+- Runs a slot-by-slot simulation (`PVSimulator`) to find when the battery will drop below the minimum SoC
+- If grid charging is needed, schedules it at the cheapest available price window before PV takes over
+- Optionally discharges to the grid opportunistically during high-price periods
+
+PVControl itself only sets entity states — you use HA automations to act on them.
+
+#### Main entities for automations
+
+**`sensor.pv_control_mode`**
+| Value | Meaning |
+|---|---|
+| `normal` | Normal operation |
+| `force_charge` | Charge battery from grid now — cheapest window before SoC hits minimum |
+| `grid_only` | Use grid only, disable battery discharge (active during negative prices) |
+
+**`sensor.pv_control_run_heavyloads_now`**
+| Value | Meaning |
+|---|---|
+| `Yes` | PV surplus expected — run heavy loads freely |
+| `IfNecessary` | Marginal — only run essential loads |
+| `No` | Battery predicted to drop below absolute minimum — defer loads |
+
+#### Other useful entities
+
+- **`binary_sensor.pv_control_need_to_charge_from_grid_today`** — whether grid charging is needed before the next PV period
+
+#### Configuration entities
+
+| Entity | Description |
+|---|---|
+| `select.pv_control_mode_override` | Manually override the current mode |
+| `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%) |
+| `switch.pv_control_enforce_preferred_soc` | Keep SoC above preferred minimum at all times (grid backup mode) |
+| `switch.pv_control_force_charge_at_cheapest_period` | Always charge at cheapest daily window, even if not strictly needed |
+| `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for opportunistic force-charge |
+| `number.pv_control_forcecharge_target_soc` | Target SoC (%) when force-charging at cheapest period |
+
+Most remaining entities are informational (simulation timeline, price list, SoC forecast, etc.).
+
+---
+
+### DataLogger
+Logs energy sensor history to a local SQLite database at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
+
+---
+
+### MidiControl
+Integrates a BCF2000 MIDI controller with Home Assistant — maps faders/buttons to HA entities and renders live state back to the controller's display. Side project, low priority.
+
+---
+
+## Build & Deploy
+
+```bash
+dotnet build                  # Debug build
+dotnet build -c Release       # Release build
+dotnet publish -c Release     # Publish for deployment
+```
+
+Copy the published output to `/config/netdaemon4` on your Home Assistant instance (NetDaemon4 add-on) or your custom deployment folder.
+
+For local development, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with your HA host, port, and token.
+
+## Tests
+
+The xUnit test project lives at `NetDeamonApps.Tests/` and covers pure-logic components without needing a live HA connection:
+
+```bash
+dotnet test NetDeamonApps.Tests/
+```
+
+| Test class | What it covers |
+|---|---|
+| `PredictionContainerTests` | 192-slot 15-min window validation (`DataOK`) |
+| `MidnightRolloverTests` | Load data staleness detection after midnight |
+| `SimulatorTests` | End-to-end `PVSimulator.Simulate()` with injectable inputs |
+
+---
+
+## Development notes
+
+- All dynamic HA entities (sensors, selects, numbers) are registered via MQTT (`IMqttEntityManager`), not static YAML
+- App-specific configuration (entity IDs, thresholds) lives in each app's `.yaml` file
+- `PVControlCommon` is a static singleton that holds shared dependencies; initialized once in the constructor
