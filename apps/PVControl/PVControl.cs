@@ -58,6 +58,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _sumImportCostNetworkOnlyEntity = null!;
     private Entity _sumExportEarningsBruttoEntity = null!;
     private Entity _sumImportExportNetCostEntity = null!;
+    private Entity _batteryAvgCostPerKwhEntity = null!;
     private Entity _bestExportPriceEntity = null!;
     private Entity _bestImportPriceEntity = null!;
     private Entity _enableOpportunisticExport = null!;
@@ -106,6 +107,7 @@ namespace NetDeamon.apps.PVControl
         _house.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
         _house.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
         _house.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
+        _house.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
 
         if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
           _house.ForceChargeMaxPrice = maxPrice;
@@ -796,6 +798,14 @@ namespace NetDeamon.apps.PVControl
         {
           unit_of_measurement = "€",
           state_class = "total",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
+      _batteryAvgCostPerKwhEntity = await RegisterSensor("sensor.pv_control_battery_avg_cost_per_kwh", "Battery average stored energy cost", "MONETARY", "mdi:battery-unknown",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
         },
         defaultValue: "0",
         reRegister: reset);

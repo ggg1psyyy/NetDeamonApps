@@ -23,6 +23,11 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _battChargeAverage;
     private readonly RunningIntAverage _loadRunningAverage;
     private readonly RunningIntAverage _pvRunningAverage;
+
+    // ── Battery average cost tracking ────────────────────────────────────────────────────
+    private float _batteryAvgCostPerKwh;
+    private DateTime _lastBatteryPowerTime = DateTime.MinValue;
+    private int _lastBatteryPowerW;
     private readonly RunningIntAverage _gridRunningAverage;
     private float _lastImportEnergySum;
     private float _lastExportEnergySum;
@@ -164,6 +169,19 @@ namespace NetDeamon.apps.PVControl
     public Entity? SumImportCostNetworkOnlyEntity { get; set; }
     public Entity? SumImportExportNetCostEntity { get; set; }
 
+    private Entity? _batteryAvgCostEntity;
+    public Entity? BatteryAvgCostEntity
+    {
+      get => _batteryAvgCostEntity;
+      set
+      {
+        _batteryAvgCostEntity = value;
+        // Restore persisted value on startup so attribution is correct immediately.
+        if (value != null && value.TryGetStateValue(out float v) && v > 0)
+          _batteryAvgCostPerKwh = v;
+      }
+    }
+
     private async Task AddToSumEntityAsync(Entity? entity, float deltaEur)
     {
       if (entity is null) return;
@@ -188,6 +206,31 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == PVCC_Config.CurrentBatteryPowerEntity?.EntityId && PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
       {
         _battChargeAverage.AddValue(bat);
+
+        var now = DateTime.Now;
+        if (_lastBatteryPowerTime != DateTime.MinValue && _lastBatteryPowerW > 0)
+        {
+          double deltaHours = Math.Min((now - _lastBatteryPowerTime).TotalHours, 0.25);
+          float deltaKwh = (float)(_lastBatteryPowerW * deltaHours / 1000.0);
+
+          // PV surplus available for battery after house base load and active EV loads.
+          int evPowerW = SchedulableLoads
+            .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
+            .Sum(l => l.PowerAverage!.GetAverage());
+          float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad - evPowerW);
+          float pvFraction = Math.Min(1f, pvSurplusW / _lastBatteryPowerW);
+          float sourcePrice = (1f - pvFraction) * CurrentEnergyImportPriceTotal;
+
+          // Weighted average: blend existing stored energy cost with new charge cost.
+          float currentStoredKwh = Math.Max(0.1f, BatterySoc * BatteryCapacity / 100f / 1000f);
+          _batteryAvgCostPerKwh = (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice)
+                                  / (currentStoredKwh + deltaKwh);
+          if (_batteryAvgCostEntity != null)
+            await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
+              _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
+        }
+        _lastBatteryPowerW = bat;
+        _lastBatteryPowerTime = now;
       }
       if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
       {
@@ -244,8 +287,18 @@ namespace NetDeamon.apps.PVControl
         float diff = energy - schedLoad.LastEnergySum;
         if (diff > 0)
         {
+          // Decompose energy source: PV direct (free) → grid direct → battery (avg cost).
+          int evPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.Config.AvgPowerW;
+          float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad);
+          float pvFraction      = evPowerW > 0 ? Math.Min(1f, pvSurplusW / evPowerW) : 0f;
+          float remainFraction  = 1f - pvFraction;
+          float gridFraction    = evPowerW > 0 ? Math.Min(remainFraction, Math.Max(0f, CurrentAverageGridPower) / evPowerW) : 0f;
+          float batteryFraction = remainFraction - gridFraction;
+          float effectivePrice  = gridFraction * CurrentEnergyImportPriceTotal
+                                + batteryFraction * _batteryAvgCostPerKwh;
+
           await AddToSumEntityAsync(schedLoad.TotalEnergyKwhEntity, diff);
-          await AddToSumEntityAsync(schedLoad.TotalCostEurEntity, diff * CurrentEnergyImportPriceTotal);
+          await AddToSumEntityAsync(schedLoad.TotalCostEurEntity, diff * effectivePrice);
         }
         schedLoad.LastEnergySum = energy;
       }
