@@ -9,8 +9,8 @@ NetDeamon.apps.PVControl.PVConfig:
     - sensor.epex_spot_data_market_price
     - sensor.epex_spot_data_market_price_2
   ImportPriceMultiplier: 1.0
-  ImportPriceAddition: 1.2
-  ImportPriceNetwork: 7.992
+  ImportPriceAddition: 0.012
+  ImportPriceNetwork: 0.07992
   ImportPriceTax: 0.2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.epex_spot_data_price
@@ -64,17 +64,37 @@ NetDeamon.apps.PVControl.PVConfig:
   EnergyCostDBLocation: "apps/PVControl/energy_costs.db"
   TotalImportEnergyEntity: sensor.solax_grid_import_total
   TotalExportEnergyEntity: sensor.solax_grid_export_total
-  # HeatpumpManager
+  # Schedulable extra loads — each entry auto-creates HA entities for mode/target if not set here.
+  # Mode values: Off, Optimal, Priority, PriorityPlus, Emergency
+  # If Mode is omitted: HA select entity auto-created (select.pv_control_<slug>_mode)
+  # If TargetLevel is omitted: HA number entity auto-created (number.pv_control_<slug>_target_level)
+  SchedulableLoads:
+    - Name: "EV Charger"
+      Priority: 10
+      # EnergyPerLevelUnitKwh: kWh per % — 60 kWh battery / 100 % = 0.6
+      EnergyPerLevelUnitKwh: 0.6
+      AvgPowerW: 1800
+      MinActivePowerW: 500
+      LevelUnit: "%"
+      TargetLevelMin: 20
+      TargetLevelMax: 100
+      TargetLevelStep: 5
+      TargetLevelDefault: 80
+      CurrentLevelEntity: sensor.byd_atto_2_ladezustand
+      ActualPowerEntity: sensor.esp_ct8_carport
+      ActualEnergyEntity: sensor.esp_ct8_daily_energy_carport
+      # Subtract historical car-charging from the base load prediction (avoids double-counting).
+      # Known DB column names: carcharge, warmwaterenergy, heatpumpenergy. Omit if no DB history.
+      HistoryDbColumn: "carcharge"
+      # Mode and TargetLevel omitted — HA entities auto-created
+
+  # REMOVED: HeatpumpManager (will be re-implemented as a SchedulableLoad later)
   # current Load (W)
-  HeatPumpLoadEntity: sensor.wp_power_total
+  # HeatPumpLoadEntity: sensor.wp_power_total
   # current Warwater temperature (�C)
-  WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
+  # WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
   # automatic Warmwater target temperature (�C)
-  WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
+  # WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
   # manual Warmwater target temperature (�C)
-  WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
-  WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
-  # aproximate Energy used to heat up 1 degree of water (Wh)
-  WarmWaterEnergyNeededPerDegree: 110
-  # aproximate time needed to heat up 1 degree of water (minutes)
-  MinutesPerDegree: 2
+  # WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
+  # WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung

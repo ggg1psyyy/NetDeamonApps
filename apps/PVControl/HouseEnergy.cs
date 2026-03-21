@@ -1,11 +1,20 @@
-﻿using NetDaemon.HassModel.Entities;
+﻿using System;
+using System.Globalization;
+using NetDaemon.HassModel.Entities;
+using NetDeamon.apps.PVControl.Managers;
 using NetDeamon.apps.PVControl.Predictions;
 using NetDeamon.apps.PVControl.Simulator;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using NetDaemon.HassModel;
 using static NetDeamon.apps.PVControl.PVControlCommon;
+using NetDeamon.apps;
+using DateTime = System.DateTime;
+using Math = System.Math;
+using TimeSpan = System.TimeSpan;
 
 namespace NetDeamon.apps.PVControl
 {
@@ -67,7 +76,14 @@ namespace NetDeamon.apps.PVControl
       
       if (string.IsNullOrEmpty(PVCC_Config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
-      Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBFullLocation, 10);
+      // Collect the DB columns each schedulable load wants stripped from the base prediction,
+      // so no load's historical energy is double-counted when it is added back as an ExtraLoad.
+      var excludeColumns = PVCC_Config.SchedulableLoads
+        .Select(l => l.HistoryDbColumn)
+        .Where(c => !string.IsNullOrEmpty(c))
+        .Select(c => c!)
+        .ToList();
+      Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBFullLocation, 10, excludeColumns: excludeColumns);
 
       if (PVCC_Config.ForecastPVEnergyTodayEntities is null || PVCC_Config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
@@ -87,6 +103,28 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.DailyImportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyImportEnergyEntity));
       PVCC_Config.CurrentGridPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentGridPowerEntity));
       PVCC_Config.InverterStatusEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.InverterStatusEntity));
+
+      // Initialize runtime objects for each schedulable load and wire up their power averages.
+      SchedulableLoads = PVCC_Config.SchedulableLoads
+        .Select(cfg => new SchedulableLoadRuntime(cfg))
+        .ToList();
+      foreach (var schedLoad in SchedulableLoads)
+      {
+        if (schedLoad.Config.ActualPowerEntity is not null)
+        {
+          schedLoad.PowerAverage = new RunningIntAverage(TimeSpan.FromMinutes(2));
+          if (schedLoad.Config.ActualPowerEntity.TryGetStateValue(out float initPow))
+            schedLoad.PowerAverage.AddValue((int)Math.Round(initPow));
+          schedLoad.Config.ActualPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(schedLoad.Config.ActualPowerEntity));
+        }
+        if (schedLoad.Config.ActualEnergyEntity is not null)
+        {
+          if (schedLoad.Config.ActualEnergyEntity.TryGetStateValue(out float initEnergy))
+            schedLoad.LastEnergySum = initEnergy;
+          schedLoad.Config.ActualEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(schedLoad.Config.ActualEnergyEntity));
+        }
+      }
+
       PreferredMinBatterySoC = 30;
       EnforcePreferredSoC = false;
       _dailySoCPrediction = [];
@@ -108,11 +146,40 @@ namespace NetDeamon.apps.PVControl
     public bool OpportunisticDischarge { get; set; }
     public int PreferredMinBatterySoC { get; set; }
     public InverterModes OverrideMode { get; set; }
-    public int ForceChargeMaxPrice { get; set; }
+    public float ForceChargeMaxPrice { get; set; }
     public int ForceChargeTargetSoC { get; set; }
-#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
+
+    // ── Schedulable loads ─────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Runtime state for each schedulable extra load defined in the YAML config.
+    /// The simulation oracle (FindLoadWindow) updates ChargeNow/ChargeReason/PredictedEnd
+    /// on each entry during every RunSimulation call.
+    /// </summary>
+    public List<SchedulableLoadRuntime> SchedulableLoads { get; private set; } = [];
+    // ── Cost sum entities (HA is the source of truth — no local copy) ─────────────────────
+    /// <summary>Set by PVControl after entity registration; HouseEnergy writes directly to these.</summary>
+    public Entity? SumExportEarningsEntity { get; set; }
+    public Entity? SumImportCostBruttoEntity { get; set; }
+    public Entity? SumImportCostEnergyOnlyEntity { get; set; }
+    public Entity? SumImportCostNetworkOnlyEntity { get; set; }
+    public Entity? SumImportExportNetCostEntity { get; set; }
+
+    private async Task AddToSumEntityAsync(Entity? entity, float deltaEur)
+    {
+      if (entity is null) return;
+      float current = entity.TryGetStateValue(out float v) ? v : 0f;
+      await PVCC_EntityManager.SetStateAsync(entity.EntityId, (current + deltaEur).ToString(CultureInfo.InvariantCulture));
+    }
+
+    private async Task UpdateNetCostEntityAsync()
+    {
+      if (SumImportExportNetCostEntity is null || SumImportCostBruttoEntity is null || SumExportEarningsEntity is null) return;
+      float imp = SumImportCostBruttoEntity.TryGetStateValue(out float i) ? i : 0f;
+      float exp = SumExportEarningsEntity.TryGetStateValue(out float e) ? e : 0f;
+      await PVCC_EntityManager.SetStateAsync(SumImportExportNetCostEntity.EntityId, (imp - exp).ToString(CultureInfo.InvariantCulture));
+    }
+
     private async Task UserStateChanged(Entity entity)
-#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
     {
       if (entity.EntityId == PVCC_Config.CurrentImportPriceEntity?.EntityId)
       {
@@ -124,7 +191,17 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
       {
-        _loadRunningAverage.AddValue(load);
+        // Subtract actually-measured schedulable load power so the average tracks only base
+        // house load — matching the historical prediction which excludes these via excludeColumns.
+        // Without this, NetEnergyPrediction double-counts the load: once via the elevated
+        // running average and once via the ExtraLoad injected into the simulation.
+        // Only subtract loads with a confirmed active ActualPowerEntity reading (above
+        // MinActivePowerW) — this correctly handles cases where ChargeNow=true but the
+        // load isn't actually drawing (e.g. EV not connected).
+        int runningLoadW = SchedulableLoads
+          .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
+          .Sum(l => l.PowerAverage!.GetAverage());
+        _loadRunningAverage.AddValue(load - runningLoadW);
       }
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
@@ -135,7 +212,8 @@ namespace NetDeamon.apps.PVControl
         float diff = (export / 1000) - _lastExportEnergySum;
         if (diff > 0)
         {
-          SumEnergyExportEarningsTotal += diff * CurrentEnergyExportPriceTotal;
+          await AddToSumEntityAsync(SumExportEarningsEntity, diff * CurrentEnergyExportPriceTotal);
+          await UpdateNetCostEntityAsync();
         }
         _lastExportEnergySum = export / 1000;
       }
@@ -144,11 +222,32 @@ namespace NetDeamon.apps.PVControl
         float diff = (import / 1000) - _lastImportEnergySum;
         if (diff > 0)
         {
-          SumEnergyImportCostTotal += diff * CurrentEnergyImportPriceTotal;
-          SumEnergyImportCostEnergyOnly += diff * CurrentEnergyImportPriceEnergyOnly;
-          SumEnergyImportCostNetworkOnly += diff * CurrentEnergyImportPriceNetworkOnly;
+          await AddToSumEntityAsync(SumImportCostBruttoEntity, diff * CurrentEnergyImportPriceTotal);
+          await AddToSumEntityAsync(SumImportCostEnergyOnlyEntity, diff * CurrentEnergyImportPriceEnergyOnly);
+          await AddToSumEntityAsync(SumImportCostNetworkOnlyEntity, diff * CurrentEnergyImportPriceNetworkOnly);
+          await UpdateNetCostEntityAsync();
         }
         _lastImportEnergySum = import / 1000;
+      }
+      foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualPowerEntity is not null
+        && entity.EntityId == l.Config.ActualPowerEntity!.EntityId
+        && l.Config.ActualPowerEntity.TryGetStateValue(out float _)))
+      {
+        schedLoad.Config.ActualPowerEntity!.TryGetStateValue(out float p);
+        schedLoad.PowerAverage!.AddValue((int)Math.Round(p));
+      }
+      foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualEnergyEntity is not null
+        && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId
+        && l.Config.ActualEnergyEntity.TryGetStateValue(out float _)))
+      {
+        schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy);
+        float diff = energy - schedLoad.LastEnergySum;
+        if (diff > 0)
+        {
+          await AddToSumEntityAsync(schedLoad.TotalEnergyKwhEntity, diff);
+          await AddToSumEntityAsync(schedLoad.TotalCostEurEntity, diff * CurrentEnergyImportPriceTotal);
+        }
+        schedLoad.LastEnergySum = energy;
       }
       if (entity.EntityId == PVCC_Config.CurrentGridPowerEntity?.EntityId && PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
       {
@@ -169,7 +268,6 @@ namespace NetDeamon.apps.PVControl
     }
 
     private int _resetCounter = 0;
-    private int _problemCounter = 0;
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private List<SimulationSlot> _simulationResult = [];
 
@@ -190,7 +288,10 @@ namespace NetDeamon.apps.PVControl
       Prediction_PV.UpdateData();
       Prediction_NetEnergy.UpdateData();
 
-      var input = new SimulationInput
+      // Build the base SimulationInput without EV loads. FindEVChargingWindow will run
+      // multiple test simulations to find the valid EV charging window, then we run the
+      // final simulation with those EV ExtraLoads included.
+      var baseInput = new SimulationInput
       {
         StartTime = now,
         StartSocPercent = BatterySoc,
@@ -207,7 +308,7 @@ namespace NetDeamon.apps.PVControl
         ExtraLoads = extraLoads ?? [],
         ForceCharge = ForceCharge,
         OpportunisticDischarge = OpportunisticDischarge,
-        ForceChargeMaxPriceCt = ForceChargeMaxPrice,
+        ForceChargeMaxPrice = ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
         OverrideMode = OverrideMode,
         CurrentMode = _currentMode,
@@ -215,7 +316,23 @@ namespace NetDeamon.apps.PVControl
         CurrentAverageGridPowerW = CurrentAverageGridPower,
       };
 
-      _simulationResult = PVSimulator.Simulate(input);
+      // Run the baseline simulation once to identify naturally-scheduled force_charge slots.
+      // Each schedulable load's window search runs against this same baseline.
+      var baseResult = EnergySimulator.Simulate(baseInput);
+      var baseForceChargeSlots = new HashSet<DateTime>(
+        baseResult.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+
+      // Find valid window for each schedulable load (highest priority first).
+      foreach (var load in SchedulableLoads.OrderByDescending(l => l.Config.Priority))
+        FindLoadWindow(load, baseInput, baseForceChargeSlots);
+
+      // Run final simulation with all found ExtraLoads merged in.
+      var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
+      var finalInput = allExtraLoads.Count > 0
+        ? SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, .. allExtraLoads])
+        : baseInput;
+
+      _simulationResult = EnergySimulator.Simulate(finalInput);
 
       // Build the two-day SoC dict for Prediction_BatterySoC:
       //   - simulation covers now→end-of-tomorrow (filled below from _simulationResult)
@@ -228,18 +345,156 @@ namespace NetDeamon.apps.PVControl
         if (fullSoC.ContainsKey(slot.Time))
           fullSoC[slot.Time] = slot.SoC;
 
-      // Backward fill past slots (midnight → now) by reversing net-energy integration
-      int backEnergy = BatterySoc * BatteryCapacity / 100;
-      var pastSlots = fullSoC.Keys.Where(k => k < startSlot).OrderByDescending(k => k).ToList();
-      foreach (var t in pastSlots)
-      {
-        int netWh = Prediction_NetEnergy.TodayAndTomorrow.GetValueOrDefault(t, 0);
-        backEnergy = Math.Clamp(backEnergy - netWh, 0, BatteryCapacity);
-        fullSoC[t] = backEnergy * 100 / BatteryCapacity;
-      }
+      // For past slots (midnight → now) preserve the previously predicted values rather than
+      // recalculating them — back-integrating net energy produces a wobbly reconstructed line
+      // that doesn't reflect what the simulation actually predicted at those times.
+      foreach (var t in fullSoC.Keys.Where(k => k < startSlot).ToList())
+        fullSoC[t] = Prediction_BatterySoC.TodayAndTomorrow.GetValueOrDefault(t, 0);
 
       Prediction_BatterySoC.UpdateData(fullSoC);
     }
+
+    // ── Schedulable load window finding ──────────────────────────────────────────────────────
+    // The simulation is the oracle: we run it with candidate ExtraLoad windows and check
+    // whether the result satisfies the mode-specific conditions. The first valid start slot
+    // determines ChargeNow and the ExtraLoads injected into the final simulation.
+
+    /// <summary>
+    /// Finds the valid scheduling window for a load by iterating over candidate start slots
+    /// and running a test simulation for each. Updates load.ChargeNow/ChargeReason/PredictedEnd.
+    /// The baseline and its force-charge slots are pre-computed once in RunSimulation.
+    /// </summary>
+    private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, HashSet<DateTime> baseForceChargeSlots)
+    {
+      var now = DateTime.Now;
+      var currentSlot = now.RoundToNearestQuarterHour();
+
+      void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
+      {
+        load.ExtraLoads = extraLoads;
+        load.ChargeNow = chargeNow;
+        load.ChargeReason = reason;
+        load.PredictedEnd = end;
+      }
+
+      if (load.Mode == LoadSchedulingMode.Off)
+      { SetResult([], false, "Off", null); return; }
+
+      if (load.Config.CurrentLevelEntity is null || load.Config.EnergyPerLevelUnitKwh <= 0)
+      { SetResult([], false, "CurrentLevelEntity or EnergyPerLevelUnitKwh not configured", null); return; }
+
+      if (load.CurrentLevel >= load.TargetLevel)
+      { SetResult([], false, $"Target reached ({load.CurrentLevel:F0}{load.Config.LevelUnit} ≥ {load.TargetLevel:F0}{load.Config.LevelUnit})", null); return; }
+
+      int chargeRateW = load.EffectivePowerW;
+      if (chargeRateW <= 0)
+      { SetResult([], false, "EffectivePowerW is 0 — check AvgPowerW config", null); return; }
+
+      int energyNeededWh = load.EnergyNeededWh;
+      int durationMinutes = energyNeededWh * 60 / chargeRateW;
+
+      // Emergency: always charge immediately, no simulation check.
+      if (load.Mode == LoadSchedulingMode.Emergency)
+      {
+        var endTime = now.AddMinutes(durationMinutes);
+        SetResult(
+          [new ExtraLoad { Name = load.Config.Name, Priority = int.MaxValue, StartTime = now, EndTime = endTime, PowerW = chargeRateW }],
+          true,
+          $"Emergency ({load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
+          endTime);
+        return;
+      }
+
+      // One simulation from now to min(full duration, FirstRelevantPVEnergyTomorrow).
+      // Fall through from most to least restrictive: Optimal → Priority → PriorityPlus.
+      var windowEnd = FirstRelevantPVEnergyTomorrow;
+      var sessionEnd = currentSlot.AddMinutes(durationMinutes);
+      if (sessionEnd > windowEnd) sessionEnd = windowEnd;
+
+      if (sessionEnd <= currentSlot)
+      { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
+
+      var extraLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = sessionEnd, PowerW = chargeRateW };
+      var simResult = EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, extraLoad]));
+
+      bool overnightOk = SimOvernightMinSocOk(simResult);
+      bool needsGrid = simResult.Any(s =>
+        s.State.Mode == InverterModes.force_charge
+        && !baseForceChargeSlots.Contains(s.Time)
+        && s.Time >= LastRelevantPVEnergyToday
+        && s.Time <= FirstRelevantPVEnergyTomorrow);
+      bool gridOnlyCheap = !simResult.Any(s =>
+        s.State.Mode == InverterModes.force_charge
+        && !baseForceChargeSlots.Contains(s.Time)
+        && s.Time >= LastRelevantPVEnergyToday
+        && s.Time <= FirstRelevantPVEnergyTomorrow
+        && !PriceListImport.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= ForceChargeMaxPrice));
+
+      if (load.Mode == LoadSchedulingMode.Optimal
+          && SimWillReachMaxSocToday(simResult, now) && overnightOk && !needsGrid)
+      {
+        SetResult([extraLoad], true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
+        return;
+      }
+
+      if (load.Mode is LoadSchedulingMode.Optimal or LoadSchedulingMode.Priority
+          && overnightOk && !needsGrid)
+      {
+        SetResult([extraLoad], true, $"Charging (Priority {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
+        return;
+      }
+
+      if (overnightOk && gridOnlyCheap)
+      {
+        SetResult([extraLoad], true, $"Charging (PriorityPlus {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
+        return;
+      }
+
+      SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", null);
+    }
+
+    /// <summary>True if the test simulation shows house battery reaching ≥ 99 % today.</summary>
+    private static bool SimWillReachMaxSocToday(List<SimulationSlot> result, DateTime now)
+      => result.Any(s => s.Time.Date == now.Date && s.SoC >= 99);
+
+    /// <summary>
+    /// True if the test simulation shows the battery stays above the effective minimum SoC
+    /// throughout the overnight window (sunset today → first PV tomorrow).
+    /// Uses PreferredMinimalSoC when EnforcePreferredSoC is set, AbsoluteMinimalSoC otherwise.
+    /// </summary>
+    private bool SimOvernightMinSocOk(List<SimulationSlot> result)
+    {
+      int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
+      var overnight = result.Where(s => s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow).ToList();
+      return overnight.Count == 0 || overnight.Min(s => s.SoC) >= minSoC;
+    }
+
+    /// <summary>Clones a SimulationInput replacing only its ExtraLoads list.</summary>
+    private static SimulationInput SimWithExtraLoads(SimulationInput src, List<ExtraLoad> loads)
+      => new()
+      {
+        StartTime = src.StartTime,
+        StartSocPercent = src.StartSocPercent,
+        BatteryCapacityWh = src.BatteryCapacityWh,
+        AbsoluteMinSocPercent = src.AbsoluteMinSocPercent,
+        PreferredMinSocPercent = src.PreferredMinSocPercent,
+        EnforcePreferredSoc = src.EnforcePreferredSoc,
+        MaxChargePowerAmps = src.MaxChargePowerAmps,
+        InverterEfficiency = src.InverterEfficiency,
+        ImportPrices = src.ImportPrices,
+        ExportPrices = src.ExportPrices,
+        LoadPredictionWh = src.LoadPredictionWh,
+        PVPredictionWh = src.PVPredictionWh,
+        ExtraLoads = loads,
+        ForceCharge = src.ForceCharge,
+        OpportunisticDischarge = src.OpportunisticDischarge,
+        ForceChargeMaxPrice = src.ForceChargeMaxPrice,
+        ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
+        OverrideMode = src.OverrideMode,
+        CurrentMode = src.CurrentMode,
+        CurrentResetCounter = src.CurrentResetCounter,
+        CurrentAverageGridPowerW = src.CurrentAverageGridPowerW,
+      };
 
     public InverterState ProposedState
     {
@@ -582,7 +837,7 @@ namespace NetDeamon.apps.PVControl
               _priceListCache = priceList.Select(p => new PriceTableEntry(
                 p.StartTime,
                 p.EndTime,
-                p.Price * 100 
+                p.Price
               )).ToList();
             }
         }
@@ -618,7 +873,7 @@ namespace NetDeamon.apps.PVControl
           return PriceListNetto.Select(p => new PriceTableEntry(
             p.StartTime,
             p.EndTime,
-            PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value) ? value : 0
+            PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value, numericalGetBaseValue: false) ? value : 0
             )).ToList();
         }
       }
@@ -646,10 +901,6 @@ namespace NetDeamon.apps.PVControl
     public float CurrentEnergyImportPriceNetworkOnly => PVCC_Config.ImportPriceNetwork * (1 + PVCC_Config.ImportPriceTax);
 
     public float CurrentEnergyExportPriceTotal => CalculateBruttoPriceExport(CurrentEnergyPriceNetto, true);
-    public float SumEnergyImportCostEnergyOnly { get; set; } = 0.0f;
-    public float SumEnergyImportCostNetworkOnly { get; set; } = 0.0f;
-    public float SumEnergyImportCostTotal { get; set; } = 0.0f;
-    public float SumEnergyExportEarningsTotal { get; set; } = 0.0f;
     public PriceTableEntry CheapestImportWindowToday
     {
       get

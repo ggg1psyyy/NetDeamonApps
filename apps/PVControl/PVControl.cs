@@ -1,14 +1,18 @@
 ﻿using NetDaemon.Extensions.MqttEntityManager;
-using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
+using NetDeamon.apps;
 using System.Globalization;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Threading;
 using System.Threading.Tasks;
 using LinqToDB;
-using Microsoft.Data.Sqlite;
+using NetDaemon.HassModel;
 using PVControl;
+using System;
+using Microsoft.Extensions.Logging;
+using NetDaemon.AppModel;
+using NetDaemon.Extensions.Scheduler;
 using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl
@@ -42,6 +46,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_chargeTomorrowEntity = null!;
     private Entity _info_dischargeTomorrowEntity = null!;
     private Entity _info_PredictedSoCEntity = null!;
+    private Entity _info_SoCSnapshotEntity = null!;
     private Entity _info_PredictedChargeEntity = null!;
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
@@ -57,7 +62,6 @@ namespace NetDeamon.apps.PVControl
     private Entity _bestImportPriceEntity = null!;
     private Entity _enableOpportunisticExport = null!;
     #endregion
-    private CancellationToken _cancelToken;
     private String _energyLogDBConnectionString = "Data Source=";
     private bool _logEnergy = false;
     private DateTime _nextQuarterHour = DateTime.Now.GetNextQuarterHour();
@@ -81,21 +85,29 @@ namespace NetDeamon.apps.PVControl
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
+      // Remove old legacy sensors
+      #if DEBUG
+      foreach (var id in new[] {
+        "select.pv_control_ev_charging_mode",
+        "number.pv_control_ev_target_soc",
+        "binary_sensor.pv_control_ev_charge_now" })
+      {
+        if (new Entity(PVCC_HaContext, id).State != null)
+          await PVCC_EntityManager.RemoveAsync(id);
+      }
+      #endif
+      _house = new HouseEnergy();
       if (await RegisterControlSensors(false))
       {
-        _house = new HouseEnergy();
         #region Load settings from HA if available
 
-        if (_sumExportEarningsBruttoEntity.TryGetStateValue(out float sumEarningsTotal))
-          _house.SumEnergyExportEarningsTotal = sumEarningsTotal * 100;
-        if (_sumImportCostBruttoEntity.TryGetStateValue(out float sumImportTotal))
-          _house.SumEnergyImportCostTotal = sumImportTotal * 100;
-        if (_sumImportCostEnergyOnlyEntity.TryGetStateValue(out float sumImportEnergy))
-          _house.SumEnergyImportCostEnergyOnly = sumImportEnergy * 100;
-        if (_sumImportCostNetworkOnlyEntity.TryGetStateValue(out float sumImportNetwork))
-          _house.SumEnergyImportCostNetworkOnly = sumImportNetwork * 100;
+        _house.SumExportEarningsEntity = _sumExportEarningsBruttoEntity;
+        _house.SumImportCostBruttoEntity = _sumImportCostBruttoEntity;
+        _house.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
+        _house.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
+        _house.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
 
-        if (_forceChargeMaxPriceEntity.TryGetStateValue(out int maxPrice))
+        if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
           _house.ForceChargeMaxPrice = maxPrice;
         if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
           _house.ForceChargeTargetSoC = targetSoC;
@@ -120,7 +132,7 @@ namespace NetDeamon.apps.PVControl
           await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
           {
             db.CreateTable<Costs>(tableOptions: TableOptions.CheckExistence);
-            _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault();
+            _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault()!;
             if (_lastCostsEntry is null)
             {
               _lastCostsEntry = new Costs
@@ -155,7 +167,33 @@ namespace NetDeamon.apps.PVControl
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
         (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
 
-        var manager = new Managers.LoadManager(_house);
+        PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
+        foreach (var load in _house.SchedulableLoads)
+        {
+          if (load.ModeEntity is not null)
+          {
+            PVCC_Logger.LogInformation("Subscribing to mode commands for {load} ({id})", load.Config.Name, load.ModeEntity.EntityId);
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ModeEntity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.ModeEntity, state));
+          }
+          else
+          {
+            PVCC_Logger.LogInformation("Load {load}: ModeEntity is null (static mode from config)", load.Config.Name);
+          }
+
+          if (load.TargetLevelEntity is not null)
+          {
+            PVCC_Logger.LogInformation("Subscribing to target level commands for {load} ({id})", load.Config.Name, load.TargetLevelEntity.EntityId);
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.TargetLevelEntity.EntityId)
+                .ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.TargetLevelEntity, state));
+          }
+          else
+          {
+            PVCC_Logger.LogInformation("Load {load}: TargetLevelEntity is null (static target from config)", load.Config.Name);
+          }
+        }
+
 #if !DEBUG
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif 
@@ -209,9 +247,9 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
-        if (int.TryParse(newState, out int value))
+        if (float.TryParse(newState, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out float value))
           _house.ForceChargeMaxPrice = value;
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString());
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString(CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
       {
@@ -219,11 +257,42 @@ namespace NetDeamon.apps.PVControl
           _house.ForceChargeTargetSoC = value;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
+      // Handle auto-created mode and target-level entities for each schedulable load.
+      foreach (var load in _house.SchedulableLoads)
+      {
+        if (load.ModeEntity is not null && entity.EntityId == load.ModeEntity.EntityId)
+        {
+          var echoed = Enum.TryParse(newState, ignoreCase: true, out LoadSchedulingMode m)
+            ? m.ToString()
+            : LoadSchedulingMode.Off.ToString();
+          PVCC_Logger.LogInformation("Load mode changed: {load} → {mode}", load.Config.Name, echoed);
+          await PVCC_EntityManager.SetStateAsync(entity.EntityId, echoed);
+        }
+        if (load.TargetLevelEntity is not null && entity.EntityId == load.TargetLevelEntity.EntityId)
+        {
+          if (float.TryParse(newState, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out float tl))
+          {
+            PVCC_Logger.LogInformation("Load target level changed: {load} → {level}", load.Config.Name, tl);
+            await PVCC_EntityManager.SetStateAsync(entity.EntityId, tl.ToString(CultureInfo.InvariantCulture));
+          }
+        }
+      }
 #if !DEBUG
-      await ScheduledOperations(); 
+      await ScheduledOperations();
 #endif
     }
     private async Task ScheduledOperations()
+    {
+      try
+      {
+      await ScheduledOperationsCore();
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogError(ex, "ScheduledOperations threw an exception");
+      }
+    }
+    private async Task ScheduledOperationsCore()
     {
       PVCC_Logger.LogTrace("Entering Schedule");
       DateTime now = DateTime.Now;
@@ -252,8 +321,8 @@ namespace NetDeamon.apps.PVControl
         : default;
       var attr_Mode = new
       {
-        next_charge_window_start = (nextChargePrice.StartTime != default ? nextChargePrice.StartTime : nextChargeSlot?.Time ?? now).ToISO8601(),
-        next_charge_window_end = (nextChargePrice.EndTime != default ? nextChargePrice.EndTime : (nextChargeSlot?.Time.AddHours(1) ?? now.AddHours(1))).ToISO8601(),
+        next_charge_window_start = nextChargeSlot != null ? (nextChargePrice.StartTime != default ? nextChargePrice.StartTime : nextChargeSlot.Time).ToISO8601() : "none",
+        next_charge_window_end   = nextChargeSlot != null ? (nextChargePrice.EndTime   != default ? nextChargePrice.EndTime   : nextChargeSlot.Time.AddHours(1)).ToISO8601() : "none",
         price = nextChargePrice.Price.ToString(CultureInfo.InvariantCulture),
         charge_Reason = inverterState.ModeReason.ToString(),
       };
@@ -267,6 +336,34 @@ namespace NetDeamon.apps.PVControl
         Reason = _house.RunHeavyLoadReason.ToString(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_RunHeavyLoadsNowEntity.EntityId, attr_HeavyLoad);
+      #endregion
+      #region Schedulable Loads
+      foreach (var load in _house.SchedulableLoads)
+      {
+        await PVCC_EntityManager.SetStateAsync(load.ChargeNowEntity.EntityId, load.ChargeNow ? "ON" : "OFF");
+        int powerAvgW = load.PowerAverage?.GetAverage() ?? 0;
+        int netPvW = _house.CurrentAveragePVPower - Math.Max(0, _house.CurrentAverageHouseLoad - powerAvgW);
+        var chargeTimeline = _house.Prediction_BatterySoC.TodayAndTomorrow
+          .Where(s => s.Key >= now)
+          .Select(s => new
+          {
+            datetime = s.Key.ToISO8601(),
+            charging = load.PredictedEnd.HasValue && s.Key <= load.PredictedEnd.Value,
+          }).ToList();
+        var attr_load = new
+        {
+          reason = load.ChargeReason,
+          mode = load.Mode.ToString(),
+          target_level = load.TargetLevel,
+          current_level = load.CurrentLevel,
+          level_unit = load.Config.LevelUnit,
+          power_avg_w = powerAvgW,
+          net_pv_w = netPvW,
+          charge_end_predicted = load.PredictedEnd?.ToISO8601() ?? "n/a",
+          charge_timeline = chargeTimeline,
+        };
+        await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);
+      }
       #endregion
       #region Remaining battery
       await PVCC_EntityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
@@ -327,7 +424,6 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetStateAsync(_info_PredictedSoCEntity.EntityId, curPredSoc.Value.ToString(CultureInfo.InvariantCulture));
         // Build a mode lookup from the live simulation timeline for data_actual
         var simModeLookup = _house.SimulationTimeline.ToDictionary(s => s.Time, s => s.State.Mode.ToString());
-        var snapshotModes = _house.DailyModePredictionTodayAndTomorrow;
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
@@ -340,7 +436,17 @@ namespace NetDeamon.apps.PVControl
             soc = s.Value,
             mode = simModeLookup.TryGetValue(s.Key, out var simMode) ? simMode : "past",
           }),
-          // Midnight snapshot: SoC + mode as predicted at the start of the day.
+        };
+        await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
+
+        // Midnight snapshot — published separately to keep predicted_soc attributes under the 16 kB recorder limit.
+        var snapshotModes = _house.DailyModePredictionTodayAndTomorrow;
+        var curSnapSoc = _house.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
+        await PVCC_EntityManager.SetStateAsync(_info_SoCSnapshotEntity.EntityId,
+          (curSnapSoc.Key != default ? curSnapSoc.Value : 0).ToString(CultureInfo.InvariantCulture));
+        var attr_soc_snapshot = new
+        {
+          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
           data_snapshot = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new
           {
             datetime = s.Key.ToISO8601(),
@@ -348,7 +454,7 @@ namespace NetDeamon.apps.PVControl
             mode = snapshotModes.TryGetValue(s.Key, out var snapMode) ? snapMode : "unknown",
           }),
         };
-        await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
+        await PVCC_EntityManager.SetAttributesAsync(_info_SoCSnapshotEntity.EntityId, attr_soc_snapshot);
       }
       var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredCharge.Key != default)
@@ -466,31 +572,22 @@ namespace NetDeamon.apps.PVControl
       }
       #endregion
       #region Prices
-      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, (_house.CurrentEnergyImportPriceTotal / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.CurrentEnergyImportPriceTotal.ToString(CultureInfo.InvariantCulture));
       var attr_currentImportPrice = new
       {
         data = _house.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, (_house.CurrentEnergyExportPriceTotal / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.CurrentEnergyExportPriceTotal.ToString(CultureInfo.InvariantCulture));
       var attr_currentExportPrice = new
       {
         data = _house.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_sumExportEarningsBruttoEntity.EntityId, (_house.SumEnergyExportEarningsTotal / 100).ToString(CultureInfo.InvariantCulture));
 
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostBruttoEntity.EntityId, (_house.SumEnergyImportCostTotal / 100).ToString(CultureInfo.InvariantCulture));
-
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostEnergyOnlyEntity.EntityId, (_house.SumEnergyImportCostEnergyOnly / 100).ToString(CultureInfo.InvariantCulture));
-
-      await PVCC_EntityManager.SetStateAsync(_sumImportCostNetworkOnlyEntity.EntityId, (_house.SumEnergyImportCostNetworkOnly / 100).ToString(CultureInfo.InvariantCulture));
-
-      await PVCC_EntityManager.SetStateAsync(_sumImportExportNetCostEntity.EntityId, ((_house.SumEnergyImportCostTotal - _house.SumEnergyExportEarningsTotal) / 100).ToString(CultureInfo.InvariantCulture));
-
-      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, (_house.MostExpensiveExportWindowToday.Price / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.MostExpensiveExportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestExportPrice = new
       {
         start_time = _house.MostExpensiveExportWindowToday.StartTime.ToISO8601(),
@@ -498,7 +595,7 @@ namespace NetDeamon.apps.PVControl
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestExportPriceEntity.EntityId, attr_bestExportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, (_house.CheapestImportWindowToday.Price / 100).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, _house.CheapestImportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestImportPrice = new
       {
         start_time = _house.CheapestImportWindowToday.StartTime.ToISO8601(),
@@ -593,13 +690,13 @@ namespace NetDeamon.apps.PVControl
         addConfig: new
         {
           min = 0,
-          max = 50,
-          step = 1,
+          max = 0.5,
+          step = 0.01,
           initial = 0,
-          unit_of_measurement = "ct",
+          unit_of_measurement = "€/kWh",
           mode = "slider",
         },
-        defaultValue: "25",
+        defaultValue: "0.25",
         reRegister: reset);
 
       _forceChargeTargetSoCEntity = await RegisterSensor("number.pv_control_forcecharge_target_soc", "Force charge target SoC", "battery", "mdi:battery-alert",
@@ -786,6 +883,14 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
+      _info_SoCSnapshotEntity = await RegisterSensor("sensor.pv_control_info_soc_snapshot", "SoC Snapshot (Midnight Prediction)", "Battery", "mdi:calendar-clock",
+        addConfig: new
+        {
+          unit_of_measurement = "%",
+        },
+        defaultValue: "0",
+        reRegister: reset);
+
       _info_PredictedChargeEntity = await RegisterSensor("sensor.pv_control_info_predicted_charge", "Predicted Charge Until Now", "Energy", "mdi:solar-power-variant",
         addConfig: new
         {
@@ -833,6 +938,63 @@ namespace NetDeamon.apps.PVControl
         },
         defaultValue: "0",
         reRegister: reset);
+
+      // Auto-create HA entities for each schedulable load.
+      foreach (var load in _house.SchedulableLoads)
+      {
+        if (!load.Config.Mode.HasValue)
+          load.ModeEntity = await RegisterSensor(
+            $"select.pv_control_{load.Slug}_mode",
+            $"{load.Config.Name} - Mode",
+            "select", load.Config.Icon,
+            addConfig: new { options = Enum.GetNames<LoadSchedulingMode>() },
+            defaultValue: LoadSchedulingMode.Off.ToString(),
+            reRegister: reset);
+
+        if (!load.Config.TargetLevel.HasValue)
+          load.TargetLevelEntity = await RegisterSensor(
+            $"number.pv_control_{load.Slug}_target_level",
+            $"{load.Config.Name} - Target Level",
+            load.Config.LevelUnit == "%" ? "battery" : "temperature",
+            load.Config.Icon,
+            addConfig: new
+            {
+              min = load.Config.TargetLevelMin,
+              max = load.Config.TargetLevelMax,
+              step = load.Config.TargetLevelStep,
+              initial = load.Config.TargetLevelDefault,
+              unit_of_measurement = load.Config.LevelUnit,
+              mode = "slider",
+            },
+            defaultValue: load.Config.TargetLevelDefault.ToString(CultureInfo.InvariantCulture),
+            reRegister: reset);
+
+        load.ChargeNowEntity = await RegisterSensor(
+          $"binary_sensor.pv_control_{load.Slug}_charge_now",
+          $"{load.Config.Name} - Charge Now",
+          load.Config.ChargeNowDeviceClass, load.Config.Icon,
+          defaultValue: "OFF",
+          reRegister: reset);
+
+        if (load.Config.ActualEnergyEntity is not null)
+        {
+          load.TotalEnergyKwhEntity = await RegisterSensor(
+            $"sensor.pv_control_{load.Slug}_total_energy",
+            $"{load.Config.Name} - Total Energy",
+            "Energy", load.Config.Icon,
+            addConfig: new { unit_of_measurement = "kWh", state_class = "total_increasing" },
+            defaultValue: "0",
+            reRegister: reset);
+
+          load.TotalCostEurEntity = await RegisterSensor(
+            $"sensor.pv_control_{load.Slug}_total_cost",
+            $"{load.Config.Name} - Total Cost",
+            "monetary", load.Config.Icon,
+            addConfig: new { unit_of_measurement = "€" },
+            defaultValue: "0",
+            reRegister: reset);
+        }
+      }
 
       return true;
     }
