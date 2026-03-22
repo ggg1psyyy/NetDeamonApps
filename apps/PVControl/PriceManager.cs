@@ -215,5 +215,48 @@ namespace NetDeamon.apps.PVControl
     public int CurrentPriceRank => GetPriceRank(DateTime.Now);
 
     public int CurrentPricePercentage => GetPricePercentage(DateTime.Now);
+
+    // ── Static helpers (also used by EnergySimulator with explicit price lists) ─────────────
+
+    /// <summary>Import or export price at the given time (0 if no matching entry).</summary>
+    public static float GetPrice(List<PriceTableEntry> prices, DateTime time) =>
+      prices.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time).Price;
+
+    /// <summary>
+    /// True if any import price entry for today's remaining hours has a negative price.
+    /// Used to decide whether to pre-emptively disable battery charging so we have room
+    /// to absorb free/paid grid energy later.
+    /// </summary>
+    public static bool NegativeImportUpcoming(List<PriceTableEntry> importPrices, DateTime now) =>
+      importPrices.Any(p => p.StartTime.Date == now.Date && p.Price < 0 && p.StartTime > now);
+
+    /// <summary>The cheapest import hour within today (midnight to midnight).</summary>
+    public static PriceTableEntry GetCheapestWindowToday(List<PriceTableEntry> prices, DateTime now) =>
+      prices.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1))
+            .OrderBy(p => p.Price).FirstOrDefault();
+
+    /// <summary>
+    /// The cheapest upcoming import window we should use for force-charging.
+    /// If NeedToCharge is true the search is limited to hours before LatestChargeTime;
+    /// otherwise the globally cheapest upcoming hour is returned.
+    /// </summary>
+    public static PriceTableEntry GetBestChargeWindow(List<PriceTableEntry> prices, NeedToChargeResult need, DateTime now)
+    {
+      var upcoming = prices.Where(p => p.StartTime >= now.Date.AddHours(now.Hour)).OrderBy(p => p.StartTime).ToList();
+      if (need.NeedToCharge)
+        return upcoming.Where(p => p.StartTime <= need.LatestChargeTime).OrderBy(p => p.Price).FirstOrDefault();
+      return upcoming.OrderBy(p => p.Price).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Rank of the given hour in the day's import price list (1 = cheapest).
+    /// Used to decide whether to start charging an hour early or an hour late.
+    /// </summary>
+    public static int GetPriceRank(List<PriceTableEntry> prices, DateTime time)
+    {
+      var ordered = prices.OrderBy(p => p.Price).ToList();
+      var entry = prices.FirstOrDefault(p => p.StartTime.Date == time.Date && p.StartTime.Hour == time.Hour);
+      return ordered.IndexOf(entry) + 1;
+    }
   }
 }
