@@ -458,73 +458,83 @@ namespace NetDeamon.apps.PVControl
         return;
       }
 
-      // One simulation from now to min(full duration, windowEnd).
-      // Fall through from most to least permissive: PriorityPlus → Priority → Optimal.
-      // Conditions are checked from most restrictive to least; the mode gate on each step
-      // controls how far a given mode is allowed to fall through:
-      //   Optimal     → only step 1 (Optimal conditions, most restrictive)
-      //   Priority    → steps 1–2 (Optimal or Priority conditions)
-      //   PriorityPlus→ steps 1–3 (Optimal, Priority, or PriorityPlus conditions)
+      // Binary-search for the MAXIMUM session that satisfies each step's conditions.
+      // All condition predicates are monotone: a shorter session is never harder to satisfy,
+      // so the search returns the longest session that still passes — e.g. for Optimal this is
+      // "charge the EV as long as possible while the house battery still reaches ~100% via PV".
       //
-      // Optimal/Priority: cap session to today's PV window so the EV never drains the
-      // battery overnight (which would make overnightOk/SimWillReachMaxSocToday fail for
-      // long sessions). After PV ends today, sessionEnd <= currentSlot → no window today.
-      // PriorityPlus: extend to FirstRelevantPVEnergyTomorrow to allow cheap overnight charging.
-      var windowEnd = load.Mode == LoadSchedulingMode.PriorityPlus
-        ? FirstRelevantPVEnergyTomorrow
-        : LastRelevantPVEnergyToday;
-      var sessionEnd = currentSlot.AddMinutes(durationMinutes);
-      if (sessionEnd > windowEnd) sessionEnd = windowEnd;
+      // Steps 1+2 cap to today's PV window (EV only during daytime so the house battery is not
+      // drained overnight by a long session). Step 3 (PriorityPlus only) extends to next sunrise
+      // to allow cheap overnight grid charging.
 
-      if (sessionEnd <= currentSlot)
-      { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
-
-      var extraLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = sessionEnd, PowerW = chargeRateW };
-      var simResult = EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, extraLoad]));
-
-      bool overnightOk = SimOvernightMinSocOk(simResult);
-      // For PriorityPlus the EV session extends into the overnight window and will drain the
-      // battery below the minimum (house + EV load) until cheap force_charge kicks in.  The
-      // meaningful overnight question for PriorityPlus is whether the battery survives the night
-      // WITHOUT the EV, i.e. the base case.  If yes, cheap grid import can power the EV and the
-      // battery still makes it to sunrise.
-      bool baseOvernightOk = SimOvernightMinSocOk(baseResult);
-      bool needsGrid = simResult.Any(s =>
+      // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
+      List<SimulationSlot> RunSim(DateTime end)
+      {
+        var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW };
+        return EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, testLoad]));
+      }
+      bool HasNewGrid(List<SimulationSlot> sim) => sim.Any(s =>
         s.State.Mode == InverterModes.force_charge
         && !baseForceChargeSlots.Contains(s.Time)
-        && s.Time >= LastRelevantPVEnergyToday
-        && s.Time <= FirstRelevantPVEnergyTomorrow);
-      bool gridOnlyCheap = !simResult.Any(s =>
+        && s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow);
+      bool IsGridCheap(List<SimulationSlot> sim) => !sim.Any(s =>
         s.State.Mode == InverterModes.force_charge
         && !baseForceChargeSlots.Contains(s.Time)
-        && s.Time >= LastRelevantPVEnergyToday
-        && s.Time <= FirstRelevantPVEnergyTomorrow
+        && s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow
         && !PriceListImport.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= ForceChargeMaxPrice));
 
-      // Step 1: Optimal — base simulation (no EV load) reaches 100% today, meaning there is genuine
-      // PV surplus. The EV consuming that surplus is the whole point of Optimal mode, so we check
-      // the base result here, not the EV-loaded test simulation which would never reach 99%.
-      if (SimWillReachMaxSocToday(baseResult, now) && overnightOk && !needsGrid)
+      // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
+      // Predicate must be monotone: shorter session → easier to satisfy.
+      // Returns null if no 15-min session satisfies it.
+      DateTime? FindMax(DateTime maxEnd, Func<List<SimulationSlot>, bool> predicate)
+        => FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
+
+      // Today's and tomorrow's window ends (capped to full session duration if shorter)
+      var todayMax    = Min(currentSlot.AddMinutes(durationMinutes), LastRelevantPVEnergyToday);
+      var tomorrowMax = Min(currentSlot.AddMinutes(durationMinutes), FirstRelevantPVEnergyTomorrow);
+
+      if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
+      { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
+
+      // Step 1: Optimal — house reaches ~100% even WITH EV running; overnight OK; no new grid.
+      // Any mode may use this (it is the most desirable: pure PV, maximum house SoC flexibility).
+      // Binary search finds the longest session that still lets the house hit ~100% today.
       {
-        SetResult([extraLoad], true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
-        return;
+        var end = FindMax(todayMax, sim =>
+          SimWillReachMaxSocToday(sim, now) && SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+        if (end is not null)
+        {
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
+            true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
+          return;
+        }
       }
 
-      // Step 2: Priority — overnight OK, no grid needed. Priority and PriorityPlus only.
-      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus
-          && overnightOk && !needsGrid)
+      // Step 2: Priority — overnight OK, no new grid; house does NOT need to reach 100%.
+      // Priority and PriorityPlus only. Finds a longer session than Optimal allows.
+      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
       {
-        SetResult([extraLoad], true, $"Charging (Priority {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
-        return;
+        var end = FindMax(todayMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+        if (end is not null)
+        {
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
+            true, $"Charging (Priority {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
+          return;
+        }
       }
 
-      // Step 3: PriorityPlus — base-case overnight OK, grid only at cheap prices. PriorityPlus only.
-      // Uses baseOvernightOk (no EV) because the EV draws overnight in the test sim; what matters
-      // is that the battery would survive the night without the EV — the EV is powered by cheap grid.
-      if (load.Mode == LoadSchedulingMode.PriorityPlus && baseOvernightOk && gridOnlyCheap)
+      // Step 3: PriorityPlus — base-case overnight OK; any new grid import only at cheap prices.
+      // The EV session extends into the overnight window; what matters is that the battery would
+      // survive the night without the EV (base case), and the EV runs on cheap grid power.
+      if (load.Mode == LoadSchedulingMode.PriorityPlus && SimOvernightMinSocOk(baseResult))
       {
-        SetResult([extraLoad], true, $"Charging (PriorityPlus {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
-        return;
+        var end = FindMax(tomorrowMax, sim => IsGridCheap(sim));
+        if (end is not null)
+        {
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
+            true, $"Charging (PriorityPlus {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
+          return;
+        }
       }
 
       SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", null);
@@ -545,6 +555,39 @@ namespace NetDeamon.apps.PVControl
       var overnight = result.Where(s => s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow).ToList();
       return overnight.Count == 0 || overnight.Min(s => s.SoC) >= minSoC;
     }
+
+    /// <summary>
+    /// Binary-searches for the maximum session end in (currentSlot, maxEnd] where predicate
+    /// is satisfied by the simulation result. Assumes predicate is monotone: if it holds for
+    /// a session ending at T, it also holds for any session ending before T. Returns null if
+    /// even a single 15-minute session fails the predicate.
+    /// </summary>
+    private static DateTime? FindMaxSessionEnd(
+      DateTime currentSlot, DateTime maxEnd,
+      Func<DateTime, List<SimulationSlot>> runSim,
+      Func<List<SimulationSlot>, bool> predicate)
+    {
+      int maxSteps = (int)(maxEnd - currentSlot).TotalMinutes / 15;
+      if (maxSteps <= 0) return null;
+
+      // Fast path: longest session satisfies — most common case.
+      if (predicate(runSim(currentSlot.AddMinutes(maxSteps * 15))))
+        return currentSlot.AddMinutes(maxSteps * 15);
+
+      // Binary search: find rightmost step in [1, maxSteps-1] where predicate is true.
+      int lo = 1, hi = maxSteps - 1, best = -1;
+      while (lo <= hi)
+      {
+        int mid = (lo + hi) / 2;
+        if (predicate(runSim(currentSlot.AddMinutes(mid * 15))))
+        { best = mid; lo = mid + 1; }
+        else
+        { hi = mid - 1; }
+      }
+      return best >= 0 ? currentSlot.AddMinutes(best * 15) : null;
+    }
+
+    private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
     /// <summary>Clones a SimulationInput replacing only its ExtraLoads list.</summary>
     private static SimulationInput SimWithExtraLoads(SimulationInput src, List<ExtraLoad> loads)
