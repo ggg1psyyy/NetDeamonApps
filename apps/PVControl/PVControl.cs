@@ -90,7 +90,9 @@ namespace NetDeamon.apps.PVControl
       foreach (var id in new[] {
         "select.pv_control_ev_charging_mode",
         "number.pv_control_ev_target_soc",
-        "binary_sensor.pv_control_ev_charge_now" })
+        "binary_sensor.pv_control_ev_charge_now",
+        "sensor.pv_control_run_heavyloads_now"
+      })
       {
         if (new Entity(PVCC_HaContext, id).State != null)
           await PVCC_EntityManager.RemoveAsync(id);
