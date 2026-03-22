@@ -111,7 +111,7 @@ namespace NetDeamon.apps.PVControl
         _house.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
 
         if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
-          _house.ForceChargeMaxPrice = maxPrice;
+          _house.Prices.ForceChargeMaxPrice = maxPrice;
         if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
           _house.ForceChargeTargetSoC = targetSoC;
         if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
@@ -251,8 +251,8 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
         if (float.TryParse(newState, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out float value))
-          _house.ForceChargeMaxPrice = value;
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeMaxPrice.ToString(CultureInfo.InvariantCulture));
+          _house.Prices.ForceChargeMaxPrice = value;
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.Prices.ForceChargeMaxPrice.ToString(CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
       {
@@ -320,7 +320,7 @@ namespace NetDeamon.apps.PVControl
       var nextChargeSlot = _house.SimulationTimeline
         .FirstOrDefault(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
       var nextChargePrice = nextChargeSlot != null
-        ? _house.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
+        ? _house.Prices.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
         : default;
       var attr_Mode = new
       {
@@ -568,34 +568,34 @@ namespace NetDeamon.apps.PVControl
       }
       #endregion
       #region Prices
-      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.CurrentEnergyImportPriceTotal.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.CurrentEnergyImportPriceTotal.ToString(CultureInfo.InvariantCulture));
       var attr_currentImportPrice = new
       {
-        data = _house.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
+        data = _house.Prices.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.CurrentEnergyExportPriceTotal.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.Prices.CurrentEnergyExportPriceTotal.ToString(CultureInfo.InvariantCulture));
       var attr_currentExportPrice = new
       {
-        data = _house.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
+        data = _house.Prices.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
 
 
-      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.MostExpensiveExportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.Prices.MostExpensiveExportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestExportPrice = new
       {
-        start_time = _house.MostExpensiveExportWindowToday.StartTime.ToISO8601(),
-        end_time = _house.MostExpensiveExportWindowToday.EndTime.ToISO8601(),
+        start_time = _house.Prices.MostExpensiveExportWindowToday.StartTime.ToISO8601(),
+        end_time = _house.Prices.MostExpensiveExportWindowToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestExportPriceEntity.EntityId, attr_bestExportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, _house.CheapestImportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, _house.Prices.CheapestImportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestImportPrice = new
       {
-        start_time = _house.CheapestImportWindowToday.StartTime.ToISO8601(),
-        end_time = _house.CheapestImportWindowToday.EndTime.ToISO8601(),
+        start_time = _house.Prices.CheapestImportWindowToday.StartTime.ToISO8601(),
+        end_time = _house.Prices.CheapestImportWindowToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
       #endregion
@@ -606,7 +606,7 @@ namespace NetDeamon.apps.PVControl
         {
           PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float totalImportEnergy);
           PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
-          var basePriceEntry = _house.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);
+          var basePriceEntry = _house.Prices.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);
           var basePrice = basePriceEntry.Price;
           Costs currentCost = new Costs
           {
@@ -616,10 +616,10 @@ namespace NetDeamon.apps.PVControl
             GridImport = totalImportEnergy - _lastCostsEntry.GridImportTotal,
             GridExport = totalExportEnergy - _lastCostsEntry.GridExportTotal,
             BasePrice = basePrice,
-            ImportPriceProvider = _house.CalculateBruttoPriceImport(basePrice, false),
-            ImportPriceTotal = _house.CalculateBruttoPriceImport(basePrice, true),
-            ExportPriceProvider = _house.CalculateBruttoPriceExport(basePrice, false),
-            ExportPriceTotal = _house.CalculateBruttoPriceExport(basePrice, true),
+            ImportPriceProvider = _house.Prices.CalculateBruttoPriceImport(basePrice, false),
+            ImportPriceTotal = _house.Prices.CalculateBruttoPriceImport(basePrice, true),
+            ExportPriceProvider = _house.Prices.CalculateBruttoPriceExport(basePrice, false),
+            ExportPriceTotal = _house.Prices.CalculateBruttoPriceExport(basePrice, true),
           };
           await db.InsertAsync(currentCost);
           _lastCostsEntry = currentCost;
