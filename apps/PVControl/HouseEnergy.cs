@@ -658,70 +658,7 @@ namespace NetDeamon.apps.PVControl
         return _currentMode;
       }
     }
-    public RunHeavyLoadReasons RunHeavyLoadReason { get; private set; }
-    /// <summary>
-    /// Tells if it's a good time to run heavy loads now
-    /// </summary>
-    public RunHeavyLoadsStatus RunHeavyLoadsNow
-    {
-      get
-      {
-        var estSoC = Prediction_BatterySoC.TodayAndTomorrow;
-        var now = DateTime.Now;
-        // if we're already force_charging we're sure to be in a cheap window so it should be allowed
-        if (_currentMode.Mode == InverterModes.force_charge)
-        {
-          if (IsNowCheapestImportWindowTotal)
-          {
-            RunHeavyLoadReason = RunHeavyLoadReasons.ChargingAtCheapestPrice;
-            return RunHeavyLoadsStatus.Yes;
-          }
-          else
-          {
-            RunHeavyLoadReason = RunHeavyLoadReasons.Charging;
-            return RunHeavyLoadsStatus.IfNecessary;
-          }
-        }
-        // in PVperiod
-        if (CurrentPVPeriod == PVPeriods.InPVPeriod)
-        {
-          // as long as we still reach over 97% SoC via PV it's always ok
-          var maxSocRestOfToday = estSoC.FirstMaxOrDefault(now, LastRelevantPVEnergyToday);
-          if (maxSocRestOfToday.Value > 97)
-          {
-            RunHeavyLoadReason = RunHeavyLoadReasons.WillReach100;
-            return RunHeavyLoadsStatus.Yes;
-          }
-        }
-        // we allow it as long as we don't go under PreferredSoC
-        var firstPV = CurrentPVPeriod == PVPeriods.BeforePV ? FirstRelevantPVEnergyToday : FirstRelevantPVEnergyTomorrow;
-        var minSocTilFirstPV = estSoC.FirstMinOrDefault(now, firstPV);
-        if (minSocTilFirstPV.Value > PreferredMinimalSoC)
-        {
-          RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverPreferredMinima;
-          return RunHeavyLoadsStatus.Yes;
-        }
-        else if (minSocTilFirstPV.Value > AbsoluteMinimalSoC + 3)
-        {
-          RunHeavyLoadReason = RunHeavyLoadReasons.WillStayOverAbsoluteMinima;
-          return RunHeavyLoadsStatus.IfNecessary;
-        }
 
-        // otherwise 
-        if (BatterySoc > PreferredMinimalSoC)
-        {
-          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOverPreferredMinima;
-          return RunHeavyLoadsStatus.IfNecessary;
-        }
-        else if (BatterySoc > AbsoluteMinimalSoC)
-        {
-          RunHeavyLoadReason = RunHeavyLoadReasons.CurrentlyOverAbsoluteMinima;
-          return RunHeavyLoadsStatus.Prevent;
-        }
-        RunHeavyLoadReason = RunHeavyLoadReasons.WillGoUnderAbsoluteMinima;
-        return RunHeavyLoadsStatus.No;
-      }
-    }
     /// <summary>
     /// How much power in W is available for additional loads
     /// </summary>

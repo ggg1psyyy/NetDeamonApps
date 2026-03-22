@@ -52,24 +52,7 @@ namespace NetDeamon.apps
     NextHourCheaper,
     UserMode,
   }
-  public enum RunHeavyLoadsStatus
-  {
-    Yes,
-    No,
-    IfNecessary,
-    Prevent,
-  }
-  public enum RunHeavyLoadReasons
-  {
-    WillReach100,
-    ChargingAtCheapestPrice,
-    Charging,
-    WillStayOverPreferredMinima,
-    WillStayOverAbsoluteMinima,
-    WillGoUnderAbsoluteMinima,
-    CurrentlyOverPreferredMinima,
-    CurrentlyOverAbsoluteMinima,
-  }
+
   public enum PVPeriods
   {
     BeforePV,

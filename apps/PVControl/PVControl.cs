@@ -50,7 +50,6 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_PredictedChargeEntity = null!;
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
-    private Entity _RunHeavyLoadsNowEntity = null!;
     private Entity _currentImportPriceBruttoEntity = null!;
     private Entity _currentExportPriceBruttoEntity = null!;
     private Entity _sumImportCostBruttoEntity = null!;
@@ -331,14 +330,7 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       #endregion
-      #region RunHeavyLoads
-      await PVCC_EntityManager.SetStateAsync(_RunHeavyLoadsNowEntity.EntityId, _house.RunHeavyLoadsNow.ToString());
-      var attr_HeavyLoad = new
-      {
-        Reason = _house.RunHeavyLoadReason.ToString(),
-      };
-      await PVCC_EntityManager.SetAttributesAsync(_RunHeavyLoadsNowEntity.EntityId, attr_HeavyLoad);
-      #endregion
+
       #region Schedulable Loads
       foreach (var load in _house.SchedulableLoads)
       {
@@ -736,10 +728,6 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "ON",
         reRegister: reset);
 
-      _RunHeavyLoadsNowEntity = await RegisterSensor("sensor.pv_control_run_heavyloads_now", "Run heavy loads now", "ENUM", "mdi:ev-station",
-        addConfig: new { options = Enum.GetNames<RunHeavyLoadsStatus>() },
-        defaultValue: RunHeavyLoadsStatus.No.ToString(),
-        reRegister: reset);
 
       _currentImportPriceBruttoEntity = await RegisterSensor("sensor.pv_control_current_import_price_brutto", "Current energy import price (brutto)", "MONETARY", "mdi:currency-eur",
         addConfig: new
