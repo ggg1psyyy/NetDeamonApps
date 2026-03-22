@@ -377,7 +377,7 @@ namespace NetDeamon.apps.PVControl
 
       // Find valid window for each schedulable load (highest priority first).
       foreach (var load in SchedulableLoads.OrderByDescending(l => l.Config.Priority))
-        FindLoadWindow(load, baseInput, baseForceChargeSlots);
+        FindLoadWindow(load, baseInput, baseResult, baseForceChargeSlots);
 
       // Run final simulation with all found ExtraLoads merged in.
       var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
@@ -417,7 +417,7 @@ namespace NetDeamon.apps.PVControl
     /// and running a test simulation for each. Updates load.ChargeNow/ChargeReason/PredictedEnd.
     /// The baseline and its force-charge slots are pre-computed once in RunSimulation.
     /// </summary>
-    private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, HashSet<DateTime> baseForceChargeSlots)
+    private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, List<SimulationSlot> baseResult, HashSet<DateTime> baseForceChargeSlots)
     {
       var now = DateTime.Now;
       var currentSlot = now.RoundToNearestQuarterHour();
@@ -458,9 +458,21 @@ namespace NetDeamon.apps.PVControl
         return;
       }
 
-      // One simulation from now to min(full duration, FirstRelevantPVEnergyTomorrow).
-      // Fall through from most to least restrictive: Optimal → Priority → PriorityPlus.
-      var windowEnd = FirstRelevantPVEnergyTomorrow;
+      // One simulation from now to min(full duration, windowEnd).
+      // Fall through from most to least permissive: PriorityPlus → Priority → Optimal.
+      // Conditions are checked from most restrictive to least; the mode gate on each step
+      // controls how far a given mode is allowed to fall through:
+      //   Optimal     → only step 1 (Optimal conditions, most restrictive)
+      //   Priority    → steps 1–2 (Optimal or Priority conditions)
+      //   PriorityPlus→ steps 1–3 (Optimal, Priority, or PriorityPlus conditions)
+      //
+      // Optimal/Priority: cap session to today's PV window so the EV never drains the
+      // battery overnight (which would make overnightOk/SimWillReachMaxSocToday fail for
+      // long sessions). After PV ends today, sessionEnd <= currentSlot → no window today.
+      // PriorityPlus: extend to FirstRelevantPVEnergyTomorrow to allow cheap overnight charging.
+      var windowEnd = load.Mode == LoadSchedulingMode.PriorityPlus
+        ? FirstRelevantPVEnergyTomorrow
+        : LastRelevantPVEnergyToday;
       var sessionEnd = currentSlot.AddMinutes(durationMinutes);
       if (sessionEnd > windowEnd) sessionEnd = windowEnd;
 
@@ -471,6 +483,12 @@ namespace NetDeamon.apps.PVControl
       var simResult = EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, extraLoad]));
 
       bool overnightOk = SimOvernightMinSocOk(simResult);
+      // For PriorityPlus the EV session extends into the overnight window and will drain the
+      // battery below the minimum (house + EV load) until cheap force_charge kicks in.  The
+      // meaningful overnight question for PriorityPlus is whether the battery survives the night
+      // WITHOUT the EV, i.e. the base case.  If yes, cheap grid import can power the EV and the
+      // battery still makes it to sunrise.
+      bool baseOvernightOk = SimOvernightMinSocOk(baseResult);
       bool needsGrid = simResult.Any(s =>
         s.State.Mode == InverterModes.force_charge
         && !baseForceChargeSlots.Contains(s.Time)
@@ -483,21 +501,27 @@ namespace NetDeamon.apps.PVControl
         && s.Time <= FirstRelevantPVEnergyTomorrow
         && !PriceListImport.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= ForceChargeMaxPrice));
 
-      if (load.Mode == LoadSchedulingMode.Optimal
-          && SimWillReachMaxSocToday(simResult, now) && overnightOk && !needsGrid)
+      // Step 1: Optimal — base simulation (no EV load) reaches 100% today, meaning there is genuine
+      // PV surplus. The EV consuming that surplus is the whole point of Optimal mode, so we check
+      // the base result here, not the EV-loaded test simulation which would never reach 99%.
+      if (SimWillReachMaxSocToday(baseResult, now) && overnightOk && !needsGrid)
       {
         SetResult([extraLoad], true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
         return;
       }
 
-      if (load.Mode is LoadSchedulingMode.Optimal or LoadSchedulingMode.Priority
+      // Step 2: Priority — overnight OK, no grid needed. Priority and PriorityPlus only.
+      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus
           && overnightOk && !needsGrid)
       {
         SetResult([extraLoad], true, $"Charging (Priority {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
         return;
       }
 
-      if (overnightOk && gridOnlyCheap)
+      // Step 3: PriorityPlus — base-case overnight OK, grid only at cheap prices. PriorityPlus only.
+      // Uses baseOvernightOk (no EV) because the EV draws overnight in the test sim; what matters
+      // is that the battery would survive the night without the EV — the EV is powered by cheap grid.
+      if (load.Mode == LoadSchedulingMode.PriorityPlus && baseOvernightOk && gridOnlyCheap)
       {
         SetResult([extraLoad], true, $"Charging (PriorityPlus {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", sessionEnd);
         return;

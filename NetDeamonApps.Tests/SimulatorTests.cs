@@ -226,4 +226,70 @@ public class SimulatorTests : TestBase
     Assert.All(slots, s => Assert.True(s.SoC >= 12,
       $"SoC {s.SoC}% at {s.Time} dropped below AbsoluteMinSoc 12%"));
   }
+
+  /// <summary>
+  /// Validates the precondition behind the Optimal window-finder fix:
+  /// the BASE simulation (no EV) reaches 99% when PV > load, but the same input
+  /// WITH a large EV ExtraLoad consumes the surplus and never reaches 99%.
+  /// FindLoadWindow uses baseResult for SimWillReachMaxSocToday (not simResult)
+  /// so Optimal mode correctly fires when there is genuine excess PV.
+  /// </summary>
+  [Fact]
+  public void OptimalFixPrecondition_BaseSocReaches99_EvLoadedSimDoesNot()
+  {
+    // 10 kWh battery at 20%, strong PV surplus → base sim charges to 100%
+    var start = new DateTime(2025, 6, 15, 9, 0, 0);
+    var baseInput = BuildInput(
+      start,
+      startSocPct: 20,
+      batteryCapWh: 10_000,
+      loadWhPerSlot: 100,   // 400 W house load
+      pvWhPerSlot: 800);    // 3.2 kW PV → 700 Wh net surplus per slot
+
+    var baseSlots = EnergySimulator.Simulate(baseInput);
+
+    // Base simulation must reach ≥ 99 % today
+    Assert.Contains(baseSlots, s => s.Time.Date == start.Date && s.SoC >= 99);
+
+    // Now add a large EV load that absorbs the entire PV surplus from session start to sunset.
+    // Sunset proxy: last slot today (23:45).
+    var sessionEnd = start.Date.AddHours(23).AddMinutes(45);
+    var evLoad = new ExtraLoad
+    {
+      Name = "EV",
+      Priority = 10,
+      StartTime = start,
+      EndTime   = sessionEnd,
+      PowerW    = 3_200   // fully consumes the PV surplus
+    };
+
+    var evInput  = new SimulationInput
+    {
+      StartTime                   = baseInput.StartTime,
+      StartSocPercent             = baseInput.StartSocPercent,
+      BatteryCapacityWh           = baseInput.BatteryCapacityWh,
+      AbsoluteMinSocPercent       = baseInput.AbsoluteMinSocPercent,
+      PreferredMinSocPercent      = baseInput.PreferredMinSocPercent,
+      EnforcePreferredSoc         = baseInput.EnforcePreferredSoc,
+      MaxChargePowerAmps          = baseInput.MaxChargePowerAmps,
+      InverterEfficiency          = baseInput.InverterEfficiency,
+      ImportPrices                = baseInput.ImportPrices,
+      ExportPrices                = baseInput.ExportPrices,
+      LoadPredictionWh            = baseInput.LoadPredictionWh,
+      PVPredictionWh              = baseInput.PVPredictionWh,
+      ExtraLoads                  = [evLoad],
+      ForceCharge                 = baseInput.ForceCharge,
+      OpportunisticDischarge      = baseInput.OpportunisticDischarge,
+      ForceChargeMaxPrice         = baseInput.ForceChargeMaxPrice,
+      ForceChargeTargetSocPercent = baseInput.ForceChargeTargetSocPercent,
+      OverrideMode                = baseInput.OverrideMode,
+      CurrentMode                 = baseInput.CurrentMode,
+      CurrentResetCounter         = baseInput.CurrentResetCounter,
+      CurrentAverageGridPowerW    = baseInput.CurrentAverageGridPowerW,
+    };
+    var evSlots = EnergySimulator.Simulate(evInput);
+
+    // EV-loaded simulation must NOT reach 99 % today (EV consumes the surplus)
+    Assert.DoesNotContain(evSlots, s => s.Time.Date == start.Date && s.SoC >= 99);
+  }
 }
