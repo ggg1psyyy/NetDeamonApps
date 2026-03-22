@@ -210,7 +210,7 @@ public class FindWindowConditionTests : TestBase
   ///
   /// Optimal requires that the house battery reaches ~100 % even WITH the EV running.
   /// A session of 26 slots (390 min, ending 16:00) leaves 7 post-EV PV slots that push the
-  /// battery to 100 % at 18:00 → Optimal condition met.
+  /// battery to 100 % → Optimal daytime condition met.
   ///
   /// Verifies the LOWER boundary: at T=26, SimWillReachMaxSocToday = true.
   /// </summary>
@@ -233,9 +233,11 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// The UPPER boundary: at T=27 (405 min, ending 16:15), one extra slot of EV robs the
-  /// remaining PV of the energy needed to reach 99 % → Optimal must use a shorter window.
-  /// This confirms binary search correctly caps the Optimal session at T=26 (390 min).
+  /// The UPPER boundary for Optimal daytime condition: at T=27 (405 min, ending 16:15),
+  /// one extra slot of EV robs the remaining PV of the energy needed to reach 99 %.
+  /// Binary search for Optimal would cap the daytime part at T=26, but the session can
+  /// still extend overnight via the same Step 1 predicate (SimWillReachMaxSocToday remains
+  /// true for shorter daytime + overnight tail once battery reached 100 %).
   /// </summary>
   [Fact]
   public void SpringDay_Optimal_FullSession_DoesNotReach99()
@@ -244,10 +246,67 @@ public class FindWindowConditionTests : TestBase
     var evEnd = start.AddMinutes(27 * 15); // T=27 → 16:15
     var evSim = EnergySimulator.Simulate(WithEV(SpringBaseInput(start), start, evEnd));
 
-    // With T=27, the battery peaks at ≈97.6 % (just short of 99 %).
+    // With T=27 the battery peaks at ≈97.6 % (just short of 99 %).
     Assert.False(Reaches99Today(evSim, start.Date),
       $"T=27 (405 min EV): battery should NOT reach ≥99 % today. Max SoC today = " +
       $"{evSim.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
+  }
+
+  /// <summary>
+  /// Optimal session extends overnight: battery starts at 90 % so PV+EV daytime net
+  /// (+38 Wh/slot) pushes it to 99 % by ~16:00.  Session continues until 20:00; battery
+  /// drains from 100 % to ~22 % overnight — above AbsMin (10 %) with no new grid.
+  ///
+  /// Verifies that Step 1's tomorrowMax allows Optimal to run past LastPVToday.
+  /// </summary>
+  [Fact]
+  public void SpringDay_Optimal_ExtendsOvernightAfterFull()
+  {
+    var start  = SpringStart;
+    var evEnd  = new DateTime(2026, 3, 22, 20, 0, 0); // 2h15min past last PV (17:45)
+
+    // High start SoC so battery hits 99 % during the day even with EV running.
+    var src    = SpringBaseInput(start);
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = src.StartTime,
+      StartSocPercent             = 90,   // high start SoC so battery hits 99 % with EV running
+      BatteryCapacityWh           = src.BatteryCapacityWh,
+      AbsoluteMinSocPercent       = src.AbsoluteMinSocPercent,
+      PreferredMinSocPercent      = src.PreferredMinSocPercent,
+      EnforcePreferredSoc         = src.EnforcePreferredSoc,
+      MaxChargePowerAmps          = src.MaxChargePowerAmps,
+      InverterEfficiency          = src.InverterEfficiency,
+      ImportPrices                = src.ImportPrices,
+      ExportPrices                = src.ExportPrices,
+      LoadPredictionWh            = src.LoadPredictionWh,
+      PVPredictionWh              = src.PVPredictionWh,
+      ExtraLoads                  = src.ExtraLoads,
+      ForceCharge                 = src.ForceCharge,
+      OpportunisticDischarge      = src.OpportunisticDischarge,
+      ForceChargeMaxPrice         = src.ForceChargeMaxPrice,
+      ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
+      OverrideMode                = src.OverrideMode,
+      CurrentMode                 = src.CurrentMode,
+      CurrentResetCounter         = src.CurrentResetCounter,
+      CurrentAverageGridPowerW    = src.CurrentAverageGridPowerW,
+    };
+    var baseSim = EnergySimulator.Simulate(baseIn);
+    var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
+    var baseFCS = new HashSet<DateTime>(
+      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+
+    // Battery must still reach 99 % today (PV surplus is strong enough despite EV).
+    Assert.True(Reaches99Today(evSim, start.Date),
+      "Optimal overnight: battery must reach ≥99 % today despite EV running.");
+
+    // Overnight SoC must remain above AbsMin.
+    Assert.True(OvernightOk(evSim, LastPVToday, FirstPVTomorrow, AbsMin),
+      "Optimal overnight: SoC must stay ≥ AbsMin through the night.");
+
+    // No new grid required.
+    Assert.True(NoNewGrid(evSim, baseFCS, LastPVToday, FirstPVTomorrow),
+      "Optimal overnight: no new grid import should be needed.");
   }
 
   // ── Step 2 (Priority) tests ──────────────────────────────────────────────────────────────

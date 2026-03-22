@@ -513,32 +513,18 @@ namespace NetDeamon.apps.PVControl
       { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
 
       // Step 1: Optimal — house reaches ~100% even WITH EV running; overnight OK; no new grid.
-      // Optimal mode only. Priority/PriorityPlus skip this step and use Step 2 (tomorrowMax),
-      // which always yields an equal or longer session — Step 1 would cap at todayMax (last PV
-      // today) and incorrectly prevent Priority from running overnight.
+      // Optimal mode only. Session extends to tomorrowMax so the load can drain the battery
+      // overnight after it reaches 100 % via PV — matching the mode definition:
+      //   "after reaching 100% AND after PV stops, Optimal may run until house SoC hits minSoC."
+      // Priority/PriorityPlus skip this step and use Step 2 (no 100% requirement).
       if (load.Mode == LoadSchedulingMode.Optimal)
       {
-        var end = FindMax(todayMax, sim =>
+        var end = FindMax(tomorrowMax, sim =>
           SimWillReachMaxSocToday(sim, now) && SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
             true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
-          return;
-        }
-      }
-
-      // Step 1b: Optimal overnight drain — after PV has charged the battery to full (BatterySoc ≥ 99 %),
-      // allow the EV to run overnight using the stored solar energy, down to minSoC.
-      // This handles the gap after the daytime window ends: the house charges to 100 % via remaining PV,
-      // then each cron re-evaluation detects BatterySoc ≥ 99 % and enables overnight drain.
-      if (BatterySoc >= 99 && tomorrowMax > currentSlot)
-      {
-        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
-        if (end is not null)
-        {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
-            true, $"Charging (Optimal overnight {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
           return;
         }
       }
