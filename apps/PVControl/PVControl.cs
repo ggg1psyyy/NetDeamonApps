@@ -568,14 +568,14 @@ namespace NetDeamon.apps.PVControl
       }
       #endregion
       #region Prices
-      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.CurrentEnergyImportPriceTotal.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.PriceListImport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
       var attr_currentImportPrice = new
       {
         data = _house.Prices.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.Prices.CurrentEnergyExportPriceTotal.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.Prices.PriceListExport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
       var attr_currentExportPrice = new
       {
         data = _house.Prices.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
@@ -583,19 +583,19 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
 
 
-      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.Prices.MostExpensiveExportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.Prices.PriceListExport.MostExpensiveToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestExportPrice = new
       {
-        start_time = _house.Prices.MostExpensiveExportWindowToday.StartTime.ToISO8601(),
-        end_time = _house.Prices.MostExpensiveExportWindowToday.EndTime.ToISO8601(),
+        start_time = _house.Prices.PriceListExport.MostExpensiveToday.StartTime.ToISO8601(),
+        end_time = _house.Prices.PriceListExport.MostExpensiveToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestExportPriceEntity.EntityId, attr_bestExportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, _house.Prices.CheapestImportWindowToday.Price.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_bestImportPriceEntity.EntityId, _house.Prices.PriceListImport.CheapestToday.Price.ToString(CultureInfo.InvariantCulture));
       var attr_bestImportPrice = new
       {
-        start_time = _house.Prices.CheapestImportWindowToday.StartTime.ToISO8601(),
-        end_time = _house.Prices.CheapestImportWindowToday.EndTime.ToISO8601(),
+        start_time = _house.Prices.PriceListImport.CheapestToday.StartTime.ToISO8601(),
+        end_time = _house.Prices.PriceListImport.CheapestToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
       #endregion

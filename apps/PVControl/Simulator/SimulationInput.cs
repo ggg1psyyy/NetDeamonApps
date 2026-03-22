@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using NetDeamon.apps.PVControl;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
@@ -60,14 +61,14 @@ public class SimulationInput
   /// Hourly import price table (EPEX Spot + taxes + network fees), in ct/kWh.
   /// Covers today and — once EPEX publishes them around 13:00 — tomorrow's prices.
   /// </summary>
-  public required List<PriceTableEntry> ImportPrices { get; init; }
+  public required PriceList ImportPrices { get; init; }
 
   /// <summary>
   /// Hourly export/feed-in price table, in ct/kWh.
   /// Either the same variable spot prices as import (scaled) or a fixed feed-in tariff,
   /// depending on ExportPriceIsVariable in config.
   /// </summary>
-  public required List<PriceTableEntry> ExportPrices { get; init; }
+  public required PriceList ExportPrices { get; init; }
 
   /// <summary>
   /// Historical-average house load per 15-minute slot, in Wh.

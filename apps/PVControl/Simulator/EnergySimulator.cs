@@ -248,8 +248,8 @@ public static class EnergySimulator
     }
     problemCounter = 0;
 
-    float importPriceNow = PriceManager.GetPrice(input.ImportPrices, now);
-    float exportPriceNow = PriceManager.GetPrice(input.ExportPrices, now);
+    float importPriceNow = input.ImportPrices.GetPrice(now);
+    float exportPriceNow = input.ExportPrices.GetPrice(now);
 
     // ── Negative import price ─────────────────────────────────────────────────────────────
     // Grid is paying us to consume electricity → fill battery as fast as possible.
@@ -271,11 +271,11 @@ public static class EnergySimulator
     // so we have room to absorb the cheap/free grid energy then.
     if (exportPriceNow < 0)
     {
-      bool battChargeEnable = !PriceManager.NegativeImportUpcoming(input.ImportPrices, now);
+      bool battChargeEnable = !input.ImportPrices.NegativeImportUpcoming(now);
       return new InverterState(InverterModes.house_only, ForceChargeReasons.ExportPriceNegative, battChargeEnable);
     }
 
-    float exportPriceNextHour = PriceManager.GetPrice(input.ExportPrices, now.AddHours(1));
+    float exportPriceNextHour = input.ExportPrices.GetPrice(now.AddHours(1));
 
     // ── Opportunistic discharge ───────────────────────────────────────────────────────────
     // When enabled, the system can earn money by selling battery energy at peak prices,
@@ -308,7 +308,7 @@ public static class EnergySimulator
         .OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
 
       if (sellMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour)
-          && (exportPriceNow >= input.ForceChargeMaxPrice || PriceManager.NegativeImportUpcoming(input.ImportPrices, now)))
+          && (exportPriceNow >= input.ForceChargeMaxPrice || input.ImportPrices.NegativeImportUpcoming(now)))
       {
         // Near solar time we can go lower (absolute minimum), otherwise stay at preferred
         int minAllowedSoc = input.PreferredMinSocPercent;
@@ -339,7 +339,7 @@ public static class EnergySimulator
     // we start early so we finish exactly at the cheapest moment.
     if (input.ForceCharge)
     {
-      var cheapestToday = PriceManager.GetCheapestWindowToday(input.ImportPrices, now);
+      var cheapestToday = input.ImportPrices.GetCheapestWindowToday(now);
       if (now > cheapestToday.StartTime.AddHours(-1) && now < cheapestToday.StartTime.AddHours(2))
       {
         // Hysteresis: if already charging in this slot, keep going until target is reached
@@ -351,8 +351,8 @@ public static class EnergySimulator
         // How long will charging take from the naive SoC at the cheapest start time?
         int socAtBestTime = naiveFutureSoC.GetValueOrDefault(cheapestToday.StartTime, simulatedSoc);
         int chargeTime = CalculateChargingDurationA(socAtBestTime, 100, input.MaxChargePowerAmps, input.InverterEfficiency, input.BatteryCapacityWh);
-        int rankBefore = PriceManager.GetPriceRank(input.ImportPrices, cheapestToday.StartTime.AddHours(-1));
-        int rankAfter = PriceManager.GetPriceRank(input.ImportPrices, cheapestToday.StartTime.AddHours(1));
+        int rankBefore = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(-1));
+        int rankAfter = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(1));
         DateTime chargeStart = cheapestToday.StartTime;
 
         // If charging takes >60 min and the preceding hour is cheaper than the following,
@@ -404,7 +404,7 @@ public static class EnergySimulator
         .OrderBy(p => p.Price)
         .FirstOrDefault();
       if (bestChargeWindow.StartTime == default)
-        bestChargeWindow = PriceManager.GetBestChargeWindow(input.ImportPrices, need, now); // safety fallback
+        bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now); // safety fallback
 
       // Simulation slots are always on exact quarter-hour boundaries, so the ±30-second
       // guard used by the live system (to avoid triggering before the price feed updates)
@@ -416,7 +416,7 @@ public static class EnergySimulator
 
       if (inWindow && socOk)
       {
-        float importPriceNextHour = PriceManager.GetPrice(input.ImportPrices, now.AddHours(1));
+        float importPriceNextHour = input.ImportPrices.GetPrice(now.AddHours(1));
         // No deadline constraint on deferral — the floor is held by grid_only anyway.
         // (In practice this rarely fires since bestChargeWindow IS the cheapest hour.)
         bool canWaitForNextHour = importPriceNow > importPriceNextHour;

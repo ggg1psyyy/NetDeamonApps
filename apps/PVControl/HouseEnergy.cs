@@ -221,7 +221,7 @@ namespace NetDeamon.apps.PVControl
             .Sum(l => l.PowerAverage!.GetAverage());
           float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad - evPowerW);
           float pvFraction = Math.Min(1f, pvSurplusW / _lastBatteryPowerW);
-          float sourcePrice = (1f - pvFraction) * Prices.CurrentEnergyImportPriceTotal;
+          float sourcePrice = (1f - pvFraction) * Prices.PriceListImport.GetPrice(DateTime.Now);
 
           // Weighted average: blend existing stored energy cost with new charge cost.
           float currentStoredKwh = Math.Max(0.1f, BatterySoc * BatteryCapacity / 100f / 1000f);
@@ -257,7 +257,7 @@ namespace NetDeamon.apps.PVControl
         float diff = (export / 1000) - _lastExportEnergySum;
         if (diff > 0)
         {
-          await AddToSumEntityAsync(SumExportEarningsEntity, diff * Prices.CurrentEnergyExportPriceTotal);
+          await AddToSumEntityAsync(SumExportEarningsEntity, diff * Prices.PriceListExport.GetPrice(DateTime.Now));
           await UpdateNetCostEntityAsync();
         }
         _lastExportEnergySum = export / 1000;
@@ -267,7 +267,7 @@ namespace NetDeamon.apps.PVControl
         float diff = (import / 1000) - _lastImportEnergySum;
         if (diff > 0)
         {
-          await AddToSumEntityAsync(SumImportCostBruttoEntity, diff * Prices.CurrentEnergyImportPriceTotal);
+          await AddToSumEntityAsync(SumImportCostBruttoEntity, diff * Prices.PriceListImport.GetPrice(DateTime.Now));
           await AddToSumEntityAsync(SumImportCostEnergyOnlyEntity, diff * Prices.CurrentEnergyImportPriceEnergyOnly);
           await AddToSumEntityAsync(SumImportCostNetworkOnlyEntity, diff * Prices.CurrentEnergyImportPriceNetworkOnly);
           await UpdateNetCostEntityAsync();
@@ -303,7 +303,7 @@ namespace NetDeamon.apps.PVControl
           float remainFraction  = 1f - pvFraction;
           float gridFraction    = evPowerW > 0 ? Math.Min(remainFraction, Math.Max(0f, CurrentAverageGridPower) / evPowerW) : 0f;
           float batteryFraction = remainFraction - gridFraction;
-          float effectivePrice  = gridFraction * Prices.CurrentEnergyImportPriceTotal
+          float effectivePrice  = gridFraction * Prices.PriceListImport.GetPrice(DateTime.Now)
                                 + batteryFraction * _batteryAvgCostPerKwh;
 
           // Maintain totals in memory — never read back from the entity to avoid the
