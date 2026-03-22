@@ -124,7 +124,7 @@ namespace NetDeamon.apps.PVControl
         }
         if (schedLoad.Config.ActualEnergyEntity is not null)
         {
-          if (schedLoad.Config.ActualEnergyEntity.TryGetStateValue(out float initEnergy))
+          if (schedLoad.Config.ActualEnergyEntity.TryGetStateValue(out float initEnergy, numericalGetBaseValue: false))
             schedLoad.LastEnergySum = initEnergy;
           schedLoad.Config.ActualEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(schedLoad.Config.ActualEnergyEntity));
         }
@@ -177,7 +177,9 @@ namespace NetDeamon.apps.PVControl
       {
         _batteryAvgCostEntity = value;
         // Restore persisted value on startup so attribution is correct immediately.
-        if (value != null && value.TryGetStateValue(out float v) && v > 0)
+        // Use numericalGetBaseValue:false — the value is stored raw in €/kWh, no unit conversion needed.
+        // Clamp to a plausible range; corrupt values (e.g. 14 M €/kWh) are silently discarded.
+        if (value != null && value.TryGetStateValue(out float v, numericalGetBaseValue: false) && v is > 0f and <= 10f)
           _batteryAvgCostPerKwh = v;
       }
     }
@@ -185,15 +187,16 @@ namespace NetDeamon.apps.PVControl
     private async Task AddToSumEntityAsync(Entity? entity, float deltaEur)
     {
       if (entity is null) return;
-      float current = entity.TryGetStateValue(out float v) ? v : 0f;
+      // numericalGetBaseValue:false — value is stored raw in €, no unit-multiplier conversion.
+      float current = entity.TryGetStateValue(out float v, numericalGetBaseValue: false) ? v : 0f;
       await PVCC_EntityManager.SetStateAsync(entity.EntityId, (current + deltaEur).ToString(CultureInfo.InvariantCulture));
     }
 
     private async Task UpdateNetCostEntityAsync()
     {
       if (SumImportExportNetCostEntity is null || SumImportCostBruttoEntity is null || SumExportEarningsEntity is null) return;
-      float imp = SumImportCostBruttoEntity.TryGetStateValue(out float i) ? i : 0f;
-      float exp = SumExportEarningsEntity.TryGetStateValue(out float e) ? e : 0f;
+      float imp = SumImportCostBruttoEntity.TryGetStateValue(out float i, numericalGetBaseValue: false) ? i : 0f;
+      float exp = SumExportEarningsEntity.TryGetStateValue(out float e, numericalGetBaseValue: false) ? e : 0f;
       await PVCC_EntityManager.SetStateAsync(SumImportExportNetCostEntity.EntityId, (imp - exp).ToString(CultureInfo.InvariantCulture));
     }
 
@@ -283,7 +286,7 @@ namespace NetDeamon.apps.PVControl
         && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId
         && l.Config.ActualEnergyEntity.TryGetStateValue(out float _)))
       {
-        schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy);
+        schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy, numericalGetBaseValue: false);
         float diff = energy - schedLoad.LastEnergySum;
         // Clamp: a single delta larger than 2 h at AvgPowerW is a sensor glitch.
         float maxDiff = schedLoad.Config.AvgPowerW * 2f / 1000f;

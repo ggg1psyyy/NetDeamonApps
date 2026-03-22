@@ -1006,13 +1006,16 @@ namespace NetDeamon.apps.PVControl
 
           // Seed in-memory running totals from persisted HA state.
           // Reject values outside plausible range (corrupted by past sensor glitch).
-          if (load.TotalEnergyKwhEntity.TryGetStateValue(out float savedKwh) && savedKwh is >= 0f and <= 100_000f)
+          // numericalGetBaseValue:false — values stored raw in kWh/€, no unit-multiplier conversion.
+          if (load.TotalEnergyKwhEntity.TryGetStateValue(out float savedKwh, numericalGetBaseValue: false) && savedKwh is >= 0f and <= 100_000f)
             load.TotalEnergyKwh = savedKwh;
           else
             PVCC_Logger.LogWarning("TotalEnergy for {Name} reset to 0 (persisted value {Val} out of range)", load.Config.Name, savedKwh);
 
-          if (load.TotalCostEurEntity.TryGetStateValue(out float savedEur) && savedEur is >= 0f and <= 1_000_000f)
+          if (load.TotalCostEurEntity.TryGetStateValue(out float savedEur, numericalGetBaseValue: false) && savedEur is >= 0f and <= 1_000_000f)
             load.TotalCostEur = savedEur;
+          else
+            PVCC_Logger.LogWarning("TotalCost for {Name} reset to 0 (persisted value {Val} out of range)", load.Config.Name, savedEur);
         }
       }
 
