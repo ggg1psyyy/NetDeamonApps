@@ -103,12 +103,12 @@ namespace NetDeamon.apps.PVControl
       {
         #region Load settings from HA if available
 
-        _house.SumExportEarningsEntity = _sumExportEarningsBruttoEntity;
-        _house.SumImportCostBruttoEntity = _sumImportCostBruttoEntity;
-        _house.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
-        _house.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
-        _house.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
-        _house.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
+        _house.Costs.SumExportEarningsEntity = _sumExportEarningsBruttoEntity;
+        _house.Costs.SumImportCostBruttoEntity = _sumImportCostBruttoEntity;
+        _house.Costs.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
+        _house.Costs.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
+        _house.Costs.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
+        _house.Costs.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
 
         if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
           _house.Prices.ForceChargeMaxPrice = maxPrice;
@@ -119,9 +119,9 @@ namespace NetDeamon.apps.PVControl
         if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
           _house.OverrideMode = mode;
         if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
-          _house.PreferredMinBatterySoC = prefSoC;
+          _house.Battery.PreferredMinBatterySoC = prefSoC;
         if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
-          _house.EnforcePreferredSoC = enforcePrefSoC;
+          _house.Battery.EnforcePreferredSoC = enforcePrefSoC;
         if (_enableOpportunisticExport.TryGetStateValue(out bool enableOpp))
           _house.OpportunisticDischarge = enableOpp;
 
@@ -230,13 +230,13 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == _prefBatterySoCEntity.EntityId)
       {
         if (int.TryParse(newState, out int value))
-          _house.PreferredMinBatterySoC = value;
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.PreferredMinBatterySoC.ToString());
+          _house.Battery.PreferredMinBatterySoC = value;
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.Battery.PreferredMinBatterySoC.ToString());
       }
       if (entity.EntityId == _enforcePreferredSocEntity.EntityId && entity.State is not null)
       {
-        _house.EnforcePreferredSoC = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.EnforcePreferredSoC ? "ON" : "OFF");
+        _house.Battery.EnforcePreferredSoC = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.Battery.EnforcePreferredSoC ? "ON" : "OFF");
       }
       if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
       {
@@ -362,38 +362,38 @@ namespace NetDeamon.apps.PVControl
       }
       #endregion
       #region Remaining battery
-      await PVCC_EntityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.Battery.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingTime = new
       {
-        Estimated_time = now.AddMinutes(_house.EstimatedTimeToBatteryFullOrEmpty).ToISO8601(),
-        next_relevant_pv_charge = _house.FirstRelevantPVEnergyToday.ToISO8601(),
-        avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
-        status = _house.BatteryStatus.ToString(),
-        time_on_max = _house.MaxSocDurationToday.ToString(CultureInfo.InvariantCulture) + " h",
+        Estimated_time = now.AddMinutes(_house.Battery.EstimatedTimeToBatteryFullOrEmpty).ToISO8601(),
+        next_relevant_pv_charge = _house.PVWindows.FirstRelevantPVEnergyToday.ToISO8601(),
+        avg_battery_charge_or_discharge_Power = _house.Battery.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
+        status = _house.Battery.BatteryStatus.ToString(),
+        time_on_max = _house.PVWindows.MaxSocDurationToday.ToString(CultureInfo.InvariantCulture) + " h",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
       #endregion
       #region Battery status
-      await PVCC_EntityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.BatteryStatus.ToString());
+      await PVCC_EntityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.Battery.BatteryStatus.ToString());
       var attr_batStatus = new
       {
-        avg_battery_charge_or_discharge_Power = _house.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
+        avg_battery_charge_or_discharge_Power = _house.Battery.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         avg_house_load_now = _house.CurrentAverageHouseLoad.ToString(CultureInfo.InvariantCulture) + " W",
         predicted_house_load_now = _house.Prediction_Load.CurrentValue * 4 + " W",
         avg_pv_power_now = _house.CurrentAveragePVPower.ToString(CultureInfo.InvariantCulture) + " W",
         predicted_pv_power_now = _house.Prediction_PV.CurrentValue * 4 + " W",
-        current_SoC = _house.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
+        current_SoC = _house.Battery.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
       #endregion
       #region Remaining energy
-      await PVCC_EntityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.Battery.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingEnergy = new
       {
-        min_allowed_SoC = (_house.EnforcePreferredSoC ? _house.PreferredMinimalSoC : _house.AbsoluteMinimalSoC).ToString() + "%",
-        remaining_energy_at_min_battery_soc = _house.ReserveBatteryEnergy.ToString(CultureInfo.InvariantCulture) + " Wh",
-        remaining_energy_to_zero_soc = _house.CalculateBatteryEnergyAtSoC(_house.BatterySoc, 0).ToString(CultureInfo.InvariantCulture) + " Wh",
-        battery_capacity = _house.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
+        min_allowed_SoC = (_house.Battery.EnforcePreferredSoC ? _house.Battery.PreferredMinimalSoC : _house.Battery.AbsoluteMinimalSoC).ToString() + "%",
+        remaining_energy_at_min_battery_soc = _house.Battery.ReserveBatteryEnergy.ToString(CultureInfo.InvariantCulture) + " Wh",
+        remaining_energy_to_zero_soc = _house.Battery.CalculateBatteryEnergyAtSoC(_house.Battery.BatterySoc, 0).ToString(CultureInfo.InvariantCulture) + " Wh",
+        battery_capacity = _house.Battery.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
       #endregion
@@ -401,12 +401,12 @@ namespace NetDeamon.apps.PVControl
       bool simNeedToCharge = _house.SimulationTimeline.Any(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
       await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, simNeedToCharge ? "ON" : "OFF");
       var futureSoCEntries = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).ToList();
-      var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.BatterySoc;
+      var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.Battery.BatterySoc;
       var simMinSoCTime = futureSoCEntries.Count > 0 ? futureSoCEntries.MinBy(s => s.Value).Key : now;
       var attr_Charge = new
       {
-        minimal_SoC_allowed = _house.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
-        preferred_SoC = _house.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        minimal_SoC_allowed = _house.Battery.AbsoluteMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
+        preferred_SoC = _house.Battery.PreferredMinimalSoC.ToString(CultureInfo.InvariantCulture) + "%",
         minimal_estimated_SoC = simMinSoC.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = simMinSoCTime.ToISO8601(),
         current_average_gridpower = _house.CurrentAverageGridPower.ToString(CultureInfo.InvariantCulture) + " W",
@@ -423,7 +423,7 @@ namespace NetDeamon.apps.PVControl
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
-          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
+          last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
           // Live simulation: SoC + mode for every slot today and tomorrow.
           // Slots before "now" have no simulation mode (back-filled SoC only) → shown as "past".
           data_actual = _house.Prediction_BatterySoC.TodayAndTomorrow.Select(s => new
@@ -436,14 +436,14 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
 
         // Midnight snapshot — published separately to keep predicted_soc attributes under the 16 kB recorder limit.
-        var snapshotModes = _house.DailyModePredictionTodayAndTomorrow;
-        var curSnapSoc = _house.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
+        var snapshotModes = _house.Snapshots.DailyModePredictionTodayAndTomorrow;
+        var curSnapSoc = _house.Snapshots.DailyBatterySoCPredictionTodayAndTomorrow.GetEntryAtTime(now);
         await PVCC_EntityManager.SetStateAsync(_info_SoCSnapshotEntity.EntityId,
           (curSnapSoc.Key != default ? curSnapSoc.Value : 0).ToString(CultureInfo.InvariantCulture));
         var attr_soc_snapshot = new
         {
-          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
-          data_snapshot = _house.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new
+          last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
+          data_snapshot = _house.Snapshots.DailyBatterySoCPredictionTodayAndTomorrow.Select(s => new
           {
             datetime = s.Key.ToISO8601(),
             soc = s.Value,
@@ -452,27 +452,27 @@ namespace NetDeamon.apps.PVControl
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_SoCSnapshotEntity.EntityId, attr_soc_snapshot);
       }
-      var curPredCharge = _house.DailyChargePredictionTodayAndTomorrow.GetEntryAtTime(now);
+      var curPredCharge = _house.Snapshots.DailyChargePredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredCharge.Key != default)
       {
         await PVCC_EntityManager.SetStateAsync(_info_PredictedChargeEntity.EntityId, curPredCharge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
           current_entry_time = curPredCharge.Key.ToISO8601(),
-          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
-          data = _house.DailyChargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, charge = s.Value }),
+          last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
+          data = _house.Snapshots.DailyChargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, charge = s.Value }),
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedChargeEntity.EntityId, attr_pred_charge);
       }
-      var curPredDischarge = _house.DailyDischargePredictionTodayAndTomorrow.GetEntryAtTime(now);
+      var curPredDischarge = _house.Snapshots.DailyDischargePredictionTodayAndTomorrow.GetEntryAtTime(now);
       if (curPredDischarge.Key != default)
       {
         await PVCC_EntityManager.SetStateAsync(_info_PredictedDischargeEntity.EntityId, curPredDischarge.Value.ToString(CultureInfo.InvariantCulture));
         var attr_pred_charge = new
         {
           current_entry_time = curPredDischarge.Key.ToISO8601(),
-          last_snapshot = _house.LastSnapshotUpdate.ToISO8601(),
-          data = _house.DailyDischargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, discharge = s.Value }),
+          last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
+          data = _house.Snapshots.DailyDischargePredictionTodayAndTomorrow.Select(s => new { datetime = s.Key, discharge = s.Value }),
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);
       }
