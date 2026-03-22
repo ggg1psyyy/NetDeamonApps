@@ -513,8 +513,10 @@ namespace NetDeamon.apps.PVControl
       { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
 
       // Step 1: Optimal — house reaches ~100% even WITH EV running; overnight OK; no new grid.
-      // Any mode may use this (it is the most desirable: pure PV, maximum house SoC flexibility).
-      // Binary search finds the longest session that still lets the house hit ~100% today.
+      // Optimal mode only. Priority/PriorityPlus skip this step and use Step 2 (tomorrowMax),
+      // which always yields an equal or longer session — Step 1 would cap at todayMax (last PV
+      // today) and incorrectly prevent Priority from running overnight.
+      if (load.Mode == LoadSchedulingMode.Optimal)
       {
         var end = FindMax(todayMax, sim =>
           SimWillReachMaxSocToday(sim, now) && SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
