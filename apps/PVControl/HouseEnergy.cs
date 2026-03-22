@@ -285,7 +285,7 @@ namespace NetDeamon.apps.PVControl
       {
         schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy);
         float diff = energy - schedLoad.LastEnergySum;
-        // Clamp diff: a single state-change delta larger than 2 h at AvgPowerW is a sensor glitch.
+        // Clamp: a single delta larger than 2 h at AvgPowerW is a sensor glitch.
         float maxDiff = schedLoad.Config.AvgPowerW * 2f / 1000f;
         if (diff > maxDiff)
         {
@@ -304,8 +304,14 @@ namespace NetDeamon.apps.PVControl
           float effectivePrice  = gridFraction * CurrentEnergyImportPriceTotal
                                 + batteryFraction * _batteryAvgCostPerKwh;
 
-          await AddToSumEntityAsync(schedLoad.TotalEnergyKwhEntity, diff);
-          await AddToSumEntityAsync(schedLoad.TotalCostEurEntity, diff * effectivePrice);
+          // Maintain totals in memory — never read back from the entity to avoid the
+          // MQTT read-modify-write race that causes exponential accumulation.
+          schedLoad.TotalEnergyKwh += diff;
+          schedLoad.TotalCostEur   += diff * effectivePrice;
+          if (schedLoad.TotalEnergyKwhEntity is not null)
+            await PVCC_EntityManager.SetStateAsync(schedLoad.TotalEnergyKwhEntity.EntityId, schedLoad.TotalEnergyKwh.ToString(CultureInfo.InvariantCulture));
+          if (schedLoad.TotalCostEurEntity is not null)
+            await PVCC_EntityManager.SetStateAsync(schedLoad.TotalCostEurEntity.EntityId, schedLoad.TotalCostEur.ToString(CultureInfo.InvariantCulture));
         }
         schedLoad.LastEnergySum = energy;
       }

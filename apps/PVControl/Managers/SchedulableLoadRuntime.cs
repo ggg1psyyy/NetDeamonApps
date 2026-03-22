@@ -104,6 +104,12 @@ namespace NetDeamon.apps.PVControl.Managers
       }
     }
 
+    // ── Energy/cost running totals (maintained in memory; persisted to HA on each update) ───
+    /// <summary>Accumulated kWh delivered to this load since the app was last reset. Written to HA each update.</summary>
+    public float TotalEnergyKwh { get; set; }
+    /// <summary>Accumulated cost (€) for energy delivered to this load. Written to HA each update.</summary>
+    public float TotalCostEur { get; set; }
+
     // ── Simulation output — written by HouseEnergy.FindLoadWindow ──────────────────────────
     /// <summary>True when this load should be running now according to the simulation oracle.</summary>
     public bool ChargeNow { get; internal set; }

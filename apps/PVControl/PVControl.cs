@@ -995,13 +995,6 @@ namespace NetDeamon.apps.PVControl
             addConfig: new { unit_of_measurement = "kWh", state_class = "total_increasing" },
             defaultValue: "0",
             reRegister: reset);
-          // Sanity-check: a sensor glitch in the past can leave the accumulated value at a float
-          // overflow magnitude. Detect and reset so tracking resumes from a clean baseline.
-          if (load.TotalEnergyKwhEntity.TryGetStateValue(out float existingKwh) && existingKwh > 100_000f)
-          {
-            PVCC_Logger.LogWarning("Resetting corrupted TotalEnergy for {Name}: was {Val:E3} kWh", load.Config.Name, existingKwh);
-            await PVCC_EntityManager.SetStateAsync(load.TotalEnergyKwhEntity.EntityId, "0");
-          }
 
           load.TotalCostEurEntity = await RegisterSensor(
             $"sensor.pv_control_{load.Slug}_total_cost",
@@ -1010,6 +1003,16 @@ namespace NetDeamon.apps.PVControl
             addConfig: new { unit_of_measurement = "€" },
             defaultValue: "0",
             reRegister: reset);
+
+          // Seed in-memory running totals from persisted HA state.
+          // Reject values outside plausible range (corrupted by past sensor glitch).
+          if (load.TotalEnergyKwhEntity.TryGetStateValue(out float savedKwh) && savedKwh is >= 0f and <= 100_000f)
+            load.TotalEnergyKwh = savedKwh;
+          else
+            PVCC_Logger.LogWarning("TotalEnergy for {Name} reset to 0 (persisted value {Val} out of range)", load.Config.Name, savedKwh);
+
+          if (load.TotalCostEurEntity.TryGetStateValue(out float savedEur) && savedEur is >= 0f and <= 1_000_000f)
+            load.TotalCostEur = savedEur;
         }
       }
 
