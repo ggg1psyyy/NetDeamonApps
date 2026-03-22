@@ -995,6 +995,13 @@ namespace NetDeamon.apps.PVControl
             addConfig: new { unit_of_measurement = "kWh", state_class = "total_increasing" },
             defaultValue: "0",
             reRegister: reset);
+          // Sanity-check: a sensor glitch in the past can leave the accumulated value at a float
+          // overflow magnitude. Detect and reset so tracking resumes from a clean baseline.
+          if (load.TotalEnergyKwhEntity.TryGetStateValue(out float existingKwh) && existingKwh > 100_000f)
+          {
+            PVCC_Logger.LogWarning("Resetting corrupted TotalEnergy for {Name}: was {Val:E3} kWh", load.Config.Name, existingKwh);
+            await PVCC_EntityManager.SetStateAsync(load.TotalEnergyKwhEntity.EntityId, "0");
+          }
 
           load.TotalCostEurEntity = await RegisterSensor(
             $"sensor.pv_control_{load.Slug}_total_cost",

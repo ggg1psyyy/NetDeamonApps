@@ -285,7 +285,14 @@ namespace NetDeamon.apps.PVControl
       {
         schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy);
         float diff = energy - schedLoad.LastEnergySum;
-        if (diff > 0)
+        // Clamp diff: a single state-change delta larger than 2 h at AvgPowerW is a sensor glitch.
+        float maxDiff = schedLoad.Config.AvgPowerW * 2f / 1000f;
+        if (diff > maxDiff)
+        {
+          PVCC_Logger.LogWarning("Ignoring implausibly large energy delta {Diff:F3} kWh (>{Max:F3}) for {Name} — likely sensor glitch",
+            diff, maxDiff, schedLoad.Config.Name);
+        }
+        else if (diff > 0)
         {
           // Decompose energy source: PV direct (free) → grid direct → battery (avg cost).
           int evPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.Config.AvgPowerW;
@@ -510,11 +517,27 @@ namespace NetDeamon.apps.PVControl
         }
       }
 
+      // Step 1b: Optimal overnight drain — after PV has charged the battery to full (BatterySoc ≥ 99 %),
+      // allow the EV to run overnight using the stored solar energy, down to minSoC.
+      // This handles the gap after the daytime window ends: the house charges to 100 % via remaining PV,
+      // then each cron re-evaluation detects BatterySoc ≥ 99 % and enables overnight drain.
+      if (BatterySoc >= 99 && tomorrowMax > currentSlot)
+      {
+        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+        if (end is not null)
+        {
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
+            true, $"Charging (Optimal overnight {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={BatterySoc}%)", end);
+          return;
+        }
+      }
+
       // Step 2: Priority — overnight OK, no new grid; house does NOT need to reach 100%.
-      // Priority and PriorityPlus only. Finds a longer session than Optimal allows.
+      // Priority and PriorityPlus only. Uses tomorrowMax so a continuous session can extend
+      // past sunset — the EV drains the battery from whatever level it reaches at dusk down to minSoC.
       if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
       {
-        var end = FindMax(todayMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
