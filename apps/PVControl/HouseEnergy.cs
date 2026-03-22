@@ -535,9 +535,12 @@ namespace NetDeamon.apps.PVControl
       // Step 2: Priority — overnight OK, no new grid; house does NOT need to reach 100%.
       // Priority and PriorityPlus only. Uses tomorrowMax so a continuous session can extend
       // past sunset — the EV drains the battery from whatever level it reaches at dusk down to minSoC.
+      // Priority always enforces PreferredMinSoC (regardless of EnforcePreferredSoC setting);
+      // PriorityPlus may go to AbsoluteMinSoC when EnforcePreferredSoC is off.
       if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
       {
-        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+        bool priorityEnforcePreferred = load.Mode == LoadSchedulingMode.Priority;
+        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim, priorityEnforcePreferred) && !HasNewGrid(sim));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
@@ -570,11 +573,12 @@ namespace NetDeamon.apps.PVControl
     /// <summary>
     /// True if the test simulation shows the battery stays above the effective minimum SoC
     /// throughout the overnight window (sunset today → first PV tomorrow).
-    /// Uses PreferredMinimalSoC when EnforcePreferredSoC is set, AbsoluteMinimalSoC otherwise.
+    /// Uses PreferredMinimalSoC when EnforcePreferredSoC is set or <paramref name="alwaysEnforcePreferred"/> is true;
+    /// AbsoluteMinimalSoC otherwise (only PriorityPlus with enforce off).
     /// </summary>
-    private bool SimOvernightMinSocOk(List<SimulationSlot> result)
+    private bool SimOvernightMinSocOk(List<SimulationSlot> result, bool alwaysEnforcePreferred = false)
     {
-      int minSoC = EnforcePreferredSoC ? PreferredMinimalSoC : AbsoluteMinimalSoC;
+      int minSoC = (alwaysEnforcePreferred || EnforcePreferredSoC) ? PreferredMinimalSoC : AbsoluteMinimalSoC;
       var overnight = result.Where(s => s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow).ToList();
       return overnight.Count == 0 || overnight.Min(s => s.SoC) >= minSoC;
     }
