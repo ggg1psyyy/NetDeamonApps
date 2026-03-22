@@ -489,14 +489,17 @@ namespace NetDeamon.apps.PVControl
         var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW };
         return EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, testLoad]));
       }
+      // HasNewGrid: true if the test simulation adds ANY new force_charge slot not in the baseline.
+      // Checking only the overnight window (as before) missed daytime force_charge caused by EV drain —
+      // the simulation would schedule a grid top-up at e.g. 16:00 (before sunset) to prevent the battery
+      // going below AbsMin, which HasNewGrid didn't detect because 16:00 < LastRelevantPVEnergyToday.
       bool HasNewGrid(List<SimulationSlot> sim) => sim.Any(s =>
         s.State.Mode == InverterModes.force_charge
-        && !baseForceChargeSlots.Contains(s.Time)
-        && s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow);
+        && !baseForceChargeSlots.Contains(s.Time));
+      // IsGridCheap: true if all new grid imports (at any time) are at or below ForceChargeMaxPrice.
       bool IsGridCheap(List<SimulationSlot> sim) => !sim.Any(s =>
         s.State.Mode == InverterModes.force_charge
         && !baseForceChargeSlots.Contains(s.Time)
-        && s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow
         && !PriceListImport.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= ForceChargeMaxPrice));
 
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.

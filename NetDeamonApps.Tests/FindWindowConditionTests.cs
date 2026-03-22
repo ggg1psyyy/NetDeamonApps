@@ -181,26 +181,23 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// True if the test sim introduced NO new force_charge slots in the overnight window
-  /// (mirrors !HasNewGrid).
+  /// True if the test sim introduced NO new force_charge slots at ANY time
+  /// (mirrors !HasNewGrid — checks all slots, not just the overnight window).
   /// </summary>
-  static bool NoNewGrid(List<SimulationSlot> sim, HashSet<DateTime> baseFCS,
-      DateTime lastPV, DateTime firstPV)
+  static bool NoNewGrid(List<SimulationSlot> sim, HashSet<DateTime> baseFCS)
     => !sim.Any(s =>
       s.State.Mode == InverterModes.force_charge
-      && !baseFCS.Contains(s.Time)
-      && s.Time >= lastPV && s.Time <= firstPV);
+      && !baseFCS.Contains(s.Time));
 
   /// <summary>
-  /// True if every NEW overnight force_charge slot has an import price ≤ maxPrice
-  /// (mirrors IsGridCheap).
+  /// True if every NEW force_charge slot (at any time) has an import price ≤ maxPrice
+  /// (mirrors IsGridCheap — checks all slots, not just the overnight window).
   /// </summary>
   static bool GridCheap(List<SimulationSlot> sim, HashSet<DateTime> baseFCS,
-      DateTime lastPV, DateTime firstPV, List<PriceTableEntry> prices, float maxPrice)
+      List<PriceTableEntry> prices, float maxPrice)
     => !sim.Any(s =>
       s.State.Mode == InverterModes.force_charge
       && !baseFCS.Contains(s.Time)
-      && s.Time >= lastPV && s.Time <= firstPV
       && !prices.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= maxPrice));
 
   // ── Step 1 (Optimal) tests ───────────────────────────────────────────────────────────────
@@ -305,7 +302,7 @@ public class FindWindowConditionTests : TestBase
       "Optimal overnight: SoC must stay ≥ AbsMin through the night.");
 
     // No new grid required.
-    Assert.True(NoNewGrid(evSim, baseFCS, LastPVToday, FirstPVTomorrow),
+    Assert.True(NoNewGrid(evSim, baseFCS),
       "Optimal overnight: no new grid import should be needed.");
   }
 
@@ -336,7 +333,7 @@ public class FindWindowConditionTests : TestBase
     // Priority condition: overnightOk AND no new grid overnight.
     Assert.True(OvernightOk(evSim, LastPVToday, FirstPVTomorrow, AbsMin),
       "Priority full session: overnight SoC should stay above AbsMin.");
-    Assert.True(NoNewGrid(evSim, baseFCS, LastPVToday, FirstPVTomorrow),
+    Assert.True(NoNewGrid(evSim, baseFCS),
       "Priority full session: no new force_charge should be scheduled overnight.");
 
     // Demonstrate that Priority's session is longer than Optimal's:
@@ -369,7 +366,7 @@ public class FindWindowConditionTests : TestBase
     // … but satisfies Priority (overnight OK, no new grid)
     Assert.True(OvernightOk(evSim, LastPVToday, FirstPVTomorrow, AbsMin),
       "T=27 should still satisfy Priority's overnight condition.");
-    Assert.True(NoNewGrid(evSim, baseFCS, LastPVToday, FirstPVTomorrow),
+    Assert.True(NoNewGrid(evSim, baseFCS),
       "T=27 should require no new grid import overnight.");
   }
 
@@ -456,11 +453,105 @@ public class FindWindowConditionTests : TestBase
     });
 
     // gridOnlyCheap = true for the EV sim
-    Assert.True(GridCheap(evSim, baseFCS, lastPVToday, firstPVTomorrow, prices, MaxPrice),
+    Assert.True(GridCheap(evSim, baseFCS, prices, MaxPrice),
       "With cheap overnight grid, gridOnlyCheap should be true.");
 
     // ── 3. Priority's !needsGrid fails (this is WHY PriorityPlus is needed) ─────────────
-    Assert.False(NoNewGrid(evSim, baseFCS, lastPVToday, firstPVTomorrow),
+    Assert.False(NoNewGrid(evSim, baseFCS),
       "Priority should fail here: EV overnight causes new grid import (force_charge).");
+  }
+
+  // ── HasNewGrid daytime regression ────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Regression test for the bug where HasNewGrid only checked the overnight window
+  /// [LastPVToday, FirstPVTomorrow] and missed force_charge scheduled BEFORE sunset.
+  ///
+  /// Scenario: 15:00 start, battery at 40%, high EV drain (3700 W = 925 Wh/slot).
+  /// Net balance with PV: 600 − 112 − 925 = −437 Wh/slot → battery hits AbsMin ~16:48.
+  /// The simulation schedules force_charge at the current slot (15:00, before sunset 17:45)
+  /// to prevent the battery from going below AbsMin.
+  ///
+  /// The old code checked HasNewGrid overnight-only, which missed this daytime force_charge.
+  /// After the fix, HasNewGrid checks all slots and correctly blocks the EV session.
+  /// </summary>
+  [Fact]
+  public void Priority_HighDrainEV_HasNewGrid_CatchesDaytimeForceCharge()
+  {
+    var start = new DateTime(2026, 3, 22, 15, 0, 0);
+    const int HighEvW = 3_700;  // W → 925 Wh/slot; net = 600 - 112 - 925 = -437 Wh/slot during PV
+
+    var date   = start.Date;
+    var prices = HourlyPrices(date, cheapPrice: 0.05f, expensivePrice: 0.30f, cheapHour: 2);
+
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = start,
+      StartSocPercent             = 40,   // 40 % = 4 608 Wh → hits AbsMin mid-afternoon with EV
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = AbsMin,
+      PreferredMinSocPercent      = 30,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = ChargeA,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = FlatLoad(date, LoadWh),
+      PVPredictionWh              = DaytimePV(date, PvWh),
+      ExtraLoads                  = [],
+      ForceCharge                 = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = 0.25f,
+      ForceChargeTargetSocPercent = 95,
+      OverrideMode                = InverterModes.automatic,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+      CurrentResetCounter         = 0,
+      CurrentAverageGridPowerW    = 0,
+    };
+
+    var evIn = new SimulationInput
+    {
+      StartTime                   = baseIn.StartTime,
+      StartSocPercent             = baseIn.StartSocPercent,
+      BatteryCapacityWh           = baseIn.BatteryCapacityWh,
+      AbsoluteMinSocPercent       = baseIn.AbsoluteMinSocPercent,
+      PreferredMinSocPercent      = baseIn.PreferredMinSocPercent,
+      EnforcePreferredSoc         = baseIn.EnforcePreferredSoc,
+      MaxChargePowerAmps          = baseIn.MaxChargePowerAmps,
+      InverterEfficiency          = baseIn.InverterEfficiency,
+      ImportPrices                = baseIn.ImportPrices,
+      ExportPrices                = baseIn.ExportPrices,
+      LoadPredictionWh            = baseIn.LoadPredictionWh,
+      PVPredictionWh              = baseIn.PVPredictionWh,
+      ExtraLoads                  = [new ExtraLoad { Name = "EV", Priority = 10, StartTime = start, EndTime = FirstPVTomorrow, PowerW = HighEvW }],
+      ForceCharge                 = baseIn.ForceCharge,
+      OpportunisticDischarge      = baseIn.OpportunisticDischarge,
+      ForceChargeMaxPrice         = baseIn.ForceChargeMaxPrice,
+      ForceChargeTargetSocPercent = baseIn.ForceChargeTargetSocPercent,
+      OverrideMode                = baseIn.OverrideMode,
+      CurrentMode                 = baseIn.CurrentMode,
+      CurrentResetCounter         = baseIn.CurrentResetCounter,
+      CurrentAverageGridPowerW    = baseIn.CurrentAverageGridPowerW,
+    };
+
+    var baseSim = EnergySimulator.Simulate(baseIn);
+    var evSim   = EnergySimulator.Simulate(evIn);
+    var baseFCS = new HashSet<DateTime>(
+      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+
+    // The EV causes new force_charge — confirm at least one fires BEFORE sunset.
+    var newForceSlots = evSim
+      .Where(s => s.State.Mode == InverterModes.force_charge && !baseFCS.Contains(s.Time))
+      .ToList();
+    Assert.NotEmpty(newForceSlots);
+
+    bool daytimeForceCharge = newForceSlots.Any(s => s.Time < LastPVToday);
+    Assert.True(daytimeForceCharge,
+      $"Expected new force_charge before sunset ({LastPVToday:HH:mm}); " +
+      $"earliest new slot = {newForceSlots.Min(s => s.Time):HH:mm}.");
+
+    // HasNewGrid (all-slots check) must detect the daytime force_charge and block the EV.
+    Assert.False(NoNewGrid(evSim, baseFCS),
+      "HasNewGrid (all slots) must detect the new force_charge caused by the EV.");
   }
 }
