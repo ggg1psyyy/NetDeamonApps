@@ -136,6 +136,11 @@ namespace NetDeamon.apps.PVControl
     /// on each entry during every RunSimulation call.
     /// </summary>
     public List<SchedulableLoadRuntime> SchedulableLoads { get; private set; } = [];
+    /// <summary>Sum of average power (W) from all schedulable loads that are actively drawing above their minimum threshold.</summary>
+    private int ActiveSchedulableLoadPowerW() => SchedulableLoads
+      .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
+      .Sum(l => l.PowerAverage!.GetAverage());
+
     private async Task UserStateChanged(Entity entity)
     {
       if (entity.EntityId == PVCC_Config.CurrentImportPriceEntity?.EntityId)
@@ -147,10 +152,7 @@ namespace NetDeamon.apps.PVControl
         Battery.AddBatteryPowerValue(bat);
 
         // PV surplus available for battery after house base load and active EV loads.
-        int evPowerW = SchedulableLoads
-          .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
-          .Sum(l => l.PowerAverage!.GetAverage());
-        float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad - evPowerW);
+        float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad - ActiveSchedulableLoadPowerW());
         await Costs.OnBatteryPowerChangedAsync(bat, Battery.BatterySoc, Battery.BatteryCapacity, pvSurplusW, Prices.PriceListImport);
       }
       if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
@@ -162,10 +164,7 @@ namespace NetDeamon.apps.PVControl
         // Only subtract loads with a confirmed active ActualPowerEntity reading (above
         // MinActivePowerW) — this correctly handles cases where ChargeNow=true but the
         // load isn't actually drawing (e.g. EV not connected).
-        int runningLoadW = SchedulableLoads
-          .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
-          .Sum(l => l.PowerAverage!.GetAverage());
-        _loadRunningAverage.AddValue(load - runningLoadW);
+        _loadRunningAverage.AddValue(load - ActiveSchedulableLoadPowerW());
       }
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
@@ -180,17 +179,16 @@ namespace NetDeamon.apps.PVControl
         await Costs.OnImportEnergyChangedAsync(import, Prices.PriceListImport, Prices.CurrentEnergyImportPriceEnergyOnly, Prices.CurrentEnergyImportPriceNetworkOnly);
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualPowerEntity is not null
-        && entity.EntityId == l.Config.ActualPowerEntity!.EntityId
-        && l.Config.ActualPowerEntity.TryGetStateValue(out float _)))
+        && entity.EntityId == l.Config.ActualPowerEntity!.EntityId))
       {
-        schedLoad.Config.ActualPowerEntity!.TryGetStateValue(out float p);
-        schedLoad.PowerAverage!.AddValue((int)Math.Round(p));
+        if (schedLoad.Config.ActualPowerEntity!.TryGetStateValue(out float p))
+          schedLoad.PowerAverage!.AddValue((int)Math.Round(p));
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualEnergyEntity is not null
-        && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId
-        && l.Config.ActualEnergyEntity.TryGetStateValue(out float _)))
+        && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId))
       {
-        schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy, numericalGetBaseValue: false);
+        if (!schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy, numericalGetBaseValue: false))
+          continue;
         float diff = energy - schedLoad.LastEnergySum;
         // Clamp: a single delta larger than 2 h at AvgPowerW is a sensor glitch.
         float maxDiff = schedLoad.Config.AvgPowerW * 2f / 1000f;

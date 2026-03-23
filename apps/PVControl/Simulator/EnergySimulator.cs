@@ -72,7 +72,7 @@ public static class EnergySimulator
       // We recompute it each slot so it reflects the already-updated simulated SoC, not the
       // original starting SoC — otherwise the look-ahead would drift further from reality as
       // we step forward.
-      var naiveFutureSoC = ComputeNaiveFutureSoC(currentSoc, slotTime, startSlot, endSlot, input);
+      var naiveFutureSoC = ComputeNaiveFutureSoC(currentSoc, slotTime, endSlot, input);
 
       // --- Step 2: decide if charging is needed based on naive look-ahead ---
       var needToCharge = ComputeNeedToCharge(currentSoc, naiveFutureSoC, currentMode, input, slotTime);
@@ -94,7 +94,7 @@ public static class EnergySimulator
           (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
            newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
       {
-        int floorSoc = input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
+        int floorSoc = GetEffectiveMinSoC(input);
         // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
         // not just the first floor-crossing. Using EstimatedSoc (first-crossing value) leaves
         // the naive still declining past that point, so needCharge keeps firing every few slots
@@ -135,12 +135,12 @@ public static class EnergySimulator
   // recover it, we need to force-charge from the grid.
 
   private static Dictionary<DateTime, int> ComputeNaiveFutureSoC(
-    int currentSocPercent, DateTime fromSlot, DateTime startSlot, DateTime endSlot, SimulationInput input)
+    int currentSocPercent, DateTime startSlot, DateTime endSlot, SimulationInput input)
   {
     var result = new Dictionary<DateTime, int>();
     int energy = currentSocPercent * input.BatteryCapacityWh / 100;
 
-    for (var t = fromSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
+    for (var t = startSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
     {
       int pv = input.PVPredictionWh.GetValueOrDefault(t, 0);
       int load = input.LoadPredictionWh.GetValueOrDefault(t, 0);
@@ -165,7 +165,7 @@ public static class EnergySimulator
     int currentSoc, Dictionary<DateTime, int> naiveFutureSoC,
     InverterState currentMode, SimulationInput input, DateTime now)
   {
-    int minSoC = input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
+    int minSoC = GetEffectiveMinSoC(input);
     // Add 1 % hysteresis while already charging to prevent thrashing at the boundary
     if (currentMode.Mode == InverterModes.force_charge)
       minSoC++;
@@ -299,7 +299,7 @@ public static class EnergySimulator
       // at today's price (even if not a daily maximum) rather than wasting it
       if (!need.NeedToCharge && inPVPeriod && maxSocDurationCalc > maxSocDuration
           && exportPriceNow >= 1 && exportPriceNow >= exportPriceNextHour
-          && simulatedSoc > (input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent) + 3)
+          && simulatedSoc > (GetEffectiveMinSoC(input)) + 3)
         return new InverterState(InverterModes.feedin_priority, ForceChargeReasons.OpportunisticDischarge);
 
       // Case B: we are at one of the two highest daily export price peaks
@@ -387,7 +387,7 @@ public static class EnergySimulator
       //
       // Correct bound: search only up to the next PV recovery peak. After that point, solar
       // will charge the battery; no grid charging is needed before then.
-      int floorSoc = input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
+      int floorSoc = GetEffectiveMinSoC(input);
       // Search only for prices before PV first exceeds house load.
       // That is the moment solar takes over from the grid — any grid charging after that
       // point is unnecessary. Using the SoC peak was too late (battery already full by then),
@@ -422,7 +422,7 @@ public static class EnergySimulator
         bool canWaitForNextHour = importPriceNow > importPriceNextHour;
         if (canWaitForNextHour)
         {
-          int effectiveFloor = input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
+          int effectiveFloor = GetEffectiveMinSoC(input);
           var mode = simulatedSoc <= effectiveFloor ? InverterModes.grid_only : InverterModes.normal;
           return new InverterState(mode, ForceChargeReasons.NextHourCheaper);
         }
@@ -575,11 +575,6 @@ public static class EnergySimulator
   }
 
   /// <summary>
-  /// Feed-in priority: PV generation is directed to the grid first (to maximise export earnings).
-  /// The battery only discharges to cover any house load that PV cannot satisfy.
-  /// Battery charging from PV does NOT happen in this mode — the inverter feeds PV to grid.
-  /// </summary>
-  /// <summary>
   /// House-only mode: no grid export. PV covers house load first; any PV surplus charges
   /// the battery (up to capacity). If PV is insufficient the battery discharges for the
   /// deficit; if the battery is depleted the grid covers the remainder as a fallback.
@@ -602,6 +597,11 @@ public static class EnergySimulator
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 
+  /// <summary>
+  /// Feed-in priority: PV generation is directed to the grid first (to maximise export earnings).
+  /// The battery only discharges to cover any house load that PV cannot satisfy.
+  /// Battery charging from PV does NOT happen in this mode — the inverter feeds PV to grid.
+  /// </summary>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) FeedinPriority(
     int pvWh, int totalLoadWh, int availEnergy, int minEnergy, int maxChargeWh)
   {
@@ -618,6 +618,10 @@ public static class EnergySimulator
   /// <summary>Effective minimum SoC: always at least AbsoluteMin, at most Preferred.</summary>
   private static int GetPreferredMinSoC(SimulationInput input) =>
     Math.Max(input.PreferredMinSocPercent, input.AbsoluteMinSocPercent);
+
+  /// <summary>Effective floor SoC respecting the EnforcePreferredSoc setting.</summary>
+  private static int GetEffectiveMinSoC(SimulationInput input) =>
+    input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
 
   /// <summary>
   /// How many hours the battery stays at or above 99 % SoC in the given naive forecast.
