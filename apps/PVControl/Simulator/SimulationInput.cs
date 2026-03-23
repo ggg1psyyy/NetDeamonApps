@@ -141,14 +141,6 @@ public class SimulationInput
   /// </summary>
   public required int CurrentResetCounter { get; init; }
 
-  /// <summary>
-  /// Current running-average grid power in W (positive = importing from grid).
-  /// Only used for the first simulation slot to detect the known inverter quirk where it
-  /// imports 50–300 W in normal mode instead of using the battery.
-  /// Future slots have no live grid reading so this check is skipped for them.
-  /// </summary>
-  public required int CurrentAverageGridPowerW { get; init; }
-
   // ── Derived helpers ─────────────────────────────────────────────────────────────────────
 
   private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
@@ -220,7 +212,6 @@ public class SimulationInput
     OverrideMode = OverrideMode,
     CurrentMode = CurrentMode,
     CurrentResetCounter = CurrentResetCounter,
-    CurrentAverageGridPowerW = CurrentAverageGridPowerW,
   };
 
   /// <summary>

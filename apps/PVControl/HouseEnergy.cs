@@ -239,6 +239,7 @@ namespace NetDeamon.apps.PVControl
     }
 
     private int _resetCounter = 0;
+    private int _bugFixCounter = 0;
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private List<SimulationSlot> _simulationResult = [];
 
@@ -284,7 +285,6 @@ namespace NetDeamon.apps.PVControl
         OverrideMode = OverrideMode,
         CurrentMode = _currentMode,
         CurrentResetCounter = _resetCounter,
-        CurrentAverageGridPowerW = CurrentAverageGridPower,
       };
 
       // Run the baseline simulation once to identify naturally-scheduled force_charge slots.
@@ -533,6 +533,31 @@ namespace NetDeamon.apps.PVControl
         // Propagate reset counter: if simulation chose reset for this slot the counter decrements
         if (_currentMode.Mode == InverterModes.reset && _resetCounter > 0)
           _resetCounter--;
+
+        // ── Inverter bug fix ──────────────────────────────────────────────────────────────
+        // Some SMA inverters fail to switch to battery in "normal" mode at low house loads
+        // (50–300 W), drawing from the grid instead. This can't be predicted or simulated —
+        // it's detected live by watching the running-average grid power.
+        // After ~1 min of the condition (4 consecutive ticks), briefly force-discharge to
+        // kick the inverter back into battery mode.
+        if (_currentMode.Mode == InverterModes.normal
+            && CurrentAverageGridPower is > 50 and < 300
+            && Battery.BatterySoc > Math.Max(Battery.PreferredMinimalSoC, Battery.AbsoluteMinimalSoC))
+        {
+          if (_bugFixCounter <= 4)
+          {
+            _bugFixCounter++;
+          }
+          else
+          {
+            _bugFixCounter = 0;
+            _currentMode = new InverterState(InverterModes.force_discharge, ForceChargeReasons.None);
+          }
+        }
+        else
+        {
+          _bugFixCounter = 0;
+        }
 
         return _currentMode;
       }
