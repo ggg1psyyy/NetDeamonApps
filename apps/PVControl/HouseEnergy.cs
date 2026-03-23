@@ -322,17 +322,10 @@ namespace NetDeamon.apps.PVControl
 
       _simulationResult = EnergySimulator.Simulate(finalInput);
 
-      // Record the actual SoC for this tick so past slots show real values.
-      // Also prune yesterday's entries on day rollover to keep the dict small.
-      var currentSlotTime = now.RoundToNearestQuarterHour();
-      _actualSoCHistory[currentSlotTime] = Battery.BatterySoc;
-      var today = now.Date;
-      foreach (var k in _actualSoCHistory.Keys.Where(k => k.Date < today).ToList())
-        _actualSoCHistory.Remove(k);
-
       // Build the two-day SoC dict for Prediction_BatterySoC:
       //   - simulation covers now→end-of-tomorrow (filled below from _simulationResult)
-      //   - past slots of today (midnight→now) use actual recorded SoC values from HA
+      //   - past slots of today (midnight→now) use actual SoC history from HA (seeded on
+      //     startup), falling back to previously predicted values for slots after startup.
       var fullSoC = new Dictionary<DateTime, int>();
       fullSoC.ClearAndCreateEmptyPredictionData(); // fills today 00:00 → tomorrow 23:45 with 0s
 
@@ -342,7 +335,7 @@ namespace NetDeamon.apps.PVControl
           fullSoC[slot.Time] = slot.SoC;
 
       foreach (var t in fullSoC.Keys.Where(k => k < startSlot).ToList())
-        fullSoC[t] = _actualSoCHistory.GetValueOrDefault(t, 0);
+        fullSoC[t] = _actualSoCHistory.GetValueOrDefault(t, Prediction_BatterySoC.TodayAndTomorrow.GetValueOrDefault(t, 0));
 
       Prediction_BatterySoC.UpdateData(fullSoC);
     }
