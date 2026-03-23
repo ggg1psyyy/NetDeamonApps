@@ -256,9 +256,28 @@ namespace NetDeamon.apps.PVControl
       var (ok, history) = await PVCC_ApiManager.GetEntityHistoryAsync(
         PVCC_Config.BatterySoCEntity, midnight, ct, getMinimal: true, endDateTime: DateTime.Now);
       if (!ok) return;
-      foreach (var entry in history)
-        if (int.TryParse(entry.State, out int soc))
-          _actualSoCHistory[entry.LastChanged.RoundToNearestQuarterHour()] = soc;
+
+      // Parse and sort all valid readings into a local-time ordered list.
+      // Using "last reading at or before each slot boundary" rather than rounding each entry
+      // to the nearest slot — this avoids brief sensor glitches (inverter briefly reporting
+      // wrong values) corrupting a slot when the bad reading happens to be the last change
+      // in a rounding window.
+      var readings = history
+        .Where(e => int.TryParse(e.State, out _))
+        .Select(e => (Time: e.LastChanged.ToLocalTime(), Soc: int.Parse(e.State)))
+        .OrderBy(e => e.Time)
+        .ToList();
+      if (readings.Count == 0) return;
+
+      int idx = 0;
+      for (var slot = midnight; slot < DateTime.Now; slot = slot.AddMinutes(15))
+      {
+        // Advance to the last reading whose time is at or before this slot boundary.
+        while (idx + 1 < readings.Count && readings[idx + 1].Time <= slot)
+          idx++;
+        if (readings[idx].Time <= slot)
+          _actualSoCHistory[slot] = readings[idx].Soc;
+      }
     }
 
     /// <summary>
