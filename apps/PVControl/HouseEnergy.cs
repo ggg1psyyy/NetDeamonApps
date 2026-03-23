@@ -300,7 +300,7 @@ namespace NetDeamon.apps.PVControl
       // Run final simulation with all found ExtraLoads merged in.
       var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
       var finalInput = allExtraLoads.Count > 0
-        ? SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, .. allExtraLoads])
+        ? baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. allExtraLoads])
         : baseInput;
 
       _simulationResult = EnergySimulator.Simulate(finalInput);
@@ -389,7 +389,7 @@ namespace NetDeamon.apps.PVControl
       List<SimulationSlot> RunSim(DateTime end)
       {
         var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW };
-        return EnergySimulator.Simulate(SimWithExtraLoads(baseInput, [.. baseInput.ExtraLoads, testLoad]));
+        return EnergySimulator.Simulate(baseInput.WithExtraLoads([.. baseInput.ExtraLoads, testLoad]));
       }
       // HasNewGrid: true if the test simulation adds ANY new force_charge slot not in the baseline.
       // Checking only the overnight window (as before) missed daytime force_charge caused by EV drain —
@@ -518,34 +518,7 @@ namespace NetDeamon.apps.PVControl
 
     private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
-    /// <summary>Clones a SimulationInput replacing only its ExtraLoads list.</summary>
-    private static SimulationInput SimWithExtraLoads(SimulationInput src, List<ExtraLoad> loads)
-      => new()
-      {
-        StartTime = src.StartTime,
-        StartSocPercent = src.StartSocPercent,
-        BatteryCapacityWh = src.BatteryCapacityWh,
-        AbsoluteMinSocPercent = src.AbsoluteMinSocPercent,
-        PreferredMinSocPercent = src.PreferredMinSocPercent,
-        EnforcePreferredSoc = src.EnforcePreferredSoc,
-        MaxChargePowerAmps = src.MaxChargePowerAmps,
-        InverterEfficiency = src.InverterEfficiency,
-        ImportPrices = src.ImportPrices,
-        ExportPrices = src.ExportPrices,
-        LoadPredictionWh = src.LoadPredictionWh,
-        PVPredictionWh = src.PVPredictionWh,
-        ExtraLoads = loads,
-        ForceCharge = src.ForceCharge,
-        OpportunisticDischarge = src.OpportunisticDischarge,
-        ForceChargeMaxPrice = src.ForceChargeMaxPrice,
-        ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
-        OverrideMode = src.OverrideMode,
-        CurrentMode = src.CurrentMode,
-        CurrentResetCounter = src.CurrentResetCounter,
-        CurrentAverageGridPowerW = src.CurrentAverageGridPowerW,
-      };
-
-    public InverterState ProposedState
+  public InverterState ProposedState
     {
       get
       {

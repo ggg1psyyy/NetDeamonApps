@@ -197,6 +197,32 @@ public class SimulationInput
       .Select(k => k.Key).DefaultIfEmpty(fallback).Last();
   }
 
+  /// <summary>Returns a copy of this input with only the ExtraLoads list replaced.</summary>
+  public SimulationInput WithExtraLoads(List<ExtraLoad> loads) => new()
+  {
+    StartTime = StartTime,
+    StartSocPercent = StartSocPercent,
+    BatteryCapacityWh = BatteryCapacityWh,
+    AbsoluteMinSocPercent = AbsoluteMinSocPercent,
+    PreferredMinSocPercent = PreferredMinSocPercent,
+    EnforcePreferredSoc = EnforcePreferredSoc,
+    MaxChargePowerAmps = MaxChargePowerAmps,
+    InverterEfficiency = InverterEfficiency,
+    ImportPrices = ImportPrices,
+    ExportPrices = ExportPrices,
+    LoadPredictionWh = LoadPredictionWh,
+    PVPredictionWh = PVPredictionWh,
+    ExtraLoads = loads,
+    ForceCharge = ForceCharge,
+    OpportunisticDischarge = OpportunisticDischarge,
+    ForceChargeMaxPrice = ForceChargeMaxPrice,
+    ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
+    OverrideMode = OverrideMode,
+    CurrentMode = CurrentMode,
+    CurrentResetCounter = CurrentResetCounter,
+    CurrentAverageGridPowerW = CurrentAverageGridPowerW,
+  };
+
   /// <summary>
   /// Estimates how many minutes it takes to charge from <paramref name="startSoC"/> to
   /// <paramref name="endSoC"/> at the configured charge current and inverter efficiency.
