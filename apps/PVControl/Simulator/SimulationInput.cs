@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NetDeamon.apps.PVControl;
 
 namespace NetDeamon.apps.PVControl.Simulator;
@@ -147,4 +148,62 @@ public class SimulationInput
   /// Future slots have no live grid reading so this check is skipped for them.
   /// </summary>
   public required int CurrentAverageGridPowerW { get; init; }
+
+  // ── Derived helpers ─────────────────────────────────────────────────────────────────────
+
+  private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
+
+  /// <summary>Effective minimum SoC: always at least AbsoluteMin, at most Preferred.</summary>
+  public int GetPreferredMinSoC() =>
+    Math.Max(PreferredMinSocPercent, AbsoluteMinSocPercent);
+
+  /// <summary>Effective floor SoC respecting the EnforcePreferredSoc setting.</summary>
+  public int GetEffectiveMinSoC() =>
+    EnforcePreferredSoc ? PreferredMinSocPercent : AbsoluteMinSocPercent;
+
+  /// <summary>
+  /// True if the current time is between the first and last slot where PV net generation
+  /// exceeds 50 Wh (i.e. PV minus house load is meaningfully positive).
+  /// </summary>
+  public bool IsInPVPeriod(DateTime now)
+  {
+    var firstPV = GetFirstRelevantPVTime(now.Date, now);
+    var lastPV = GetLastRelevantPVTime(now.Date);
+    return now >= firstPV && now <= lastPV;
+  }
+
+  /// <summary>
+  /// First slot on the given date (on or after <paramref name="from"/>) where net PV
+  /// (PV minus load) exceeds 50 Wh — the point where solar generation meaningfully
+  /// exceeds consumption and the battery starts charging from PV.
+  /// Falls back to a far-future date if no such slot exists (treats it as "no PV today").
+  /// </summary>
+  public DateTime GetFirstRelevantPVTime(DateTime date, DateTime from)
+  {
+    var fallback = date.AddDays(2).AddMinutes(-1);
+    return PVPredictionWh
+      .Where(k => k.Key.Date == date && k.Key >= from
+                  && k.Value - LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
+      .Select(k => k.Key).DefaultIfEmpty(fallback).First();
+  }
+
+  /// <summary>Last slot on the given date where net PV exceeds 50 Wh (solar day end).</summary>
+  public DateTime GetLastRelevantPVTime(DateTime date)
+  {
+    var fallback = date.AddDays(2).AddMinutes(-1);
+    return PVPredictionWh
+      .Where(k => k.Key.Date == date
+                  && k.Value - LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
+      .Select(k => k.Key).DefaultIfEmpty(fallback).Last();
+  }
+
+  /// <summary>
+  /// Estimates how many minutes it takes to charge from <paramref name="startSoC"/> to
+  /// <paramref name="endSoC"/> at the configured charge current and inverter efficiency.
+  /// Formula: requiredEnergy = (endSoC – startSoC) × capacity × efficiency;
+  ///          duration = requiredEnergy / (amps × volts) × 60 min/h.
+  /// </summary>
+  public int CalculateChargingDuration(int startSoC, int endSoC) =>
+    (int)((float)(endSoC - startSoC) / 100 * BatteryCapacityWh * InverterEfficiency
+          / (MaxChargePowerAmps * ChargeVoltage) * 60);
 }

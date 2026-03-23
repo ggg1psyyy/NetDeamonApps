@@ -94,7 +94,7 @@ public static class EnergySimulator
           (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
            newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
       {
-        int floorSoc = GetEffectiveMinSoC(input);
+        int floorSoc = input.GetEffectiveMinSoC();
         // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
         // not just the first floor-crossing. Using EstimatedSoc (first-crossing value) leaves
         // the naive still declining past that point, so needCharge keeps firing every few slots
@@ -165,7 +165,7 @@ public static class EnergySimulator
     int currentSoc, Dictionary<DateTime, int> naiveFutureSoC,
     InverterState currentMode, SimulationInput input, DateTime now)
   {
-    int minSoC = GetEffectiveMinSoC(input);
+    int minSoC = input.GetEffectiveMinSoC();
     // Add 1 % hysteresis while already charging to prevent thrashing at the boundary
     if (currentMode.Mode == InverterModes.force_charge)
       minSoC++;
@@ -236,7 +236,7 @@ public static class EnergySimulator
     // Only checked for the current live slot; future slots lack a real grid-power reading.
     if (isFirstSlot && currentMode.Mode == InverterModes.normal
         && input.CurrentAverageGridPowerW is > 50 and < 300
-        && simulatedSoc > GetPreferredMinSoC(input))
+        && simulatedSoc > input.GetPreferredMinSoC())
     {
       if (problemCounter <= 4)
       {
@@ -291,7 +291,7 @@ public static class EnergySimulator
       var todayNaiveSoC = naiveFutureSoC.Where(s => s.Key.Date == now.Date).ToDictionary();
       double maxSocDurationCalc = ComputeMaxSocDuration(todayNaiveSoC);
 
-      bool inPVPeriod = IsInPVPeriod(input, now);
+      bool inPVPeriod = input.IsInPVPeriod(now);
       int pvPowerW = pvWhSlot * 4;
       int loadPowerW = totalLoadWhSlot * 4;
 
@@ -299,7 +299,7 @@ public static class EnergySimulator
       // at today's price (even if not a daily maximum) rather than wasting it
       if (!need.NeedToCharge && inPVPeriod && maxSocDurationCalc > maxSocDuration
           && exportPriceNow >= 1 && exportPriceNow >= exportPriceNextHour
-          && simulatedSoc > (GetEffectiveMinSoC(input)) + 3)
+          && simulatedSoc > (input.GetEffectiveMinSoC()) + 3)
         return new InverterState(InverterModes.feedin_priority, ForceChargeReasons.OpportunisticDischarge);
 
       // Case B: we are at one of the two highest daily export price peaks
@@ -312,7 +312,7 @@ public static class EnergySimulator
       {
         // Near solar time we can go lower (absolute minimum), otherwise stay at preferred
         int minAllowedSoc = input.PreferredMinSocPercent;
-        var firstPVToday = GetFirstRelevantPVTime(input, now.Date, now);
+        var firstPVToday = input.GetFirstRelevantPVTime(now.Date, now);
         if (inPVPeriod || (now < firstPVToday && (firstPVToday - now).TotalHours is > 0 and < 4))
           minAllowedSoc = input.AbsoluteMinSocPercent + 2;
 
@@ -350,7 +350,7 @@ public static class EnergySimulator
 
         // How long will charging take from the naive SoC at the cheapest start time?
         int socAtBestTime = naiveFutureSoC.GetValueOrDefault(cheapestToday.StartTime, simulatedSoc);
-        int chargeTime = CalculateChargingDurationA(socAtBestTime, 100, input.MaxChargePowerAmps, input.InverterEfficiency, input.BatteryCapacityWh);
+        int chargeTime = input.CalculateChargingDuration(socAtBestTime, 100);
         int rankBefore = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(-1));
         int rankAfter = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(1));
         DateTime chargeStart = cheapestToday.StartTime;
@@ -387,7 +387,7 @@ public static class EnergySimulator
       //
       // Correct bound: search only up to the next PV recovery peak. After that point, solar
       // will charge the battery; no grid charging is needed before then.
-      int floorSoc = GetEffectiveMinSoC(input);
+      int floorSoc = input.GetEffectiveMinSoC();
       // Search only for prices before PV first exceeds house load.
       // That is the moment solar takes over from the grid — any grid charging after that
       // point is unnecessary. Using the SoC peak was too late (battery already full by then),
@@ -422,7 +422,7 @@ public static class EnergySimulator
         bool canWaitForNextHour = importPriceNow > importPriceNextHour;
         if (canWaitForNextHour)
         {
-          int effectiveFloor = GetEffectiveMinSoC(input);
+          int effectiveFloor = input.GetEffectiveMinSoC();
           var mode = simulatedSoc <= effectiveFloor ? InverterModes.grid_only : InverterModes.normal;
           return new InverterState(mode, ForceChargeReasons.NextHourCheaper);
         }
@@ -615,14 +615,6 @@ public static class EnergySimulator
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────
 
-  /// <summary>Effective minimum SoC: always at least AbsoluteMin, at most Preferred.</summary>
-  private static int GetPreferredMinSoC(SimulationInput input) =>
-    Math.Max(input.PreferredMinSocPercent, input.AbsoluteMinSocPercent);
-
-  /// <summary>Effective floor SoC respecting the EnforcePreferredSoc setting.</summary>
-  private static int GetEffectiveMinSoC(SimulationInput input) =>
-    input.EnforcePreferredSoc ? input.PreferredMinSocPercent : input.AbsoluteMinSocPercent;
-
   /// <summary>
   /// How many hours the battery stays at or above 99 % SoC in the given naive forecast.
   /// A long plateau means we can afford to discharge opportunistically without risking
@@ -639,52 +631,4 @@ public static class EnergySimulator
     return (endTime - maxEntry.Key).TotalHours;
   }
 
-  /// <summary>
-  /// True if the current time is between the first and last slot where PV net generation
-  /// exceeds 50 Wh (i.e. PV minus house load is meaningfully positive).
-  /// </summary>
-  private static bool IsInPVPeriod(SimulationInput input, DateTime now)
-  {
-    var firstPV = GetFirstRelevantPVTime(input, now.Date, now);
-    var lastPV = GetLastRelevantPVTime(input, now.Date);
-    return now >= firstPV && now <= lastPV;
-  }
-
-  /// <summary>
-  /// First slot on the given date (on or after <paramref name="from"/>) where net PV
-  /// (PV minus load) exceeds 50 Wh — the point where solar generation meaningfully
-  /// exceeds consumption and the battery starts charging from PV.
-  /// Falls back to a far-future date if no such slot exists (treats it as "no PV today").
-  /// </summary>
-  private static DateTime GetFirstRelevantPVTime(SimulationInput input, DateTime date, DateTime from)
-  {
-    var fallback = date.AddDays(2).AddMinutes(-1);
-    return input.PVPredictionWh
-      .Where(k => k.Key.Date == date && k.Key >= from
-                  && k.Value - input.LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
-      .Select(k => k.Key).DefaultIfEmpty(fallback).First();
-  }
-
-  /// <summary>Last slot on the given date where net PV exceeds 50 Wh (solar day end).</summary>
-  private static DateTime GetLastRelevantPVTime(SimulationInput input, DateTime date)
-  {
-    var fallback = date.AddDays(2).AddMinutes(-1);
-    return input.PVPredictionWh
-      .Where(k => k.Key.Date == date
-                  && k.Value - input.LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
-      .Select(k => k.Key).DefaultIfEmpty(fallback).Last();
-  }
-
-  /// <summary>
-  /// Estimates how many minutes it takes to charge from <paramref name="startSoC"/> to
-  /// <paramref name="endSoC"/> at the given charge current and inverter efficiency.
-  /// Formula: requiredEnergy = (endSoC – startSoC) × capacity × efficiency;
-  ///          duration = requiredEnergy / (amps × volts) × 60 min/h.
-  /// </summary>
-  private static int CalculateChargingDurationA(
-    int startSoC, int endSoC, int amps, float efficiency, int battCapacity, int volts = ChargeVoltage)
-  {
-    float reqEnergy = (float)(endSoC - startSoC) / 100 * battCapacity * efficiency;
-    return (int)(reqEnergy / (amps * volts) * 60);
-  }
 }
