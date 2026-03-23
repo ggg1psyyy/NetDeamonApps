@@ -1,4 +1,5 @@
-﻿using NetDaemon.Extensions.MqttEntityManager;
+﻿using NetDaemon.Client;
+using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.HassModel.Entities;
 using NetDeamon.apps;
 using System.Globalization;
@@ -66,13 +67,13 @@ namespace NetDeamon.apps.PVControl
     private bool _logEnergy = false;
     private DateTime _nextQuarterHour = DateTime.Now.GetNextQuarterHour();
     private Costs _lastCostsEntry = new();
-    public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger)
+    public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger, IHomeAssistantApiManager apiManager)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
       // Converter often needs some time after restart of HA to give values
       while (!config.Value.BatterySoCEntity.TryGetStateValue<int>(out _))
         System.Threading.Thread.Sleep(1000);
-      PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler);
+      PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler, apiManager);
       if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
         PVCC_Config.DBLocation = "apps/DataLogger/energy_history.db";
       
@@ -99,6 +100,7 @@ namespace NetDeamon.apps.PVControl
       }
       #endif
       _house = new HouseEnergy();
+      await _house.SeedSoCHistoryAsync(cancellationToken);
       if (await RegisterControlSensors(false))
       {
         #region Load settings from HA if available
@@ -115,7 +117,7 @@ namespace NetDeamon.apps.PVControl
         if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
           _house.ForceChargeTargetSoC = targetSoC;
         if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
-          _house.ForceCharge = forceCharge;
+          _house.EnableCheapForceCharge = forceCharge;
         if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
           _house.OverrideMode = mode;
         if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
@@ -240,8 +242,8 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
       {
-        _house.ForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceCharge ? "ON" : "OFF");
+        _house.EnableCheapForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.EnableCheapForceCharge ? "ON" : "OFF");
       }
       if (entity.EntityId == _enableOpportunisticExport.EntityId && entity.State is not null)
       {

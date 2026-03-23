@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using NetDaemon.AppModel;
 using NetDaemon.HassModel;
+using NetDaemon.Client;
 
 namespace NetDeamon.apps.PVControl
 {
@@ -49,22 +50,25 @@ namespace NetDeamon.apps.PVControl
     public static ILogger<PVControl> PVCC_Logger { get; private set; } = null!;
     public static PVConfig PVCC_Config { get; private set; } = null!;
     public static DisposableScheduler PVCC_Scheduler { get; private set; } = null!;
+    public static IHomeAssistantApiManager PVCC_ApiManager { get; private set; } = null!;
 
-    public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, IAppConfig<PVConfig> pVConfig, DisposableScheduler scheduler)
+    public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, IAppConfig<PVConfig> pVConfig, DisposableScheduler scheduler, IHomeAssistantApiManager apiManager)
     {
       PVCC_HaContext = haContext;
-      PVCC_EntityManager = mqttEntityManager; 
+      PVCC_EntityManager = mqttEntityManager;
       PVCC_Logger = logger;
       PVCC_Config = pVConfig.Value;
       PVCC_Scheduler = scheduler;
+      PVCC_ApiManager = apiManager;
     }
-    ~PVControlCommon() 
+    ~PVControlCommon()
     {
       PVCC_HaContext = null!;
       PVCC_EntityManager = null!;
       PVCC_Logger = null!;
       PVCC_Config = null!;
       PVCC_Scheduler = null!;
+      PVCC_ApiManager = null!;
     }
     public static async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false)
     {
