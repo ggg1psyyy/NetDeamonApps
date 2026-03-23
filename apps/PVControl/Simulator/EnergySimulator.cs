@@ -56,7 +56,6 @@ public static class EnergySimulator
     // currentSoc (%) is derived from this for mode decisions and slot output only.
     int currentEnergyWh = input.StartSocPercent * input.BatteryCapacityWh / 100;
     var currentMode = input.CurrentMode;
-    int resetCounter = input.CurrentResetCounter; // counts down to 0; each tick emits reset mode
 
     for (var slotTime = startSlot; slotTime < endSlot; slotTime = slotTime.AddMinutes(SlotMinutes))
     {
@@ -78,7 +77,7 @@ public static class EnergySimulator
 
       // --- Step 3: pick inverter mode ---
       var newMode = ComputeMode(currentMode, needToCharge, input, slotTime, currentSoc,
-        naiveFutureSoC, pvWh, totalLoadWh, ref resetCounter);
+        naiveFutureSoC, pvWh, totalLoadWh);
       currentMode = newMode;
 
       // --- Step 4: compute energy flows for this slot given the chosen mode ---
@@ -199,25 +198,14 @@ public static class EnergySimulator
   // Pure-function equivalent of HouseEnergy.CalculateNewInverterMode.
   // All inputs are passed explicitly so this can run without any live HA state.
   // The logic is evaluated top-to-bottom; the first matching condition wins:
-  //   reset → override → negative import → negative export →
+  //   override → negative import → negative export →
   //   opportunistic discharge → user force-charge slot → need-to-charge → normal
 
   private static InverterState ComputeMode(
     InverterState currentMode, NeedToChargeResult need, SimulationInput input,
     DateTime now, int simulatedSoc, Dictionary<DateTime, int> naiveFutureSoC,
-    int pvWhSlot, int totalLoadWhSlot,
-    ref int resetCounter)
+    int pvWhSlot, int totalLoadWhSlot)
   {
-    // ── Reset signal ──────────────────────────────────────────────────────────────────────
-    // After the inverter returns from a manual/remote mode, HouseEnergy sets resetCounter=2.
-    // The simulator emits "reset" mode for that many ticks before resuming normal logic.
-    // This gives the inverter hardware time to re-initialise battery control.
-    if (currentMode.Mode == InverterModes.reset && resetCounter > 0)
-    {
-      resetCounter--;
-      return new InverterState(InverterModes.reset, ForceChargeReasons.None);
-    }
-
     // ── User override ─────────────────────────────────────────────────────────────────────
     // The HA UI select.pv_control_mode_override lets the user lock a specific mode.
     // All automated logic is bypassed when this is active.
@@ -313,7 +301,7 @@ public static class EnergySimulator
     // cheapest hour of the day. We look 1 h before to 2 h after the cheapest slot.
     // If charging takes more than 60 min and the hour BEFORE cheapest is still cheap,
     // we start early so we finish exactly at the cheapest moment.
-    if (input.ForceCharge)
+    if (input.EnableCheapForceCharge)
     {
       var cheapestToday = input.ImportPrices.GetCheapestWindowToday(now);
       if (now > cheapestToday.StartTime.AddHours(-1) && now < cheapestToday.StartTime.AddHours(2))

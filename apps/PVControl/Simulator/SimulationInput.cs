@@ -97,7 +97,7 @@ public class SimulationInput
   /// instructing the system to fill the battery to <see cref="ForceChargeTargetSocPercent"/>
   /// during the cheapest import window of the day regardless of the SoC forecast.
   /// </summary>
-  public required bool ForceCharge { get; init; }
+  public required bool EnableCheapForceCharge { get; init; }
 
   /// <summary>
   /// When true the system may force-discharge the battery to the grid during the two
@@ -133,13 +133,6 @@ public class SimulationInput
   /// (e.g. knowing we were already in force_charge prevents unnecessary mode flips).
   /// </summary>
   public required InverterState CurrentMode { get; init; }
-
-  /// <summary>
-  /// How many more times the simulator should emit <see cref="InverterModes.reset"/> before
-  /// switching to normal operation. Set to 2 by HouseEnergy when the inverter returns from
-  /// remote/manual mode — the reset pulse is needed to unlock normal battery usage again.
-  /// </summary>
-  public required int CurrentResetCounter { get; init; }
 
   // ── Derived helpers ─────────────────────────────────────────────────────────────────────
 
@@ -205,13 +198,12 @@ public class SimulationInput
     LoadPredictionWh = LoadPredictionWh,
     PVPredictionWh = PVPredictionWh,
     ExtraLoads = loads,
-    ForceCharge = ForceCharge,
+    EnableCheapForceCharge = EnableCheapForceCharge,
     OpportunisticDischarge = OpportunisticDischarge,
     ForceChargeMaxPrice = ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
     OverrideMode = OverrideMode,
     CurrentMode = CurrentMode,
-    CurrentResetCounter = CurrentResetCounter,
   };
 
   /// <summary>

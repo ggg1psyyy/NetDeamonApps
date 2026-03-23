@@ -119,7 +119,7 @@ namespace NetDeamon.apps.PVControl
     public DailySnapshots Snapshots { get; }
 
     /// <summary>UserSetting: ForceCharge to 100%</summary>
-    public bool ForceCharge { get; set; }
+    public bool EnableCheapForceCharge { get; set; }
     /// <summary>
     /// UserSetting: Discharge if the export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
     /// </summary>
@@ -200,11 +200,11 @@ namespace NetDeamon.apps.PVControl
         else if (diff > 0)
         {
           // Decompose energy source: PV direct (free) → grid direct → battery (avg cost).
-          int evPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.Config.AvgPowerW;
+          int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.Config.AvgPowerW;
           float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad);
-          float pvFraction      = evPowerW > 0 ? Math.Min(1f, pvSurplusW / evPowerW) : 0f;
+          float pvFraction      = schedPowerW > 0 ? Math.Min(1f, pvSurplusW / schedPowerW) : 0f;
           float remainFraction  = 1f - pvFraction;
-          float gridFraction    = evPowerW > 0 ? Math.Min(remainFraction, Math.Max(0f, CurrentAverageGridPower) / evPowerW) : 0f;
+          float gridFraction    = schedPowerW > 0 ? Math.Min(remainFraction, Math.Max(0f, CurrentAverageGridPower) / schedPowerW) : 0f;
           float batteryFraction = remainFraction - gridFraction;
           float effectivePrice  = gridFraction * Prices.PriceListImport.GetPrice(DateTime.Now)
                                 + batteryFraction * Costs.BatteryAvgCostPerKwh;
@@ -278,13 +278,12 @@ namespace NetDeamon.apps.PVControl
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
         PVPredictionWh = Prediction_PV.TodayAndTomorrow,
         ExtraLoads = extraLoads ?? [],
-        ForceCharge = ForceCharge,
+        EnableCheapForceCharge = EnableCheapForceCharge,
         OpportunisticDischarge = OpportunisticDischarge,
         ForceChargeMaxPrice = Prices.ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
         OverrideMode = OverrideMode,
         CurrentMode = _currentMode,
-        CurrentResetCounter = _resetCounter,
       };
 
       // Run the baseline simulation once to identify naturally-scheduled force_charge slots.
@@ -530,9 +529,16 @@ namespace NetDeamon.apps.PVControl
                           ?? _simulationResult.First();
         _currentMode = currentSlot.State;
 
-        // Propagate reset counter: if simulation chose reset for this slot the counter decrements
-        if (_currentMode.Mode == InverterModes.reset && _resetCounter > 0)
+        // ── Reset signal ──────────────────────────────────────────────────────────────────
+        // After the inverter returns from manual/remote mode, _resetCounter is set to 2.
+        // Override the simulation result with reset for those ticks so the inverter hardware
+        // has time to re-initialise battery control before we resume normal commands.
+        if (_resetCounter > 0)
+        {
           _resetCounter--;
+          _currentMode = new InverterState(InverterModes.reset, ForceChargeReasons.None);
+          return _currentMode;
+        }
 
         // ── Inverter bug fix ──────────────────────────────────────────────────────────────
         // Some SMA inverters fail to switch to battery in "normal" mode at low house loads
@@ -551,7 +557,7 @@ namespace NetDeamon.apps.PVControl
           else
           {
             _bugFixCounter = 0;
-            _currentMode = new InverterState(InverterModes.force_discharge, ForceChargeReasons.None);
+            _currentMode = new InverterState(InverterModes.force_discharge, ForceChargeReasons.BugFixMode);
           }
         }
         else
