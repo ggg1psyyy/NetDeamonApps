@@ -86,6 +86,10 @@ NetDeamon.apps.PVControl.PVConfig:
       # Subtract historical car-charging from the base load prediction (avoids double-counting).
       # Known DB column names: carcharge, warmwaterenergy, heatpumpenergy. Omit if no DB history.
       HistoryDbColumn: "carcharge"
+      # Minimum window length (minutes) required to start a session.
+      # Prevents start/stop oscillation when the window is marginal (e.g. real draw > AvgPowerW).
+      # Tune alongside AvgPowerW — if real draw matches preset, 0 is fine.
+      MinWindowMinutes: 30
       # Mode and TargetLevel omitted — HA entities auto-created
 
   # REMOVED: HeatpumpManager (will be re-implemented as a SchedulableLoad later)

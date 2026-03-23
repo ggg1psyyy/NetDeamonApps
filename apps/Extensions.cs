@@ -50,6 +50,7 @@ namespace NetDeamon.apps
     ExportPriceNegative,
     OpportunisticDischarge,
     NextHourCheaper,
+    BugFixMode,
     UserMode,
   }
 

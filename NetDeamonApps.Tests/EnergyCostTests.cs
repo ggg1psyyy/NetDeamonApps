@@ -184,14 +184,12 @@ public class EnergyCostTests : TestBase
                                     .ToDictionary(i => start.AddMinutes(i * 15), _ => 300),
       PVPredictionWh            = Enumerable.Range(0, 48 * 4)
                                     .ToDictionary(i => start.AddMinutes(i * 15), _ => 0),
-      ForceCharge               = false,
+      EnableCheapForceCharge               = false,
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,   // €/kWh — all live slots are below this threshold
       ForceChargeTargetSocPercent = 100,
       OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
-      CurrentResetCounter       = 0,
-      CurrentAverageGridPowerW  = 0,
     };
 
     var slots = EnergySimulator.Simulate(input);
@@ -242,14 +240,12 @@ public class EnergyCostTests : TestBase
                                     .ToDictionary(i => start.AddMinutes(i * 15), _ => 300),
       PVPredictionWh            = Enumerable.Range(0, 48 * 4)
                                     .ToDictionary(i => start.AddMinutes(i * 15), _ => 0),
-      ForceCharge               = false,
+      EnableCheapForceCharge               = false,
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,
       ForceChargeTargetSocPercent = 100,
       OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
-      CurrentResetCounter       = 0,
-      CurrentAverageGridPowerW  = 0,
     };
 
     var slots = EnergySimulator.Simulate(input);

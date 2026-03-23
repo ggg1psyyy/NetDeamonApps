@@ -125,14 +125,13 @@ public class FindWindowConditionTests : TestBase
       LoadPredictionWh            = FlatLoad(date, LoadWh),
       PVPredictionWh              = DaytimePV(date, PvWh),
       ExtraLoads                  = [],
-      ForceCharge                 = false,
+      EnableCheapForceCharge                 = false,
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = 0.25f,
       ForceChargeTargetSocPercent = 95,
       OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
-      CurrentResetCounter         = 0,
-      CurrentAverageGridPowerW    = 0,
+
     };
   }
 
@@ -151,14 +150,12 @@ public class FindWindowConditionTests : TestBase
     LoadPredictionWh            = src.LoadPredictionWh,
     PVPredictionWh              = src.PVPredictionWh,
     ExtraLoads                  = [new ExtraLoad { Name = "EV", Priority = 10, StartTime = start, EndTime = end, PowerW = EvW }],
-    ForceCharge                 = src.ForceCharge,
+    EnableCheapForceCharge                 = src.EnableCheapForceCharge,
     OpportunisticDischarge      = src.OpportunisticDischarge,
     ForceChargeMaxPrice         = src.ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
     OverrideMode                = src.OverrideMode,
     CurrentMode                 = src.CurrentMode,
-    CurrentResetCounter         = src.CurrentResetCounter,
-    CurrentAverageGridPowerW    = src.CurrentAverageGridPowerW,
   };
 
   // ── Helpers ──────────────────────────────────────────────────────────────────────────────
@@ -279,14 +276,13 @@ public class FindWindowConditionTests : TestBase
       LoadPredictionWh            = src.LoadPredictionWh,
       PVPredictionWh              = src.PVPredictionWh,
       ExtraLoads                  = src.ExtraLoads,
-      ForceCharge                 = src.ForceCharge,
+      EnableCheapForceCharge                 = src.EnableCheapForceCharge,
       OpportunisticDischarge      = src.OpportunisticDischarge,
       ForceChargeMaxPrice         = src.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
       OverrideMode                = src.OverrideMode,
       CurrentMode                 = src.CurrentMode,
-      CurrentResetCounter         = src.CurrentResetCounter,
-      CurrentAverageGridPowerW    = src.CurrentAverageGridPowerW,
+
     };
     var baseSim = EnergySimulator.Simulate(baseIn);
     var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
@@ -410,14 +406,13 @@ public class FindWindowConditionTests : TestBase
       LoadPredictionWh            = FlatLoad(baseDate, 100),  // 100 Wh/slot overnight
       PVPredictionWh              = DaytimePV(baseDate, PvWh),
       ExtraLoads                  = [],
-      ForceCharge                 = false,
+      EnableCheapForceCharge                 = false,
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = MaxPrice,
       ForceChargeTargetSocPercent = 95,
       OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
-      CurrentResetCounter         = 0,
-      CurrentAverageGridPowerW    = 0,
+
     };
 
     var baseSim = EnergySimulator.Simulate(baseIn);
@@ -499,14 +494,13 @@ public class FindWindowConditionTests : TestBase
       LoadPredictionWh            = FlatLoad(date, LoadWh),
       PVPredictionWh              = DaytimePV(date, PvWh),
       ExtraLoads                  = [],
-      ForceCharge                 = false,
+      EnableCheapForceCharge                 = false,
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = 0.25f,
       ForceChargeTargetSocPercent = 95,
       OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
-      CurrentResetCounter         = 0,
-      CurrentAverageGridPowerW    = 0,
+
     };
 
     var evIn = new SimulationInput
@@ -524,14 +518,12 @@ public class FindWindowConditionTests : TestBase
       LoadPredictionWh            = baseIn.LoadPredictionWh,
       PVPredictionWh              = baseIn.PVPredictionWh,
       ExtraLoads                  = [new ExtraLoad { Name = "EV", Priority = 10, StartTime = start, EndTime = FirstPVTomorrow, PowerW = HighEvW }],
-      ForceCharge                 = baseIn.ForceCharge,
+      EnableCheapForceCharge                 = baseIn.EnableCheapForceCharge,
       OpportunisticDischarge      = baseIn.OpportunisticDischarge,
       ForceChargeMaxPrice         = baseIn.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = baseIn.ForceChargeTargetSocPercent,
       OverrideMode                = baseIn.OverrideMode,
       CurrentMode                 = baseIn.CurrentMode,
-      CurrentResetCounter         = baseIn.CurrentResetCounter,
-      CurrentAverageGridPowerW    = baseIn.CurrentAverageGridPowerW,
     };
 
     var baseSim = EnergySimulator.Simulate(baseIn);

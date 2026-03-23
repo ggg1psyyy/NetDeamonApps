@@ -71,14 +71,12 @@ public class SimulatorTests : TestBase
       ExportPrices              = exportPrices,
       LoadPredictionWh          = load,
       PVPredictionWh            = pv,
-      ForceCharge               = forceCharge,
+      EnableCheapForceCharge               = forceCharge,
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,
       ForceChargeTargetSocPercent = 100,
       OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
-      CurrentResetCounter       = 0,
-      CurrentAverageGridPowerW  = 0,
     };
   }
 
@@ -278,14 +276,12 @@ public class SimulatorTests : TestBase
       LoadPredictionWh            = baseInput.LoadPredictionWh,
       PVPredictionWh              = baseInput.PVPredictionWh,
       ExtraLoads                  = [evLoad],
-      ForceCharge                 = baseInput.ForceCharge,
+      EnableCheapForceCharge                 = baseInput.EnableCheapForceCharge,
       OpportunisticDischarge      = baseInput.OpportunisticDischarge,
       ForceChargeMaxPrice         = baseInput.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = baseInput.ForceChargeTargetSocPercent,
       OverrideMode                = baseInput.OverrideMode,
       CurrentMode                 = baseInput.CurrentMode,
-      CurrentResetCounter         = baseInput.CurrentResetCounter,
-      CurrentAverageGridPowerW    = baseInput.CurrentAverageGridPowerW,
     };
     var evSlots = EnergySimulator.Simulate(evInput);
 

@@ -440,9 +440,16 @@ namespace NetDeamon.apps.PVControl
 
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
       // Predicate must be monotone: shorter session → easier to satisfy.
-      // Returns null if no 15-min session satisfies it.
+      // Returns null if no 15-min session satisfies it, or if the found window is shorter
+      // than MinWindowMinutes (prevents oscillation from marginal windows).
       DateTime? FindMax(DateTime maxEnd, Func<List<SimulationSlot>, bool> predicate)
-        => FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
+      {
+        var end = FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
+        if (end is null) return null;
+        if (load.Config.MinWindowMinutes > 0 && (end.Value - currentSlot).TotalMinutes < load.Config.MinWindowMinutes)
+          return null;
+        return end;
+      }
 
       // Today's and tomorrow's window ends (capped to full session duration if shorter)
       var todayMax    = Min(currentSlot.AddMinutes(durationMinutes), PVWindows.LastRelevantPVEnergyToday);

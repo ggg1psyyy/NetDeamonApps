@@ -79,6 +79,15 @@ namespace NetDeamon.apps.PVControl.Managers
     /// </summary>
     public int MinActivePowerW { get; set; } = 100;
 
+    /// <summary>
+    /// Minimum viable window length in minutes required before a session is started.
+    /// If the simulation finds a window shorter than this, ChargeNow is kept false.
+    /// Prevents brief start/stop oscillation when the available window is marginal
+    /// (e.g. real power draw slightly exceeds AvgPowerW, eroding the simulated window).
+    /// Set to 0 to disable (default).
+    /// </summary>
+    public int MinWindowMinutes { get; set; } = 0;
+
     // ── HA entity display configuration for auto-created entities ─────────────────────────
     // ── HA entity display configuration ───────────────────────────────────────────────────
     /// <summary>MDI icon used for all auto-created HA entities of this load (e.g. "mdi:ev-station").</summary>
