@@ -373,9 +373,14 @@ namespace NetDeamon.apps.PVControl
     {
       var now = DateTime.Now;
       var currentSlot = now.RoundToNearestQuarterHour();
+      bool wasActive = load.ChargeNow;
 
       void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
       {
+        if (chargeNow && !wasActive)
+          load.SessionStartTime = now;          // session just started
+        else if (!chargeNow)
+          load.SessionStartTime = null;         // session ended
         load.ExtraLoads = extraLoads;
         load.ChargeNow = chargeNow;
         load.ChargeReason = reason;
@@ -463,6 +468,38 @@ namespace NetDeamon.apps.PVControl
       // overnight after it reaches 100 % via PV — matching the mode definition:
       //   "after reaching 100% AND after PV stops, Optimal may run until house SoC hits minSoC."
       // Priority/PriorityPlus skip this step and use Step 2 (no 100% requirement).
+      //
+      // Optimal is solar-surplus mode: only active during the PV window (InPVPeriod).
+      // Outside PV hours the simulation sits at the edge of overnight-SoC thresholds and
+      // oscillates every 15 s as tiny SoC changes flip the binary-search result.
+      // Use Priority/PriorityPlus for intentional off-peak / battery-drain charging.
+      if (load.Mode == LoadSchedulingMode.Optimal && PVWindows.CurrentPVPeriod != PVPeriods.InPVPeriod)
+      {
+        SetResult([], false, $"Optimal: outside PV window ({PVWindows.CurrentPVPeriod})", null);
+        return;
+      }
+
+      // ── Minimum on-time latch ────────────────────────────────────────────────────────────────
+      // The simulation re-runs every 15 s and at borderline SoC levels the predicate can flip
+      // on/off every cycle. Once a session starts, keep it active for MinWindowMinutes before
+      // allowing the simulation to stop it — same threshold already used to prevent marginal starts.
+      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV) always
+      // take immediate effect regardless of the latch.
+      if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0)
+      {
+        var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
+        if (elapsedMin < load.Config.MinWindowMinutes)
+        {
+          var latchedLoads = load.ExtraLoads.Count > 0
+            ? load.ExtraLoads.Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW }).ToList()
+            : load.ExtraLoads;
+          SetResult(latchedLoads, true,
+            $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
+            load.PredictedEnd);
+          return;
+        }
+      }
+
       if (load.Mode == LoadSchedulingMode.Optimal)
       {
         var end = FindMax(tomorrowMax, sim =>

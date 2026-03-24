@@ -120,6 +120,13 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>Predicted end of the current active session. Null when not running.</summary>
     public DateTime? PredictedEnd { get; internal set; }
 
+    /// <summary>
+    /// Wall-clock time when the current session started (ChargeNow transitioned false→true).
+    /// Used by FindLoadWindow to enforce the minimum on-time latch (MinWindowMinutes).
+    /// Null when not active.
+    /// </summary>
+    public DateTime? SessionStartTime { get; internal set; }
+
     /// <summary>ExtraLoad windows found by the last FindLoadWindow call.</summary>
     public List<ExtraLoad> ExtraLoads { get; internal set; } = [];
 
