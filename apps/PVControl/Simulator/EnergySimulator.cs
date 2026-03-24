@@ -19,8 +19,8 @@ namespace NetDeamon.apps.PVControl.Simulator;
 /// HouseEnergy.RunSimulation() using the net-energy prediction in reverse.
 ///
 /// This simulator steps through every 15-minute slot from now to end of tomorrow. At each slot it:
-///   1. Computes a NAIVE future SoC (PV – load, no charging) as a look-ahead.
-///   2. Asks "would the real algorithm charge now?" using that naive look-ahead.
+///   1. Computes a BASE future SoC (PV – load, no charging) as a look-ahead.
+///   2. Asks "would the real algorithm charge now?" using that base look-ahead.
 ///   3. Decides the inverter mode (same logic as the old CalculateNewInverterMode).
 ///   4. Computes the resulting energy flows (battery delta, grid import/export).
 ///   5. Steps the simulated SoC forward.
@@ -65,19 +65,19 @@ public static class EnergySimulator
       int extraLoadWh = input.ExtraLoads.Sum(e => e.GetWhForSlot(slotTime));
       int totalLoadWh = loadWh + extraLoadWh;
 
-      // --- Step 1: naive look-ahead SoC (no charging) for this slot onward ---
+      // --- Step 1: base look-ahead SoC (no charging) for this slot onward ---
       // Used as input to NeedToCharge and to some mode conditions (max SoC duration, sell maxima).
       // We recompute it each slot so it reflects the already-updated simulated SoC, not the
       // original starting SoC — otherwise the look-ahead would drift further from reality as
       // we step forward.
-      var naiveFutureSoC = ComputeNaiveFutureSoC(currentSoc, slotTime, endSlot, input);
+      var baseFutureSoC = ComputeBaseFutureSoC(currentSoc, slotTime, endSlot, input);
 
-      // --- Step 2: decide if charging is needed based on naive look-ahead ---
-      var needToCharge = ComputeNeedToCharge(currentSoc, naiveFutureSoC, currentMode, input, slotTime);
+      // --- Step 2: decide if charging is needed based on base look-ahead ---
+      var needToCharge = ComputeNeedToCharge(currentSoc, baseFutureSoC, currentMode, input, slotTime);
 
       // --- Step 3: pick inverter mode ---
       var newMode = ComputeMode(currentMode, needToCharge, input, slotTime, currentSoc,
-        naiveFutureSoC, pvWh, totalLoadWh);
+        baseFutureSoC, pvWh, totalLoadWh);
       currentMode = newMode;
 
       // --- Step 4: compute energy flows for this slot given the chosen mode ---
@@ -92,22 +92,22 @@ public static class EnergySimulator
         int floorSoc = input.GetEffectiveMinSoC();
         // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
         // not just the first floor-crossing. Using EstimatedSoc (first-crossing value) leaves
-        // the naive still declining past that point, so needCharge keeps firing every few slots
-        // at progressively more expensive windows until dawn.
+        // the base trajectory still declining past that point, so needCharge keeps firing every
+        // few slots at progressively more expensive windows until dawn.
         //
-        // Strategy: find the lowest point of the naive between now and the next PV peak.
-        // chargeTarget = floorSoc + (currentSoc - naiveTrough) + buffer
-        //             = currentSoc + (floorSoc - naiveTrough) + buffer
-        // After charging, the naive trough shifts up by the same amount, landing above the floor.
-        var pvPeak = naiveFutureSoC.FirstMaxOrDefault();
+        // Strategy: find the lowest point of the base trajectory between now and the next PV peak.
+        // chargeTarget = floorSoc + (currentSoc - baseTrough) + buffer
+        //             = currentSoc + (floorSoc - baseTrough) + buffer
+        // After charging, the base trough shifts up by the same amount, landing above the floor.
+        var pvPeak = baseFutureSoC.FirstMaxOrDefault();
         // Only use the trough window if PV actually recovers above the floor (avoids edge case
-        // where naive is always declining — no sun — where pvPeak.Key equals the first slot).
+        // where base trajectory is always declining — no sun — where pvPeak.Key equals the first slot).
         var troughWindowEnd = (pvPeak.Key != default && pvPeak.Value > floorSoc + 10)
           ? pvPeak.Key
           : slotTime.AddHours(24);
-        var troughEntry = naiveFutureSoC.FirstMinOrDefault(end: troughWindowEnd);
-        int naiveTrough = troughEntry.Key != default ? troughEntry.Value : needToCharge.EstimatedSoc;
-        int deficit = Math.Max(0, floorSoc - naiveTrough);
+        var troughEntry = baseFutureSoC.FirstMinOrDefault(end: troughWindowEnd);
+        int baseTrough = troughEntry.Key != default ? troughEntry.Value : needToCharge.EstimatedSoc;
+        int deficit = Math.Max(0, floorSoc - baseTrough);
         chargeTargetSocPercent = Math.Min(100, currentSoc + deficit + 2);
       }
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent);
@@ -123,13 +123,13 @@ public static class EnergySimulator
     return new SimulationResult(slots, input);
   }
 
-  // ── Naive future SoC ────────────────────────────────────────────────────────────────────
+  // ── Base future SoC ─────────────────────────────────────────────────────────────────────
   // Integrates PV – totalLoad (including extra loads) from fromSlot onward without applying
   // any inverter decisions. This gives the "worst case" trajectory used to judge whether
-  // charging must be scheduled: if the naive SoC drops below the minimum before PV can
+  // charging must be scheduled: if the base SoC drops below the minimum before PV can
   // recover it, we need to force-charge from the grid.
 
-  private static Dictionary<DateTime, int> ComputeNaiveFutureSoC(
+  private static Dictionary<DateTime, int> ComputeBaseFutureSoC(
     int currentSocPercent, DateTime startSlot, DateTime endSlot, SimulationInput input)
   {
     var result = new Dictionary<DateTime, int>();
@@ -140,7 +140,7 @@ public static class EnergySimulator
       int pv = input.PVPredictionWh.GetValueOrDefault(t, 0);
       int load = input.LoadPredictionWh.GetValueOrDefault(t, 0);
       int extra = input.ExtraLoads.Sum(e => e.GetWhForSlot(t));
-      // Store SoC at the START of the slot (before applying energy) so the naive look-ahead
+      // Store SoC at the START of the slot (before applying energy) so the base look-ahead
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
       result[t] = energy * 100 / input.BatteryCapacityWh;
       energy = Math.Clamp(energy + pv - load - extra, 0, input.BatteryCapacityWh);
@@ -151,13 +151,13 @@ public static class EnergySimulator
 
   // ── NeedToCharge ────────────────────────────────────────────────────────────────────────
   // Mirrors the live NeedToChargeFromExternal logic.
-  // We find when (and at what SoC) the naive trajectory first drops below the minimum,
+  // We find when (and at what SoC) the base trajectory first drops below the minimum,
   // then check whether a PV recovery (reaching 100 %) happens before that point.
   // If no recovery is coming in time we flag NeedToCharge and report the latest safe
   // moment to start charging (10 % earlier than the critical time, rounded to 15-min slots).
 
   private static NeedToChargeResult ComputeNeedToCharge(
-    int currentSoc, Dictionary<DateTime, int> naiveFutureSoC,
+    int currentSoc, Dictionary<DateTime, int> baseFutureSoC,
     InverterState currentMode, SimulationInput input, DateTime now)
   {
     int minSoC = input.GetEffectiveMinSoC();
@@ -170,14 +170,14 @@ public static class EnergySimulator
     // treat "now" as the critical moment.
     var minReached = currentSoc < minSoC
       ? new KeyValuePair<DateTime, int>(now, currentSoc)
-      : naiveFutureSoC.FirstUnderOrDefault(minSoC, start: now);
+      : baseFutureSoC.FirstUnderOrDefault(minSoC, start: now);
 
     // If we never drop below minimum, just record the lowest point for diagnostics
     if (minReached.Key == default)
-      minReached = naiveFutureSoC.FirstMinOrDefault(start: now);
+      minReached = baseFutureSoC.FirstMinOrDefault(start: now);
 
-    // When does the naive trajectory peak (PV fully charges the battery)?
-    var maxReached = naiveFutureSoC.FirstMaxOrDefault(start: now);
+    // When does the base trajectory peak (PV fully charges the battery)?
+    var maxReached = baseFutureSoC.FirstMaxOrDefault(start: now);
 
     // We need to charge if: SoC will reach or breach the minimum AND that happens before a
     // full PV recovery, OR PV will never get us back to 100 % at all.
@@ -203,7 +203,7 @@ public static class EnergySimulator
 
   private static InverterState ComputeMode(
     InverterState currentMode, NeedToChargeResult need, SimulationInput input,
-    DateTime now, int simulatedSoc, Dictionary<DateTime, int> naiveFutureSoC,
+    DateTime now, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC,
     int pvWhSlot, int totalLoadWhSlot)
   {
     // ── User override ─────────────────────────────────────────────────────────────────────
@@ -250,10 +250,10 @@ public static class EnergySimulator
       // Hysteresis: once in feedin_priority we stay a bit longer before switching back
       double maxSocDuration = currentMode.Mode == InverterModes.feedin_priority ? 1.5 : 2.0;
 
-      // How long does the naive trajectory predict 100 % SoC today?
+      // How long does the base trajectory predict 100 % SoC today?
       // If it stays full for more than maxSocDuration hours we can afford to export
-      var todayNaiveSoC = naiveFutureSoC.Where(s => s.Key.Date == now.Date).ToDictionary();
-      double maxSocDurationCalc = ComputeMaxSocDuration(todayNaiveSoC);
+      var todayBaseSoC = baseFutureSoC.Where(s => s.Key.Date == now.Date).ToDictionary();
+      double maxSocDurationCalc = ComputeMaxSocDuration(todayBaseSoC);
 
       bool inPVPeriod = input.IsInPVPeriod(now);
       int pvPowerW = pvWhSlot * 4;
@@ -312,8 +312,8 @@ public static class EnergySimulator
             && simulatedSoc <= Math.Min(98, input.ForceChargeTargetSocPercent + 2))
           return currentMode;
 
-        // How long will charging take from the naive SoC at the cheapest start time?
-        int socAtBestTime = naiveFutureSoC.GetValueOrDefault(cheapestToday.StartTime, simulatedSoc);
+        // How long will charging take from the base SoC at the cheapest start time?
+        int socAtBestTime = baseFutureSoC.GetValueOrDefault(cheapestToday.StartTime, simulatedSoc);
         int chargeTime = input.CalculateChargingDuration(socAtBestTime, 100);
         int rankBefore = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(-1));
         int rankAfter = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(1));
@@ -335,7 +335,7 @@ public static class EnergySimulator
     }
 
     // ── NeedToCharge → force charge at best available price window ────────────────────────
-    // If the naive SoC forecast predicts we will go below minimum and PV won't rescue us,
+    // If the base SoC forecast predicts we will go below minimum and PV won't rescue us,
     // we must buy electricity. We pick the cheapest available hour before the critical time.
     // Exception: if the NEXT hour is even cheaper, hold off (importing now would just cost more).
     if (need.NeedToCharge)
@@ -343,7 +343,7 @@ public static class EnergySimulator
       // Use the cheapest window between now and the next PV peak.
       //
       // Two problems with the original deadline-constrained GetBestChargeWindow:
-      //   1. LatestChargeTime collapses to "now" when the naive SoC first touches the floor
+      //   1. LatestChargeTime collapses to "now" when the base SoC first touches the floor
       //      → bestChargeWindow = current (expensive) hour → premature force_charge.
       //   2. A fully unconstrained search (whole 48 h) finds the global price minimum, which
       //      could be tomorrow afternoon when PV is already generating — the simulation then
@@ -357,7 +357,7 @@ public static class EnergySimulator
       // point is unnecessary. Using the SoC peak was too late (battery already full by then),
       // causing the search to include cheap afternoon prices that arrive after PV has already
       // charged the battery.
-      var pvTakeover = naiveFutureSoC.Keys
+      var pvTakeover = baseFutureSoC.Keys
         .Where(t => t > now
                     && input.PVPredictionWh.GetValueOrDefault(t, 0) > input.LoadPredictionWh.GetValueOrDefault(t, 0))
         .DefaultIfEmpty(now.AddHours(24))
@@ -580,7 +580,7 @@ public static class EnergySimulator
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// How many hours the battery stays at or above 99 % SoC in the given naive forecast.
+  /// How many hours the battery stays at or above 99 % SoC in the given base forecast.
   /// A long plateau means we can afford to discharge opportunistically without risking
   /// running short — PV will refill the battery before it matters.
   /// Returns 0 if the SoC never reaches 99 %.
