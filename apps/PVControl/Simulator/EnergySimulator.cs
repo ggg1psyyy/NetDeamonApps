@@ -43,7 +43,7 @@ public static class EnergySimulator
   /// through the end of tomorrow — i.e. today + tomorrow as two full calendar days.
   /// This window matches the EPEX Spot price data range and the PredictionContainer layout.
   /// </summary>
-  public static List<SimulationSlot> Simulate(SimulationInput input)
+  public static SimulationResult Simulate(SimulationInput input)
   {
     var slots = new List<SimulationSlot>();
     var startSlot = input.StartTime.RoundToNearestQuarterHour();
@@ -120,7 +120,7 @@ public static class EnergySimulator
       currentSoc = currentEnergyWh * 100 / input.BatteryCapacityWh;
     }
 
-    return slots;
+    return new SimulationResult(slots, input);
   }
 
   // ── Naive future SoC ────────────────────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ public class DailySnapshots
   private readonly Prediction _pvPrediction;
   private readonly Prediction _loadPrediction;
   private readonly Prediction _batterySoCPrediction;
-  private readonly Func<IReadOnlyList<SimulationSlot>> _getSimulationResult;
+  private readonly Func<SimulationResult> _getSimulationResult;
 
   private Dictionary<DateTime, int> _dailySoCPrediction = [];
   private Dictionary<DateTime, string> _dailyModePrediction = [];
@@ -30,7 +30,7 @@ public class DailySnapshots
     Prediction pvPrediction,
     Prediction loadPrediction,
     Prediction batterySoCPrediction,
-    Func<IReadOnlyList<SimulationSlot>> getSimulationResult)
+    Func<SimulationResult> getSimulationResult)
   {
     _pvPrediction = pvPrediction;
     _loadPrediction = loadPrediction;
@@ -52,7 +52,7 @@ public class DailySnapshots
       // so _batterySoCPrediction and the simulation result already reflect the latest simulation.
       _dailySoCPrediction = new Dictionary<DateTime, int>(_batterySoCPrediction.TodayAndTomorrow);
       // Also snapshot the inverter mode per slot so the snapshot data set is self-contained.
-      _dailyModePrediction = _getSimulationResult().ToDictionary(s => s.Time, s => s.State.Mode.ToString());
+      _dailyModePrediction = _getSimulationResult().Slots.ToDictionary(s => s.Time, s => s.State.Mode.ToString());
       LastSnapshotUpdate = now;
     }
   }

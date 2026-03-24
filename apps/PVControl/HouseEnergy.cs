@@ -81,7 +81,7 @@ namespace NetDeamon.apps.PVControl
       Battery.SoCPrediction = Prediction_BatterySoC;
 
       PVWindows = new PVWindows(Prediction_NetEnergy, Prediction_BatterySoC);
-      Snapshots = new DailySnapshots(Prediction_PV, Prediction_Load, Prediction_BatterySoC, () => _simulationResult);
+      Snapshots = new DailySnapshots(Prediction_PV, Prediction_Load, Prediction_BatterySoC, () => _simulationResult!);
 
       PVCC_Config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentImportPriceEntity));
       PVCC_Config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentBatteryPowerEntity));
@@ -244,7 +244,7 @@ namespace NetDeamon.apps.PVControl
     private int _bugFixCounter = 0;
     private readonly Dictionary<DateTime, int> _actualSoCHistory = new();
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
-    private List<SimulationSlot> _simulationResult = [];
+    private SimulationResult? _simulationResult;
 
     /// <summary>
     /// Seeds <see cref="_actualSoCHistory"/> from the HA history API on startup, so past SoC slots
@@ -323,15 +323,13 @@ namespace NetDeamon.apps.PVControl
         CurrentMode = _currentMode,
       };
 
-      // Run the baseline simulation once to identify naturally-scheduled force_charge slots.
-      // Each schedulable load's window search runs against this same baseline.
+      // Run the baseline simulation once — its ForceChargeSlots and PV window boundaries
+      // are used by every FindLoadWindow call to compare against test simulations.
       var baseResult = EnergySimulator.Simulate(baseInput);
-      var baseForceChargeSlots = new HashSet<DateTime>(
-        baseResult.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
       // Find valid window for each schedulable load (highest priority first).
       foreach (var load in SchedulableLoads.OrderByDescending(l => l.Config.Priority))
-        FindLoadWindow(load, baseInput, baseResult, baseForceChargeSlots);
+        FindLoadWindow(load, baseInput, baseResult);
 
       // Run final simulation with all found ExtraLoads merged in.
       var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
@@ -349,7 +347,7 @@ namespace NetDeamon.apps.PVControl
       fullSoC.ClearAndCreateEmptyPredictionData(); // fills today 00:00 → tomorrow 23:45 with 0s
 
       var startSlot = now.RoundToNearestQuarterHour();
-      foreach (var slot in _simulationResult)
+      foreach (var slot in _simulationResult.Slots)
         if (fullSoC.ContainsKey(slot.Time))
           fullSoC[slot.Time] = slot.SoC;
 
@@ -369,7 +367,7 @@ namespace NetDeamon.apps.PVControl
     /// and running a test simulation for each. Updates load.ChargeNow/ChargeReason/PredictedEnd.
     /// The baseline and its force-charge slots are pre-computed once in RunSimulation.
     /// </summary>
-    private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, List<SimulationSlot> baseResult, HashSet<DateTime> baseForceChargeSlots)
+    private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
     {
       var now = DateTime.Now;
       var currentSlot = now.RoundToNearestQuarterHour();
@@ -425,29 +423,19 @@ namespace NetDeamon.apps.PVControl
       // to allow cheap overnight grid charging.
 
       // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
-      List<SimulationSlot> RunSim(DateTime end)
+      // RunSim returns a full SimulationResult so predicates can use its derived properties
+      // (WillReachMaxSocToday, IsOvernightMinSocOk, HasNewGridVs, IsGridCheapVs) directly.
+      SimulationResult RunSim(DateTime end)
       {
         var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW };
         return EnergySimulator.Simulate(baseInput.WithExtraLoads([.. baseInput.ExtraLoads, testLoad]));
       }
-      // HasNewGrid: true if the test simulation adds ANY new force_charge slot not in the baseline.
-      // Checking only the overnight window (as before) missed daytime force_charge caused by EV drain —
-      // the simulation would schedule a grid top-up at e.g. 16:00 (before sunset) to prevent the battery
-      // going below AbsMin, which HasNewGrid didn't detect because 16:00 < LastRelevantPVEnergyToday.
-      bool HasNewGrid(List<SimulationSlot> sim) => sim.Any(s =>
-        s.State.Mode == InverterModes.force_charge
-        && !baseForceChargeSlots.Contains(s.Time));
-      // IsGridCheap: true if all new grid imports (at any time) are at or below ForceChargeMaxPrice.
-      bool IsGridCheap(List<SimulationSlot> sim) => !sim.Any(s =>
-        s.State.Mode == InverterModes.force_charge
-        && !baseForceChargeSlots.Contains(s.Time)
-        && !Prices.PriceListImport.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= Prices.ForceChargeMaxPrice));
 
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
       // Predicate must be monotone: shorter session → easier to satisfy.
       // Returns null if no 15-min session satisfies it, or if the found window is shorter
       // than MinWindowMinutes (prevents oscillation from marginal windows).
-      DateTime? FindMax(DateTime maxEnd, Func<List<SimulationSlot>, bool> predicate)
+      DateTime? FindMax(DateTime maxEnd, Func<SimulationResult, bool> predicate)
       {
         var end = FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
         if (end is null) return null;
@@ -456,9 +444,12 @@ namespace NetDeamon.apps.PVControl
         return end;
       }
 
-      // Today's and tomorrow's window ends (capped to full session duration if shorter)
-      var todayMax    = Min(currentSlot.AddMinutes(durationMinutes), PVWindows.LastRelevantPVEnergyToday);
-      var tomorrowMax = Min(currentSlot.AddMinutes(durationMinutes), PVWindows.FirstRelevantPVEnergyTomorrow);
+      // Today's and tomorrow's window ends (capped to full session duration if shorter).
+      // Fall back to far-future when no PV is forecast (null) so the session is only
+      // bounded by durationMinutes — same behaviour as the old PVWindows fallback.
+      var farFuture   = currentSlot.AddDays(2);
+      var todayMax    = Min(currentSlot.AddMinutes(durationMinutes), baseResult.LastRelevantPVEnergyToday    ?? farFuture);
+      var tomorrowMax = Min(currentSlot.AddMinutes(durationMinutes), baseResult.FirstRelevantPVEnergyTomorrow ?? farFuture);
 
       if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
       { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
@@ -473,9 +464,9 @@ namespace NetDeamon.apps.PVControl
       // Outside PV hours the simulation sits at the edge of overnight-SoC thresholds and
       // oscillates every 15 s as tiny SoC changes flip the binary-search result.
       // Use Priority/PriorityPlus for intentional off-peak / battery-drain charging.
-      if (load.Mode == LoadSchedulingMode.Optimal && PVWindows.CurrentPVPeriod != PVPeriods.InPVPeriod)
+      if (load.Mode == LoadSchedulingMode.Optimal && baseResult.CurrentPVPeriod != PVPeriods.InPVPeriod)
       {
-        SetResult([], false, $"Optimal: outside PV window ({PVWindows.CurrentPVPeriod})", null);
+        SetResult([], false, $"Optimal: outside PV window ({baseResult.CurrentPVPeriod})", null);
         return;
       }
 
@@ -503,7 +494,7 @@ namespace NetDeamon.apps.PVControl
       if (load.Mode == LoadSchedulingMode.Optimal)
       {
         var end = FindMax(tomorrowMax, sim =>
-          SimWillReachMaxSocToday(sim, now) && SimOvernightMinSocOk(sim) && !HasNewGrid(sim));
+          sim.WillReachMaxSocToday && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
@@ -520,7 +511,7 @@ namespace NetDeamon.apps.PVControl
       if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
       {
         bool priorityEnforcePreferred = load.Mode == LoadSchedulingMode.Priority;
-        var end = FindMax(tomorrowMax, sim => SimOvernightMinSocOk(sim, priorityEnforcePreferred) && !HasNewGrid(sim));
+        var end = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk(priorityEnforcePreferred) && !sim.HasNewGridVs(baseResult));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
@@ -532,9 +523,9 @@ namespace NetDeamon.apps.PVControl
       // Step 3: PriorityPlus — base-case overnight OK; any new grid import only at cheap prices.
       // The EV session extends into the overnight window; what matters is that the battery would
       // survive the night without the EV (base case), and the EV runs on cheap grid power.
-      if (load.Mode == LoadSchedulingMode.PriorityPlus && SimOvernightMinSocOk(baseResult))
+      if (load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk())
       {
-        var end = FindMax(tomorrowMax, sim => IsGridCheap(sim));
+        var end = FindMax(tomorrowMax, sim => sim.IsGridCheapVs(baseResult));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
@@ -546,23 +537,6 @@ namespace NetDeamon.apps.PVControl
       SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
     }
 
-    /// <summary>True if the test simulation shows house battery reaching ≥ 99 % today.</summary>
-    private static bool SimWillReachMaxSocToday(List<SimulationSlot> result, DateTime now)
-      => result.Any(s => s.Time.Date == now.Date && s.SoC >= 99);
-
-    /// <summary>
-    /// True if the test simulation shows the battery stays above the effective minimum SoC
-    /// throughout the overnight window (sunset today → first PV tomorrow).
-    /// Uses PreferredMinimalSoC when EnforcePreferredSoC is set or <paramref name="alwaysEnforcePreferred"/> is true;
-    /// AbsoluteMinimalSoC otherwise (only PriorityPlus with enforce off).
-    /// </summary>
-    private bool SimOvernightMinSocOk(List<SimulationSlot> result, bool alwaysEnforcePreferred = false)
-    {
-      int minSoC = (alwaysEnforcePreferred || Battery.EnforcePreferredSoC) ? Battery.PreferredMinimalSoC : Battery.AbsoluteMinimalSoC;
-      var overnight = result.Where(s => s.Time >= PVWindows.LastRelevantPVEnergyToday && s.Time <= PVWindows.FirstRelevantPVEnergyTomorrow).ToList();
-      return overnight.Count == 0 || overnight.Min(s => s.SoC) >= minSoC;
-    }
-
     /// <summary>
     /// Binary-searches for the maximum session end in (currentSlot, maxEnd] where predicate
     /// is satisfied by the simulation result. Assumes predicate is monotone: if it holds for
@@ -571,8 +545,8 @@ namespace NetDeamon.apps.PVControl
     /// </summary>
     private static DateTime? FindMaxSessionEnd(
       DateTime currentSlot, DateTime maxEnd,
-      Func<DateTime, List<SimulationSlot>> runSim,
-      Func<List<SimulationSlot>, bool> predicate)
+      Func<DateTime, SimulationResult> runSim,
+      Func<SimulationResult, bool> predicate)
     {
       int maxSteps = (int)(maxEnd - currentSlot).TotalMinutes / 15;
       if (maxSteps <= 0) return null;
@@ -601,11 +575,11 @@ namespace NetDeamon.apps.PVControl
       get
       {
         var now = DateTime.Now;
-        if (_simulationResult.Count == 0)
+        if (_simulationResult is null || _simulationResult.Slots.Count == 0)
           return _currentMode;
 
-        var currentSlot = _simulationResult.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
-                          ?? _simulationResult.First();
+        var currentSlot = _simulationResult.Slots.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
+                          ?? _simulationResult.Slots[0];
         _currentMode = currentSlot.State;
 
         // ── Reset signal ──────────────────────────────────────────────────────────────────
@@ -660,7 +634,10 @@ namespace NetDeamon.apps.PVControl
     }
 
     /// <summary>The simulation timeline (now → end of tomorrow) from the last RunSimulation() call.</summary>
-    public IReadOnlyList<SimulationSlot> SimulationTimeline => _simulationResult;
+    public IReadOnlyList<SimulationSlot> SimulationTimeline => _simulationResult?.Slots ?? [];
+
+    /// <summary>Full simulation result including PV windows and derived predicates.</summary>
+    public SimulationResult? SimulationState => _simulationResult;
 
     public bool NegativeImportPriceUpcomingToday
     {
