@@ -137,6 +137,7 @@ namespace NetDeamon.apps.PVControl
     public string InverterStatusNormalString { get; set; } = "Normal Mode";
     public Entity DailyImportEnergyEntity { get; set; } = null!;
     public Entity DailyExportEnergyEntity { get; set; } = null!;
+    public Entity? BatteryInputEnergyEntity { get; set; }
     public Entity CurrentHouseLoadEntity { get; set; } = null!;
     public Entity CurrentPVPowerEntity { get; set; } = null!;
     public Entity CurrentBatteryPowerEntity { get; set; } = null!;

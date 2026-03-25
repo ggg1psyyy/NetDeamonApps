@@ -89,6 +89,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentHouseLoadEntity));
       PVCC_Config.DailyExportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyExportEnergyEntity));
       PVCC_Config.DailyImportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyImportEnergyEntity));
+      PVCC_Config.BatteryInputEnergyEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.BatteryInputEnergyEntity));
       PVCC_Config.CurrentGridPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentGridPowerEntity));
       PVCC_Config.InverterStatusEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.InverterStatusEntity));
 
@@ -153,9 +154,6 @@ namespace NetDeamon.apps.PVControl
       {
         Battery.AddBatteryPowerValue(bat);
 
-        // PV surplus available for battery after house base load and active EV loads.
-        float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad - ActiveSchedulableLoadPowerW());
-        await Costs.OnBatteryPowerChangedAsync(bat, Battery.BatterySoc, Battery.BatteryCapacity, pvSurplusW, Prices.PriceListImport);
       }
       if (entity.EntityId == PVCC_Config.CurrentHouseLoadEntity?.EntityId && PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
       {
@@ -179,6 +177,11 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == PVCC_Config.DailyImportEnergyEntity?.EntityId && PVCC_Config.DailyImportEnergyEntity.TryGetStateValue(out float import))
       {
         await Costs.OnImportEnergyChangedAsync(import, Prices.PriceListImport, Prices.CurrentEnergyImportPriceEnergyOnly, Prices.CurrentEnergyImportPriceNetworkOnly);
+      }
+      if (entity.EntityId == PVCC_Config.BatteryInputEnergyEntity?.EntityId && PVCC_Config.BatteryInputEnergyEntity.TryGetStateValue(out float batInput))
+      {
+        int gridPowerW = PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int gp) ? gp : 0;
+        await Costs.OnBatteryInputEnergyChangedAsync(batInput, gridPowerW, Prices.PriceListImport);
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualPowerEntity is not null
         && entity.EntityId == l.Config.ActualPowerEntity!.EntityId))
@@ -297,7 +300,7 @@ namespace NetDeamon.apps.PVControl
       Prediction_PV.UpdateData();
       Prediction_NetEnergy.UpdateData();
 
-      // Build the base SimulationInput without EV loads. FindEVChargingWindow will run
+      // Build the base SimulationInput without extra loads. FindEVChargingWindow will run
       // multiple test simulations to find the valid EV charging window, then we run the
       // final simulation with those EV ExtraLoads included.
       var baseInput = new SimulationInput
@@ -570,7 +573,7 @@ namespace NetDeamon.apps.PVControl
 
     private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
-  public InverterState ProposedState
+    public InverterState ProposedState
     {
       get
       {

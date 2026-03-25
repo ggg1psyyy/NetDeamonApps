@@ -24,6 +24,7 @@ NetDeamon.apps.PVControl.PVConfig:
   InverterStatusNormalString: "Normal Mode"
   # daily energy import
   DailyImportEnergyEntity: sensor.solax_today_s_import_energy
+  BatteryInputEnergyEntity: sensor.solax_battery_input_energy_today
   # daily energy export
   DailyExportEnergyEntity: sensor.solax_today_s_export_energy
   # *** current house load (W)

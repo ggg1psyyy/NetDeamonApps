@@ -10,8 +10,7 @@ namespace NetDeamon.apps.PVControl;
 public class CostTracker
 {
   private float _batteryAvgCostPerKwh;
-  private DateTime _lastBatteryPowerTime = DateTime.MinValue;
-  private int _lastBatteryPowerW;
+  private float _lastBatteryInputEnergyKwh = -1f; // -1 = not yet initialized
   private float _lastImportEnergySum;
   private float _lastExportEnergySum;
 
@@ -67,30 +66,40 @@ public class CostTracker
   }
 
   /// <summary>
-  /// Called when the battery power sensor changes. Computes the blended cost of newly charged energy
-  /// and updates the running average cost per kWh stored in the battery.
+  /// Called when the battery input energy sensor changes. Uses the actual energy delta
+  /// to update the running average cost per kWh stored in the battery.
+  /// Source is grid (import price) when grid power is negative (importing), otherwise PV (free).
   /// </summary>
-  public async Task OnBatteryPowerChangedAsync(int bat, int currentSocPct, int battCapacityWh, float pvSurplusW, PriceList importPrices)
+  public async Task OnBatteryInputEnergyChangedAsync(float batteryInputKwh, int gridPowerW, PriceList importPrices)
   {
-    var now = DateTime.Now;
-    if (_lastBatteryPowerTime != DateTime.MinValue && _lastBatteryPowerW > 0)
+    float currentKwh = batteryInputKwh; // sensor reports in kWh
+
+    // First call or midnight reset (sensor went backwards) — just store the baseline.
+    if (_lastBatteryInputEnergyKwh < 0 || currentKwh < _lastBatteryInputEnergyKwh)
     {
-      double deltaHours = Math.Min((now - _lastBatteryPowerTime).TotalHours, 0.25);
-      float deltaKwh = (float)(_lastBatteryPowerW * deltaHours / 1000.0);
-
-      float pvFraction = Math.Min(1f, pvSurplusW / _lastBatteryPowerW);
-      float sourcePrice = (1f - pvFraction) * importPrices.GetPrice(now);
-
-      // Weighted average: blend existing stored energy cost with new charge cost.
-      float currentStoredKwh = Math.Max(0.1f, currentSocPct * battCapacityWh / 100f / 1000f);
-      _batteryAvgCostPerKwh = (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice)
-                              / (currentStoredKwh + deltaKwh);
-      if (_batteryAvgCostEntity != null)
-        await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
-          _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
+      _lastBatteryInputEnergyKwh = currentKwh;
+      return;
     }
-    _lastBatteryPowerW = bat;
-    _lastBatteryPowerTime = now;
+
+    float deltaKwh = currentKwh - _lastBatteryInputEnergyKwh;
+    _lastBatteryInputEnergyKwh = currentKwh;
+
+    if (deltaKwh <= 0) return;
+
+    // Grid importing (gridPower < 0) while battery charges → grid is the source.
+    float sourcePrice = gridPowerW < 0 ? importPrices.GetPrice(DateTime.Now) : 0f;
+
+    // Weighted average: blend existing stored energy cost with new charge cost.
+    // currentStoredKwh from the battery SoC entity is the authoritative stored energy.
+    if (!PVCC_Config.BatterySoCEntity.TryGetStateValue(out int socPct) ||
+        !PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out int capWh))
+      return;
+    float currentStoredKwh = Math.Max(0.1f, socPct * capWh / 100f / 1000f);
+    _batteryAvgCostPerKwh = (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice)
+                            / (currentStoredKwh + deltaKwh);
+    if (_batteryAvgCostEntity != null)
+      await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
+        _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
   }
 
   /// <summary>Called when the daily export energy sensor changes. Accumulates export earnings.</summary>
