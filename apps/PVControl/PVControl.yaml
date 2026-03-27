@@ -11,6 +11,14 @@ NetDeamon.apps.PVControl.PVConfig:
   ImportPriceMultiplier: 1.0
   ImportPriceAddition: 0.012
   ImportPriceNetwork: 0.07992
+  ImportPriceNetworkPeriods:
+    # SNAP (Sommer-Nieder-Arbeitspreis): 20% discount on network fee, Apr–Sep 10:00–16:00
+    - Name: SNAP (Sommer-Nieder-Arbeitspreis)
+      StartMonth: 4
+      EndMonth: 9
+      StartHour: 10
+      EndHour: 16
+      Price: 0.06882
   ImportPriceTax: 0.2
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.epex_spot_data_price

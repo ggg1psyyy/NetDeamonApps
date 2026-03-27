@@ -43,7 +43,7 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>Brutto import prices (netto × multiplier + addition + network) × (1 + tax).</summary>
     public PriceList PriceListImport =>
-      new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true))));
+      new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true, p.StartTime))));
 
     /// <summary>Brutto export prices — either variable (scaled netto) or fixed feed-in tariff.</summary>
     public PriceList PriceListExport
@@ -61,9 +61,29 @@ namespace NetDeamon.apps.PVControl
 
     // ── Brutto price calculations ────────────────────────────────────────────────────────────
 
-    public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice) =>
+    /// <summary>Returns the first period whose month+hour window contains <paramref name="t"/>, or null.</summary>
+    private NetworkPricePeriod? ActivePeriodAt(System.DateTime t)
+    {
+      if (PVCC_Config.ImportPriceNetworkPeriods != null)
+        foreach (var p in PVCC_Config.ImportPriceNetworkPeriods)
+          if (t.Month >= p.StartMonth && t.Month <= p.EndMonth
+              && t.Hour >= p.StartHour && t.Hour < p.EndHour)
+            return p;
+      return null;
+    }
+
+    /// <summary>Returns the effective network import price at the given time,
+    /// applying any matching <see cref="PVConfig.ImportPriceNetworkPeriods"/> override.</summary>
+    private float NetworkPriceAt(System.DateTime t) =>
+      ActivePeriodAt(t)?.Price ?? PVCC_Config.ImportPriceNetwork;
+
+    /// <summary>Name of the currently active network price period, or "Standard" if none.</summary>
+    public string ActiveNetworkPricePeriodName =>
+      ActivePeriodAt(System.DateTime.Now)?.Name ?? "Standard";
+
+    public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice, System.DateTime? at = null) =>
       (nettoPrice * PVCC_Config.ImportPriceMultiplier + PVCC_Config.ImportPriceAddition
-        + (inclNetworkPrice ? PVCC_Config.ImportPriceNetwork : 0)) * (1 + PVCC_Config.ImportPriceTax);
+        + (inclNetworkPrice ? NetworkPriceAt(at ?? System.DateTime.Now) : 0)) * (1 + PVCC_Config.ImportPriceTax);
 
     public float CalculateBruttoPriceExport(float nettoPrice, bool inclNetworkPrice) =>
       (nettoPrice * PVCC_Config.ExportPriceMultiplier + PVCC_Config.ExportPriceAddition
@@ -74,7 +94,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Brutto import price at current time, excluding network fee.</summary>
     public float CurrentEnergyImportPriceEnergyOnly => CalculateBruttoPriceImport(PriceListNetto.GetPrice(System.DateTime.Now), false);
 
-    /// <summary>Network fee component of the current import price (flat, tax-inclusive).</summary>
-    public float CurrentEnergyImportPriceNetworkOnly => PVCC_Config.ImportPriceNetwork * (1 + PVCC_Config.ImportPriceTax);
+    /// <summary>Network fee component of the current import price (tax-inclusive), with any active period override applied.</summary>
+    public float CurrentEnergyImportPriceNetworkOnly => NetworkPriceAt(System.DateTime.Now) * (1 + PVCC_Config.ImportPriceTax);
   }
 }

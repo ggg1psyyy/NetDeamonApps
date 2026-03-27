@@ -53,6 +53,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _overrideModeEntity = null!;
     private Entity _currentImportPriceBruttoEntity = null!;
     private Entity _currentExportPriceBruttoEntity = null!;
+    private Entity _activeNetworkPricePeriodEntity = null!;
     private Entity _sumImportCostBruttoEntity = null!;
     private Entity _sumImportCostEnergyOnlyEntity = null!;
     private Entity _sumImportCostNetworkOnlyEntity = null!;
@@ -346,7 +347,7 @@ namespace NetDeamon.apps.PVControl
           .Select(s => new
           {
             datetime = s.Key.ToISO8601(),
-            charging = load.PredictedEnd.HasValue && s.Key <= load.PredictedEnd.Value,
+            charging = load.ExtraLoads.Any(e => s.Key >= e.StartTime && s.Key < e.EndTime),
           }).ToList();
         var attr_load = new
         {
@@ -357,6 +358,7 @@ namespace NetDeamon.apps.PVControl
           level_unit = load.Config.LevelUnit,
           power_avg_w = powerAvgW,
           net_pv_w = netPvW,
+          charge_start_predicted = load.ExtraLoads.Count > 0 ? load.ExtraLoads[0].StartTime.ToISO8601() : "n/a",
           charge_end_predicted = load.PredictedEnd?.ToISO8601() ?? "n/a",
           charge_timeline = chargeTimeline,
         };
@@ -571,6 +573,7 @@ namespace NetDeamon.apps.PVControl
       #endregion
       #region Prices
       await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.PriceListImport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_activeNetworkPricePeriodEntity.EntityId, _house.Prices.ActiveNetworkPricePeriodName);
       var attr_currentImportPrice = new
       {
         data = _house.Prices.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
@@ -739,6 +742,10 @@ namespace NetDeamon.apps.PVControl
           unit_of_measurement = "€/kWh",
         },
         defaultValue: "0",
+        reRegister: reset);
+
+      _activeNetworkPricePeriodEntity = await RegisterSensor("sensor.pv_control_active_network_price_period", "Active network price period", null, "mdi:calendar-clock",
+        defaultValue: "Standard",
         reRegister: reset);
 
       _currentExportPriceBruttoEntity = await RegisterSensor("sensor.pv_control_current_export_price_brutto", "Current energy export price (brutto)", "MONETARY", "mdi:currency-eur",

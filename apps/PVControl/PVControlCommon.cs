@@ -70,7 +70,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Scheduler = null!;
       PVCC_ApiManager = null!;
     }
-    public static async Task<Entity> RegisterSensor(string id, string name, string deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false)
+    public static async Task<Entity> RegisterSensor(string id, string name, string? deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false)
     {
       var identifiers = new[] { "pv_control" };
       var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
@@ -126,6 +126,7 @@ namespace NetDeamon.apps.PVControl
     public float ImportPriceMultiplier { get; set; } = default;
     public float ImportPriceAddition { get; set; } = default;
     public float ImportPriceNetwork { get; set; } = default;
+    public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
     public Entity CurrentExportPriceEntity { get; set; } = null!;
     public bool ExportPriceIsVariable { get; set; } = default;
@@ -191,5 +192,19 @@ namespace NetDeamon.apps.PVControl
     }
     public Entity TotalImportEnergyEntity { get; set; } = null!;
     public Entity TotalExportEnergyEntity { get; set; } = null!;
+  }
+
+  /// <summary>
+  /// A time-bounded override for the network import price.
+  /// Active when the current month is in [StartMonth, EndMonth] and hour in [StartHour, EndHour).
+  /// </summary>
+  public class NetworkPricePeriod
+  {
+    public string Name { get; set; } = string.Empty;
+    public int StartMonth { get; set; }
+    public int EndMonth { get; set; }
+    public int StartHour { get; set; }
+    public int EndHour { get; set; }
+    public float Price { get; set; }
   }
 }
