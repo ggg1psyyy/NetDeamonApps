@@ -1,0 +1,178 @@
+type: custom:plotly-graph
+title: Predicted SoC vs True SoC
+hours_to_show: 48
+refresh_interval: 60
+entities:
+  # ── Mode-colored filled areas (one trace per inverter mode) ─────────────
+  # Each trace shows the SoC curve only for slots where that mode is active,
+  # filled to zero. Together they paint the full SoC area in mode-specific colors.
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Past
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'past').map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'past').map(d => d.soc)
+    type: scatter
+    mode: none
+    fill: tozeroy
+    fillcolor: "rgba(140,140,140,0.25)"
+    line:
+      width: 0
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Normal
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'normal').map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'normal').map(d => d.soc)
+    type: scatter
+    mode: none
+    fill: tozeroy
+    fillcolor: "rgba(50,150,255,0.30)"
+    line:
+      width: 0
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Feed-in Priority
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'feedin_priority').map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'feedin_priority').map(d => d.soc)
+    type: scatter
+    mode: none
+    fill: tozeroy
+    fillcolor: "rgba(50,210,80,0.35)"
+    line:
+      width: 0
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Force Charge
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'force_charge').map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'force_charge').map(d => d.soc)
+    type: scatter
+    mode: none
+    fill: tozeroy
+    fillcolor: "rgba(255,100,50,0.40)"
+    line:
+      width: 0
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Opportunistic Discharge
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'opportunistic_discharge').map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode === 'opportunistic_discharge').map(d => d.soc)
+    type: scatter
+    mode: none
+    fill: tozeroy
+    fillcolor: "rgba(255,200,0,0.40)"
+    line:
+      width: 0
+
+  # ── Live prediction line: red when no extra load, green when active ──────
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Live prediction
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode !== 'past' && !d.extra_load).map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode !== 'past' && !d.extra_load).map(d => d.soc)
+    type: scatter
+    mode: lines
+    line:
+      color: "rgba(255,80,80,0.95)"
+      width: 2
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Live prediction (extra load)
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode !== 'past' && d.extra_load).map(d => new Date(d.datetime))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual ?? [])
+          .filter(d => d.mode !== 'past' && d.extra_load).map(d => d.soc)
+    type: scatter
+    mode: lines
+    line:
+      color: "rgba(0,230,80,0.95)"
+      width: 2
+
+  # ── True SoC (live battery state from inverter) ──────────────────────────
+  - entity: sensor.solax_battery_capacity
+    name: True SoC
+    type: scatter
+    mode: lines+markers
+    line:
+      color: cyan
+      width: 2
+    marker:
+      color: cyan
+      size: 3
+
+  # ── Electricity price (EPEX netto, converted to €/kWh) ───────────────────
+  # Note: this is the raw netto price; brutto = netto × multiplier + addition + network + tax
+  - entity: sensor.epex_spot_data_market_price_3
+    name: Electricity Price (netto)
+    yaxis: y2
+    x: >
+      fn:({ hass }) =>
+        (hass.states['sensor.epex_spot_data_market_price_3']?.attributes?.data ?? [])
+          .map(d => new Date(d.start_time))
+    y: >
+      fn:({ hass }) =>
+        (hass.states['sensor.epex_spot_data_market_price_3']?.attributes?.data ?? [])
+          .map(d => d.price_ct_per_kwh / 100)
+    type: bar
+    marker:
+      color: "rgba(255,255,255,0.20)"
+
+layout:
+  yaxis:
+    title: SoC (%)
+    range:
+      - 0
+      - 105
+    fixedrange: false
+  yaxis2:
+    title: Price (€/kWh)
+    overlaying: "y"
+    side: right
+    range:
+      - 0
+      - 0.50
+    showgrid: false
+    tickformat: ".2f"
+  legend:
+    orientation: h
+    y: -0.15
+  margin:
+    t: 30
+    b: 70
