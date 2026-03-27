@@ -9,6 +9,11 @@ namespace NetDeamon.apps.PVControl;
 
 public class CostTracker
 {
+  // Plausible range for battery average cost. Values outside this are floating-point
+  // artefacts (underflow → near-zero, bad initial state → sky-high) and are clamped.
+  private const float BatteryAvgCostMinEurPerKwh = 0f;
+  private const float BatteryAvgCostMaxEurPerKwh = 1.0f;
+
   private float _batteryAvgCostPerKwh;
   private float _lastBatteryInputEnergyKwh = -1f; // -1 = not yet initialized
   private float _lastImportEnergySum;
@@ -31,8 +36,9 @@ public class CostTracker
       _batteryAvgCostEntity = value;
       // Restore persisted value on startup so attribution is correct immediately.
       // Use numericalGetBaseValue:false — the value is stored raw in €/kWh, no unit conversion needed.
-      // Clamp to a plausible range; corrupt values (e.g. 14 M €/kWh) are silently discarded.
-      if (value != null && value.TryGetStateValue(out float v, numericalGetBaseValue: false) && v is > 0f and <= 10f)
+      // Reject values outside the plausible range (e.g. underflow artefacts, corrupt state).
+      if (value != null && value.TryGetStateValue(out float v, numericalGetBaseValue: false)
+          && v > 1e-6f && v <= BatteryAvgCostMaxEurPerKwh)
         _batteryAvgCostPerKwh = v;
     }
   }
@@ -95,8 +101,9 @@ public class CostTracker
         !PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out int capWh))
       return;
     float currentStoredKwh = Math.Max(0.1f, socPct * capWh / 100f / 1000f);
-    _batteryAvgCostPerKwh = (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice)
-                            / (currentStoredKwh + deltaKwh);
+    _batteryAvgCostPerKwh = Math.Clamp(
+      (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice) / (currentStoredKwh + deltaKwh),
+      BatteryAvgCostMinEurPerKwh, BatteryAvgCostMaxEurPerKwh);
     if (_batteryAvgCostEntity != null)
       await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
         _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
