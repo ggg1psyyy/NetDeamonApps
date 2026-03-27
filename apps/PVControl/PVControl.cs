@@ -422,19 +422,24 @@ namespace NetDeamon.apps.PVControl
       if (curPredSoc.Key != default)
       {
         await PVCC_EntityManager.SetStateAsync(_info_PredictedSoCEntity.EntityId, curPredSoc.Value.ToString(CultureInfo.InvariantCulture));
-        // Build a mode lookup from the live simulation timeline for data_actual
-        var simModeLookup = _house.SimulationTimeline.ToDictionary(s => s.Time, s => s.State.Mode.ToString());
+        // Build a slot lookup from the live simulation timeline for data_actual
+        var simSlotLookup = _house.SimulationTimeline.ToDictionary(s => s.Time);
         var attr_pred_soc = new
         {
           current_entry_time = curPredSoc.Key.ToISO8601(),
           last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
-          // Live simulation: SoC + mode for every slot today and tomorrow.
-          // Slots before "now" have no simulation mode (back-filled SoC only) → shown as "past".
-          data_actual = _house.Prediction_BatterySoC.TodayAndTomorrow.Select(s => new
+          // Live simulation: SoC + mode + extra_load flag for every slot today and tomorrow.
+          // Slots before "now" have no simulation slot (back-filled SoC only) → mode "past", extra_load false.
+          data_actual = _house.Prediction_BatterySoC.TodayAndTomorrow.Select(s =>
           {
-            datetime = s.Key.ToISO8601(),
-            soc = s.Value,
-            mode = simModeLookup.TryGetValue(s.Key, out var simMode) ? simMode : "past",
+            var hasSlot = simSlotLookup.TryGetValue(s.Key, out var slot);
+            return new
+            {
+              datetime = s.Key.ToISO8601(),
+              soc = s.Value,
+              mode = hasSlot ? slot!.State.Mode.ToString() : "past",
+              extra_load = hasSlot && slot!.ExtraLoadWh > 0,
+            };
           }),
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedSoCEntity.EntityId, attr_pred_soc);
