@@ -5,13 +5,13 @@ refresh_interval: 60
 
 entities:
   # ── Mode-colored filled areas ───────────────────────────────────────────
-  # Each trace shows SoC only for its mode's slots, filled to zero.
-  # Inline fn: strings used (avoids YAML multiline folding issues).
+  # fn: at entity level returns {x, y} which overrides the history-based data.
+  # fetch_mask: 0 prevents unnecessary history fetching for attribute-based traces.
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Past
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'past').map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'past').map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'past'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: none
     fill: tozeroy
@@ -21,8 +21,8 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Normal
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'normal').map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'normal').map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'normal'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: none
     fill: tozeroy
@@ -32,8 +32,8 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Feed-in Priority
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'feedin_priority').map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'feedin_priority').map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'feedin_priority'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: none
     fill: tozeroy
@@ -43,8 +43,8 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Force Charge
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'force_charge').map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'force_charge').map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'force_charge'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: none
     fill: tozeroy
@@ -54,8 +54,8 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Opportunistic Discharge
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'opportunistic_discharge').map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode === 'opportunistic_discharge').map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'opportunistic_discharge'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: none
     fill: tozeroy
@@ -66,8 +66,8 @@ entities:
   # ── Live prediction line: red = no extra load, green = extra load active ─
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode !== 'past' && !s.extra_load).map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode !== 'past' && !s.extra_load).map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode !== 'past' && !s.extra_load); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: lines
     line:
@@ -76,8 +76,8 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction (extra load)
-    x: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode !== 'past' && s.extra_load).map(s => new Date(s.datetime)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || []; return d.filter(s => s.mode !== 'past' && s.extra_load).map(s => s.soc); }"
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode !== 'past' && s.extra_load); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
     type: scatter
     mode: lines
     line:
@@ -96,20 +96,18 @@ entities:
       color: cyan
       size: 3
 
-  # ── Electricity price (EPEX netto → €/kWh) ──────────────────────────────
-  - entity: sensor.epex_spot_data_market_price_3
-    name: Electricity Price (netto)
+  # ── Brutto import price (data attribute: {start_time, price_per_kwh}) ───
+  - entity: sensor.pv_control_current_import_price_brutto
+    name: Import Price
+    fetch_mask: 0
+    fn: "({ entity }) => { const d = entity?.attributes?.data || []; return { x: d.map(s => new Date(s.start_time)), y: d.map(s => s.price_per_kwh) }; }"
     yaxis: y2
-    x: "fn:({ hass }) => { const d = hass.states['sensor.epex_spot_data_market_price_3']?.attributes?.data || []; return d.map(s => new Date(s.start_time)); }"
-    y: "fn:({ hass }) => { const d = hass.states['sensor.epex_spot_data_market_price_3']?.attributes?.data || []; return d.map(s => s.price_ct_per_kwh / 100); }"
     type: bar
     marker:
       color: rgba(255,255,255,0.20)
 
 layout:
   xaxis:
-    # autorange lets plotly fit the window to all traces, including future prediction data.
-    # hours_to_show above still controls how much True SoC history is fetched from HA.
     autorange: true
   yaxis:
     title: SoC (%)
