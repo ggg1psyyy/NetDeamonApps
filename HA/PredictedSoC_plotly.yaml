@@ -4,15 +4,14 @@ hours_to_show: 24
 refresh_interval: 60
 
 entities:
-  # ── SoC bars, colored per mode (single trace, marker.color array) ───────
-  # Each 15-min slot becomes one bar colored by its inverter mode.
-  # width: 900000 = 15 min in milliseconds (plotly datetime bar width unit).
+  # ── SoC bars, colored per mode ──────────────────────────────────────────
+  # Uses hass.states[...] (not entity) to always get the live current state.
+  # entity.attributes is the state at last history-fetch time and can be stale.
   - entity: sensor.pv_control_info_predicted_soc
     name: SoC (mode)
-    fetch_mask: 0
     fn: >
-      ({ entity }) => {
-        const d = entity?.attributes?.data_actual || [];
+      ({ hass }) => {
+        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
         const c = {
           past:                    'rgba(140,140,140,0.35)',
           normal:                  'rgba(50,150,255,0.50)',
@@ -30,10 +29,9 @@ entities:
     type: bar
     showlegend: false
 
-  # ── Dummy legend entries (invisible scatter points) ──────────────────────
+  # ── Dummy legend entries ──────────────────────────────────────────────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Past
-    fetch_mask: 0
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -44,7 +42,6 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Normal
-    fetch_mask: 0
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -55,7 +52,6 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Feed-in Priority
-    fetch_mask: 0
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -66,7 +62,6 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Force Charge
-    fetch_mask: 0
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -77,7 +72,6 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Opportunistic Discharge
-    fetch_mask: 0
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -89,8 +83,11 @@ entities:
   # ── Live prediction line: red = normal, green = extra load active ────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction
-    fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && !s.extra_load ? s.soc : null) }; }"
+    fn: >
+      ({ hass }) => {
+        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
+        return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && !s.extra_load ? s.soc : null) };
+      }
     type: scatter
     mode: lines
     connectgaps: false
@@ -100,8 +97,11 @@ entities:
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction (extra load)
-    fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && s.extra_load ? s.soc : null) }; }"
+    fn: >
+      ({ hass }) => {
+        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
+        return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && s.extra_load ? s.soc : null) };
+      }
     type: scatter
     mode: lines
     connectgaps: false
@@ -121,15 +121,21 @@ entities:
       color: cyan
       size: 3
 
-  # ── Brutto import price ───────────────────────────────────────────────────
+  # ── Brutto import price (line on y2) ─────────────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
     name: Import Price
-    fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data || []; return { x: d.map(s => new Date(s.start_time)), y: d.map(s => s.price_per_kwh) }; }"
+    fn: >
+      ({ hass }) => {
+        const d = hass.states['sensor.pv_control_current_import_price_brutto']?.attributes?.data || [];
+        return { x: d.map(s => new Date(s.start_time)), y: d.map(s => s.price_per_kwh) };
+      }
     yaxis: y2
-    type: bar
-    marker:
-      color: rgba(255,255,255,0.15)
+    type: scatter
+    mode: lines
+    line:
+      color: rgba(255,255,255,0.50)
+      width: 1
+      dash: dot
 
 layout:
   xaxis:
