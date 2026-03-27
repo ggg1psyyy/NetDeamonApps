@@ -428,11 +428,12 @@ namespace NetDeamon.apps.PVControl
       // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
       // RunSim returns a full SimulationResult so predicates can use its derived properties
       // (WillReachMaxSocToday, IsOvernightMinSocOk, HasNewGridVs, IsGridCheapVs) directly.
-      SimulationResult RunSim(DateTime end)
+      SimulationResult RunSimFrom(DateTime start, DateTime end)
       {
-        var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW };
+        var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start, EndTime = end, PowerW = chargeRateW };
         return EnergySimulator.Simulate(baseInput.WithExtraLoads([.. baseInput.ExtraLoads, testLoad]));
       }
+      SimulationResult RunSim(DateTime end) => RunSimFrom(currentSlot, end);
 
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
       // Predicate must be monotone: shorter session → easier to satisfy.
@@ -473,8 +474,33 @@ namespace NetDeamon.apps.PVControl
       // Outside PV hours the simulation sits at the edge of overnight-SoC thresholds and
       // oscillates every 15 s as tiny SoC changes flip the binary-search result.
       // Use Priority/PriorityPlus for intentional off-peak / battery-drain charging.
+      // Exception: when outside today's PV window, search for a window in tomorrow's PV period
+      // so the scheduled run is visible (chargeNow=false, ExtraLoad carries the future window).
       if (load.Mode == LoadSchedulingMode.Optimal && baseResult.CurrentPVPeriod != PVPeriods.InPVPeriod)
       {
+        var tomorrowPVStart = baseResult.FirstRelevantPVEnergyTomorrow;
+        var tomorrowPVEnd   = baseResult.LastRelevantPVEnergyTomorrow;
+        if (tomorrowPVStart.HasValue && tomorrowPVEnd.HasValue)
+        {
+          var tomorrowOptMax = Min(tomorrowPVStart.Value.AddMinutes(durationMinutes), tomorrowPVEnd.Value);
+          if (tomorrowOptMax > tomorrowPVStart.Value)
+          {
+            var end = FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
+              e => RunSimFrom(tomorrowPVStart.Value, e),
+              sim => sim.WillReachMaxSocTomorrow && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
+            if (end is not null &&
+                (durationMinutes < load.Config.MinWindowMinutes || load.Config.MinWindowMinutes <= 0 ||
+                 (end.Value - tomorrowPVStart.Value).TotalMinutes >= load.Config.MinWindowMinutes))
+            {
+              SetResult(
+                [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = tomorrowPVStart.Value, EndTime = end.Value, PowerW = chargeRateW }],
+                false,
+                $"Scheduled tomorrow (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
+                end);
+              return;
+            }
+          }
+        }
         SetResult([], false, $"Optimal: outside PV window ({baseResult.CurrentPVPeriod})", null);
         return;
       }
