@@ -5,61 +5,66 @@ refresh_interval: 60
 
 entities:
   # ── Mode-colored filled areas ───────────────────────────────────────────
-  # fn: at entity level returns {x, y} which overrides the history-based data.
-  # fetch_mask: 0 prevents unnecessary history fetching for attribute-based traces.
+  # All traces use the FULL timestamp array; y = soc for matching mode, null elsewhere.
+  # This prevents Plotly's fill:tozeroy from bleeding across gaps between mode segments.
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Past
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'past'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'past' ? s.soc : null) }; }"
     type: scatter
     mode: none
     fill: tozeroy
     fillcolor: rgba(140,140,140,0.25)
+    connectgaps: false
     line:
       width: 0
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Normal
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'normal'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'normal' ? s.soc : null) }; }"
     type: scatter
     mode: none
     fill: tozeroy
     fillcolor: rgba(50,150,255,0.30)
+    connectgaps: false
     line:
       width: 0
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Feed-in Priority
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'feedin_priority'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'feedin_priority' ? s.soc : null) }; }"
     type: scatter
     mode: none
     fill: tozeroy
     fillcolor: rgba(50,210,80,0.35)
+    connectgaps: false
     line:
       width: 0
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Force Charge
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'force_charge'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'force_charge' ? s.soc : null) }; }"
     type: scatter
     mode: none
     fill: tozeroy
     fillcolor: rgba(255,100,50,0.40)
+    connectgaps: false
     line:
       width: 0
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Opportunistic Discharge
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode === 'opportunistic_discharge'); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'opportunistic_discharge' ? s.soc : null) }; }"
     type: scatter
     mode: none
     fill: tozeroy
     fillcolor: rgba(255,200,0,0.40)
+    connectgaps: false
     line:
       width: 0
 
@@ -67,9 +72,10 @@ entities:
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode !== 'past' && !s.extra_load); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && !s.extra_load ? s.soc : null) }; }"
     type: scatter
     mode: lines
+    connectgaps: false
     line:
       color: rgba(255,80,80,0.95)
       width: 2
@@ -77,9 +83,10 @@ entities:
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction (extra load)
     fetch_mask: 0
-    fn: "({ entity }) => { const d = (entity?.attributes?.data_actual || []).filter(s => s.mode !== 'past' && s.extra_load); return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.soc) }; }"
+    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && s.extra_load ? s.soc : null) }; }"
     type: scatter
     mode: lines
+    connectgaps: false
     line:
       color: rgba(0,230,80,0.95)
       width: 2
@@ -96,7 +103,7 @@ entities:
       color: cyan
       size: 3
 
-  # ── Brutto import price (data attribute: {start_time, price_per_kwh}) ───
+  # ── Brutto import price ───────────────────────────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
     name: Import Price
     fetch_mask: 0
