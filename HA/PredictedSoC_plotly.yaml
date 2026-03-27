@@ -4,71 +4,89 @@ hours_to_show: 24
 refresh_interval: 60
 
 entities:
-  # ── Mode-colored filled areas ───────────────────────────────────────────
-  # All traces use the FULL timestamp array; y = soc for matching mode, null elsewhere.
-  # This prevents Plotly's fill:tozeroy from bleeding across gaps between mode segments.
+  # ── SoC bars, colored per mode (single trace, marker.color array) ───────
+  # Each 15-min slot becomes one bar colored by its inverter mode.
+  # width: 900000 = 15 min in milliseconds (plotly datetime bar width unit).
+  - entity: sensor.pv_control_info_predicted_soc
+    name: SoC (mode)
+    fetch_mask: 0
+    fn: >
+      ({ entity }) => {
+        const d = entity?.attributes?.data_actual || [];
+        const c = {
+          past:                    'rgba(140,140,140,0.35)',
+          normal:                  'rgba(50,150,255,0.50)',
+          feedin_priority:         'rgba(50,210,80,0.60)',
+          force_charge:            'rgba(255,100,50,0.65)',
+          opportunistic_discharge: 'rgba(255,200,0,0.65)',
+        };
+        return {
+          x: d.map(s => new Date(s.datetime)),
+          y: d.map(s => s.soc),
+          marker: { color: d.map(s => c[s.mode] || 'gray') },
+          width: 900000,
+        };
+      }
+    type: bar
+    showlegend: false
 
+  # ── Dummy legend entries (invisible scatter points) ──────────────────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Past
     fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'past' ? s.soc : null) }; }"
+    fn: "() => ({ x: [], y: [] })"
     type: scatter
-    mode: none
-    fill: tozeroy
-    fillcolor: rgba(140,140,140,0.25)
-    connectgaps: false
-    line:
-      width: 0
+    mode: markers
+    marker:
+      color: rgba(140,140,140,0.80)
+      size: 10
+      symbol: square
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Normal
     fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'normal' ? s.soc : null) }; }"
+    fn: "() => ({ x: [], y: [] })"
     type: scatter
-    mode: none
-    fill: tozeroy
-    fillcolor: rgba(50,150,255,0.30)
-    connectgaps: false
-    line:
-      width: 0
+    mode: markers
+    marker:
+      color: rgba(50,150,255,0.80)
+      size: 10
+      symbol: square
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Feed-in Priority
     fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'feedin_priority' ? s.soc : null) }; }"
+    fn: "() => ({ x: [], y: [] })"
     type: scatter
-    mode: none
-    fill: tozeroy
-    fillcolor: rgba(50,210,80,0.35)
-    connectgaps: false
-    line:
-      width: 0
+    mode: markers
+    marker:
+      color: rgba(50,210,80,0.80)
+      size: 10
+      symbol: square
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Force Charge
     fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'force_charge' ? s.soc : null) }; }"
+    fn: "() => ({ x: [], y: [] })"
     type: scatter
-    mode: none
-    fill: tozeroy
-    fillcolor: rgba(255,100,50,0.40)
-    connectgaps: false
-    line:
-      width: 0
+    mode: markers
+    marker:
+      color: rgba(255,100,50,0.80)
+      size: 10
+      symbol: square
 
   - entity: sensor.pv_control_info_predicted_soc
     name: Opportunistic Discharge
     fetch_mask: 0
-    fn: "({ entity }) => { const d = entity?.attributes?.data_actual || []; return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode === 'opportunistic_discharge' ? s.soc : null) }; }"
+    fn: "() => ({ x: [], y: [] })"
     type: scatter
-    mode: none
-    fill: tozeroy
-    fillcolor: rgba(255,200,0,0.40)
-    connectgaps: false
-    line:
-      width: 0
+    mode: markers
+    marker:
+      color: rgba(255,200,0,0.80)
+      size: 10
+      symbol: square
 
-  # ── Live prediction line: red = no extra load, green = extra load active ─
+  # ── Live prediction line: red = normal, green = extra load active ────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction
     fetch_mask: 0
@@ -111,7 +129,7 @@ entities:
     yaxis: y2
     type: bar
     marker:
-      color: rgba(255,255,255,0.20)
+      color: rgba(255,255,255,0.15)
 
 layout:
   xaxis:
@@ -134,6 +152,7 @@ layout:
   legend:
     orientation: h
     y: -0.15
+  barmode: overlay
   margin:
     t: 30
     b: 70
