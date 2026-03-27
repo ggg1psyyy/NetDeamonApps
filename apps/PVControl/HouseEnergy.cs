@@ -442,7 +442,13 @@ namespace NetDeamon.apps.PVControl
       {
         var end = FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
         if (end is null) return null;
-        if (load.Config.MinWindowMinutes > 0 && (end.Value - currentSlot).TotalMinutes < load.Config.MinWindowMinutes)
+        // Skip min-window guard when the natural charge duration is already shorter than
+        // MinWindowMinutes: the session will end cleanly via "target reached" next cycle,
+        // so oscillation is not a concern. Only apply the guard for longer natural sessions
+        // where a marginal window could flip on/off between cycles.
+        if (durationMinutes >= load.Config.MinWindowMinutes &&
+            load.Config.MinWindowMinutes > 0 &&
+            (end.Value - currentSlot).TotalMinutes < load.Config.MinWindowMinutes)
           return null;
         return end;
       }
