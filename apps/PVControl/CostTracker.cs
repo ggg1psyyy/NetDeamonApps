@@ -11,7 +11,7 @@ public class CostTracker
 {
   // Plausible range for battery average cost. Values outside this are floating-point
   // artefacts (underflow → near-zero, bad initial state → sky-high) and are clamped.
-  private const float BatteryAvgCostMinEurPerKwh = 0f;
+  private const float BatteryAvgCostMinEurPerKwh = 0.0001f;
   private const float BatteryAvgCostMaxEurPerKwh = 1.0f;
 
   private float _batteryAvgCostPerKwh;
@@ -38,7 +38,7 @@ public class CostTracker
       // Use numericalGetBaseValue:false — the value is stored raw in €/kWh, no unit conversion needed.
       // Reject values outside the plausible range (e.g. underflow artefacts, corrupt state).
       if (value != null && value.TryGetStateValue(out float v, numericalGetBaseValue: false)
-          && v > 1e-6f && v <= BatteryAvgCostMaxEurPerKwh)
+          && v >= BatteryAvgCostMinEurPerKwh && v <= BatteryAvgCostMaxEurPerKwh)
         _batteryAvgCostPerKwh = v;
     }
   }
