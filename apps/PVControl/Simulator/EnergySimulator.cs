@@ -262,7 +262,7 @@ public static class EnergySimulator
       // Case A: during PV peak, battery will hit 100 % anyway → export the overflow now
       // at today's price (even if not a daily maximum) rather than wasting it
       if (!need.NeedToCharge && inPVPeriod && maxSocDurationCalc > maxSocDuration
-          && exportPriceNow >= 1 && exportPriceNow >= exportPriceNextHour
+          && exportPriceNow >= 0.01f && exportPriceNow >= exportPriceNextHour
           && simulatedSoc > (input.GetEffectiveMinSoC()) + 3)
         return new InverterState(InverterModes.feedin_priority, ForceChargeReasons.OpportunisticDischarge);
 

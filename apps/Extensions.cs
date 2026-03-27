@@ -125,23 +125,23 @@ namespace NetDeamon.apps
     {
       return date.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz");
     }
-    public static int GetUnitMultiplicator(this Entity entity)
+    public static float GetUnitMultiplicator(this Entity entity)
     {
       if (!entity.TryGetJsonAttribute("unit_of_measurement", out JsonElement unitAttr))
-        return 1;
+        return 1f;
       string unit = unitAttr.ToString().ToLower();
       if (unit is not null && unit.Length > 1)
       {
         if (unit.StartsWith("ct"))
-          return 1;
+          return 0.01f;  // ct → € (base unit is €)
         if (unit.StartsWith('€') || unit.StartsWith("eur"))
-          return 100;
+          return 1f;
         if (unit.StartsWith('k'))
-          return 1000;
+          return 1000f;
         if (unit.StartsWith('m'))
-          return 1000000;
+          return 1000000f;
       }
-      return 1;
+      return 1f;
     }
     public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true)
     {
