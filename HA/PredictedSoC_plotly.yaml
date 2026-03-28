@@ -1,6 +1,7 @@
 type: custom:plotly-graph
 title: Predicted SoC vs True SoC
-hours_to_show: 0
+hours_to_show: 72
+time_offset: 48h
 refresh_interval: 60
 
 entities:
@@ -118,10 +119,9 @@ entities:
       color: rgba(0,230,80,0.95)
       width: 2
 
-  # ── True SoC (history-based, 24 h) ──────────────────────────────────────
+  # ── True SoC (history-based) ─────────────────────────────────────────────
   - entity: sensor.solax_battery_capacity
     name: True SoC
-    hours_to_show: 24
     type: scatter
     mode: lines+markers
     line:
@@ -149,9 +149,9 @@ entities:
 
 layout:
   xaxis:
-    # hours_to_show: 0 globally disables automatic range locking.
-    # autorange fits the x-axis to all trace data including future prediction bars.
-    autorange: true
+    # Single fn: returning [start_ms, end_ms] — range must be one expression, not two array items.
+    # hours_to_show:72 + time_offset:48h means the window is [now-24h, now+48h].
+    range: "fn:() => [Date.now() - 24*3600*1000, Date.now() + 48*3600*1000]"
   yaxis:
     title: SoC (%)
     range:
