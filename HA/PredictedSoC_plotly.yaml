@@ -1,176 +1,77 @@
 type: custom:plotly-graph
-title: Predicted SoC vs True SoC
-hours_to_show: 72
-time_offset: 48h
+title: Predicted SoC
 refresh_interval: 60
 
 entities:
-  # ── SoC bars, colored per mode ──────────────────────────────────────────
+  # ── Past: solid line ──────────────────────────────────────────────────────
   - entity: sensor.pv_control_info_predicted_soc
-    name: SoC (mode)
-    fn: >
-      ({ hass }) => {
-        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
-        const c = {
-          past:                   'rgba(140,140,140,0.35)',
-          normal:                 'rgba(50,150,255,0.50)',
-          automatic:              'rgba(50,150,255,0.45)',
-          feedin_priority:        'rgba(50,210,80,0.60)',
-          force_charge:           'rgba(255,100,50,0.65)',
-          force_charge_grid_only: 'rgba(255,150,50,0.65)',
-          grid_only:              'rgba(180,80,220,0.65)',
-          force_discharge:        'rgba(255,200,0,0.65)',
-          opportunistic_discharge:'rgba(255,200,0,0.65)',
-          house_only:             'rgba(160,160,100,0.50)',
-          reset:                  'rgba(220,50,50,0.65)',
-        };
-        return {
-          x: d.map(s => new Date(s.datetime)),
-          y: d.map(s => s.soc),
-          marker: { color: d.map(s => c[s.mode] || 'rgba(100,100,100,0.4)') },
-          width: 900000,
-        };
-      }
-    type: bar
+    name: Predicted SoC
+    filters:
+      - fn: |-
+          ({ meta }) => {
+            const now = new Date();
+            const d = meta.data_actual.filter(s => new Date(s.datetime) <= now);
+            return {
+              xs: d.map(({ datetime }) => new Date(datetime)),
+              ys: d.map(({ soc }) => soc),
+            };
+          }
+    type: scatter
+    mode: lines
+    line:
+      color: lightblue
+      width: 2
+      shape: spline
+
+  # ── Future: dotted line ───────────────────────────────────────────────────
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Predicted SoC (future)
     showlegend: false
-
-  # ── Dummy legend entries ──────────────────────────────────────────────────
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Past
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(140,140,140,0.80)
-      size: 10
-      symbol: square
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Normal / Auto
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(50,150,255,0.80)
-      size: 10
-      symbol: square
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Feed-in Priority
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(50,210,80,0.80)
-      size: 10
-      symbol: square
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Force Charge
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(255,100,50,0.80)
-      size: 10
-      symbol: square
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Force Discharge / Opportunistic
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(255,200,0,0.80)
-      size: 10
-      symbol: square
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Grid / House Only
-    fn: "() => ({ x: [], y: [] })"
-    type: scatter
-    mode: markers
-    marker:
-      color: rgba(180,80,220,0.80)
-      size: 10
-      symbol: square
-
-  # ── Live prediction line: red = no extra load, green = extra load active ─
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Live prediction
-    fn: >
-      ({ hass }) => {
-        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
-        return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && !s.extra_load ? s.soc : null) };
-      }
+    filters:
+      - fn: |-
+          ({ meta }) => {
+            const now = new Date();
+            const d = meta.data_actual.filter(s => new Date(s.datetime) >= now);
+            return {
+              xs: d.map(({ datetime }) => new Date(datetime)),
+              ys: d.map(({ soc }) => soc),
+            };
+          }
     type: scatter
     mode: lines
-    connectgaps: false
-    line:
-      color: rgba(255,80,80,0.95)
-      width: 2
-
-  - entity: sensor.pv_control_info_predicted_soc
-    name: Live prediction (extra load)
-    fn: >
-      ({ hass }) => {
-        const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
-        return { x: d.map(s => new Date(s.datetime)), y: d.map(s => s.mode !== 'past' && s.extra_load ? s.soc : null) };
-      }
-    type: scatter
-    mode: lines
-    connectgaps: false
-    line:
-      color: rgba(0,230,80,0.95)
-      width: 2
-
-  # ── True SoC (history-based) ─────────────────────────────────────────────
-  - entity: sensor.solax_battery_capacity
-    name: True SoC
-    type: scatter
-    mode: lines+markers
     line:
       color: cyan
       width: 2
-    marker:
-      color: cyan
-      size: 3
+      shape: spline
+      dash: dot
 
-  # ── Brutto import price (dotted line on y2) ───────────────────────────────
+  # ── Import price (y2) ─────────────────────────────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
     name: Import Price
-    fn: >
-      ({ hass }) => {
-        const d = hass.states['sensor.pv_control_current_import_price_brutto']?.attributes?.data || [];
-        return { x: d.map(s => new Date(s.start_time)), y: d.map(s => s.price_per_kwh) };
-      }
     yaxis: y2
+    filters:
+      - fn: |-
+          ({ meta }) => ({
+            xs: meta.data.map(({ start_time }) => new Date(start_time)),
+            ys: meta.data.map(({ price_per_kwh }) => price_per_kwh),
+          })
     type: scatter
     mode: lines
     line:
-      color: rgba(255,255,255,0.55)
+      color: grey
       width: 1
-      dash: dot
 
 layout:
   xaxis:
-    # Single fn: returning [start_ms, end_ms] — range must be one expression, not two array items.
-    # hours_to_show:72 + time_offset:48h means the window is [now-24h, now+48h].
-    range: "fn:() => [Date.now() - 24*3600*1000, Date.now() + 48*3600*1000]"
+    autorange: true
   yaxis:
     title: SoC (%)
-    range:
-      - 0
-      - 105
-    fixedrange: false
+    range: [0, 105]
+    autorange: false
   yaxis2:
     title: Price (€/kWh)
     overlaying: "y"
     side: right
-    range:
-      - 0
-      - 0.50
+    range: [0, 0.55]
     showgrid: false
     tickformat: ".2f"
-  legend:
-    orientation: h
-    y: -0.15
-  barmode: overlay
-  margin:
-    t: 30
-    b: 70
