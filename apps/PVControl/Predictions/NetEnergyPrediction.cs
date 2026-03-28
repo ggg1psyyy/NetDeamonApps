@@ -60,7 +60,8 @@ namespace NetDeamon.apps.PVControl.Predictions
       int remaining = slotsToCorrect;
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
       {
-        if (key < now || remaining <= 0) break;
+        if (remaining <= 0) break;
+        if (key < now) continue;
         int predicted = result[key];
         result[key] = predicted + (avgPerSlot - predicted) * remaining / slotsToCorrect;
         remaining--;
