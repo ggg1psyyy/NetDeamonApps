@@ -57,7 +57,10 @@ public static class EnergySimulator
     int currentEnergyWh = input.StartSocPercent * input.BatteryCapacityWh / 100;
     var currentMode = input.CurrentMode;
 
-    for (var slotTime = startSlot; slotTime < endSlot; slotTime = slotTime.AddMinutes(SlotMinutes))
+    // Step via UTC so DST spring-forward doesn't produce duplicate UTC slots (e.g. 02:45+01:00
+    // followed by 03:00+02:00 both map to the same UTC window). ToUniversalTime/ToLocalTime
+    // correctly skips the non-existent local hour and advances exactly 15 min in real time.
+    for (var slotTime = startSlot; slotTime < endSlot; slotTime = slotTime.ToUniversalTime().AddMinutes(SlotMinutes).ToLocalTime())
     {
       // Energy values for this slot (Wh per 15-min period)
       int pvWh = input.PVPredictionWh.GetValueOrDefault(slotTime, 0);
@@ -135,7 +138,7 @@ public static class EnergySimulator
     var result = new Dictionary<DateTime, int>();
     int energy = currentSocPercent * input.BatteryCapacityWh / 100;
 
-    for (var t = startSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
+    for (var t = startSlot; t < endSlot; t = t.ToUniversalTime().AddMinutes(SlotMinutes).ToLocalTime())
     {
       int pv = input.PVPredictionWh.GetValueOrDefault(t, 0);
       int load = input.LoadPredictionWh.GetValueOrDefault(t, 0);
