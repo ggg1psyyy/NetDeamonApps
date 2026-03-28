@@ -157,21 +157,19 @@ entities:
     name: Predicted SoC (future)
     showlegend: false
     filters:
-      - fn: |-
-          ({ vars }) => {
-            const now = new Date();
-            const future = vars.d.filter(s => new Date(s.datetime) >= now);
-            return {
-              xs: future.map(({ datetime }) => new Date(datetime)),
-              ys: future.map(({ soc }) => soc),
-              marker: {
-                color: future.map(({ soc }) => `hsl(${(soc * 1.2).toFixed(0)},70%,78%)`),
-                size: 5,
-              },
-            };
-          }
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(({ soc }) => soc) })"
     type: scatter
     mode: markers
+    marker:
+      color: $fn ({ vars }) => vars.f.map(({ soc }) => soc)
+      colorscale:
+        - [0,    "rgb(230,120,120)"]
+        - [0.5,  "rgb(235,220,120)"]
+        - [1,    "rgb(120,210,130)"]
+      cmin: 0
+      cmax: 100
+      size: 5
+      showscale: false
 
   # ── Import price (y2) ─────────────────────────────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
