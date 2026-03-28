@@ -149,10 +149,10 @@ entities:
 layout:
   xaxis:
     # Show 24 h history + 48 h future regardless of hours_to_show.
-    # fn: lambdas return Date objects; plotly-graph-card converts them to axis range values.
+    # fn: lambdas must return ISO strings — plotly does not accept JS Date objects as range values.
     range:
-      - "fn:() => new Date(Date.now() - 24*3600*1000)"
-      - "fn:() => new Date(Date.now() + 48*3600*1000)"
+      - "fn:() => new Date(Date.now() - 24*3600*1000).toISOString()"
+      - "fn:() => new Date(Date.now() + 48*3600*1000).toISOString()"
   yaxis:
     title: SoC (%)
     range:
