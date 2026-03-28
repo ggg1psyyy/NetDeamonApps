@@ -1,6 +1,6 @@
 type: custom:plotly-graph
 title: Predicted SoC vs True SoC
-hours_to_show: 24
+hours_to_show: 0
 refresh_interval: 60
 
 entities:
@@ -121,6 +121,7 @@ entities:
   # ── True SoC (history-based, 24 h) ──────────────────────────────────────
   - entity: sensor.solax_battery_capacity
     name: True SoC
+    hours_to_show: 24
     type: scatter
     mode: lines+markers
     line:
@@ -148,11 +149,9 @@ entities:
 
 layout:
   xaxis:
-    # Show 24 h history + 48 h future regardless of hours_to_show.
-    # fn: lambdas must return ISO strings — plotly does not accept JS Date objects as range values.
-    range:
-      - "fn:() => new Date(Date.now() - 24*3600*1000).toISOString()"
-      - "fn:() => new Date(Date.now() + 48*3600*1000).toISOString()"
+    # hours_to_show: 0 globally disables automatic range locking.
+    # autorange fits the x-axis to all trace data including future prediction bars.
+    autorange: true
   yaxis:
     title: SoC (%)
     range:
