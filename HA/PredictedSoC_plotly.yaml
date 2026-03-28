@@ -5,24 +5,28 @@ refresh_interval: 60
 
 entities:
   # ── SoC bars, colored per mode ──────────────────────────────────────────
-  # Uses hass.states[...] (not entity) to always get the live current state.
-  # entity.attributes is the state at last history-fetch time and can be stale.
   - entity: sensor.pv_control_info_predicted_soc
     name: SoC (mode)
     fn: >
       ({ hass }) => {
         const d = hass.states['sensor.pv_control_info_predicted_soc']?.attributes?.data_actual || [];
         const c = {
-          past:                    'rgba(140,140,140,0.35)',
-          normal:                  'rgba(50,150,255,0.50)',
-          feedin_priority:         'rgba(50,210,80,0.60)',
-          force_charge:            'rgba(255,100,50,0.65)',
-          opportunistic_discharge: 'rgba(255,200,0,0.65)',
+          past:                   'rgba(140,140,140,0.35)',
+          normal:                 'rgba(50,150,255,0.50)',
+          automatic:              'rgba(50,150,255,0.45)',
+          feedin_priority:        'rgba(50,210,80,0.60)',
+          force_charge:           'rgba(255,100,50,0.65)',
+          force_charge_grid_only: 'rgba(255,150,50,0.65)',
+          grid_only:              'rgba(180,80,220,0.65)',
+          force_discharge:        'rgba(255,200,0,0.65)',
+          opportunistic_discharge:'rgba(255,200,0,0.65)',
+          house_only:             'rgba(160,160,100,0.50)',
+          reset:                  'rgba(220,50,50,0.65)',
         };
         return {
           x: d.map(s => new Date(s.datetime)),
           y: d.map(s => s.soc),
-          marker: { color: d.map(s => c[s.mode] || 'gray') },
+          marker: { color: d.map(s => c[s.mode] || 'rgba(100,100,100,0.4)') },
           width: 900000,
         };
       }
@@ -39,9 +43,8 @@ entities:
       color: rgba(140,140,140,0.80)
       size: 10
       symbol: square
-
   - entity: sensor.pv_control_info_predicted_soc
-    name: Normal
+    name: Normal / Auto
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -49,7 +52,6 @@ entities:
       color: rgba(50,150,255,0.80)
       size: 10
       symbol: square
-
   - entity: sensor.pv_control_info_predicted_soc
     name: Feed-in Priority
     fn: "() => ({ x: [], y: [] })"
@@ -59,7 +61,6 @@ entities:
       color: rgba(50,210,80,0.80)
       size: 10
       symbol: square
-
   - entity: sensor.pv_control_info_predicted_soc
     name: Force Charge
     fn: "() => ({ x: [], y: [] })"
@@ -69,9 +70,8 @@ entities:
       color: rgba(255,100,50,0.80)
       size: 10
       symbol: square
-
   - entity: sensor.pv_control_info_predicted_soc
-    name: Opportunistic Discharge
+    name: Force Discharge / Opportunistic
     fn: "() => ({ x: [], y: [] })"
     type: scatter
     mode: markers
@@ -79,8 +79,17 @@ entities:
       color: rgba(255,200,0,0.80)
       size: 10
       symbol: square
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Grid / House Only
+    fn: "() => ({ x: [], y: [] })"
+    type: scatter
+    mode: markers
+    marker:
+      color: rgba(180,80,220,0.80)
+      size: 10
+      symbol: square
 
-  # ── Live prediction line: red = normal, green = extra load active ────────
+  # ── Live prediction line: red = no extra load, green = extra load active ─
   - entity: sensor.pv_control_info_predicted_soc
     name: Live prediction
     fn: >
@@ -121,7 +130,7 @@ entities:
       color: cyan
       size: 3
 
-  # ── Brutto import price (line on y2) ─────────────────────────────────────
+  # ── Brutto import price (dotted line on y2) ───────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
     name: Import Price
     fn: >
@@ -133,13 +142,17 @@ entities:
     type: scatter
     mode: lines
     line:
-      color: rgba(255,255,255,0.50)
+      color: rgba(255,255,255,0.55)
       width: 1
       dash: dot
 
 layout:
   xaxis:
-    autorange: true
+    # Show 24 h history + 48 h future regardless of hours_to_show.
+    # fn: lambdas return Date objects; plotly-graph-card converts them to axis range values.
+    range:
+      - "fn:() => new Date(Date.now() - 24*3600*1000)"
+      - "fn:() => new Date(Date.now() + 48*3600*1000)"
   yaxis:
     title: SoC (%)
     range:
