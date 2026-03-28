@@ -11,20 +11,18 @@ namespace NetDeamon.apps.PVControl.Predictions
     private readonly Prediction _LoadPrediction;
     private readonly RunningIntAverage _CurrentLoad;
     private readonly RunningIntAverage _CurrentPV;
-    private readonly RunningIntAverage _CurrentPVLong;
     private readonly bool _AdjustToRunningAverage;
 
     public NetEnergyPrediction(Prediction solarForecast, Prediction loadPrediction,
-      RunningIntAverage currentLoad, RunningIntAverage currentPV, RunningIntAverage currentPVLong,
+      RunningIntAverage currentLoad, RunningIntAverage currentPV,
       bool adjustToRunningAverage = true)
     {
       _SolarForecast = solarForecast;
       _LoadPrediction = loadPrediction;
       _CurrentLoad = currentLoad;
       _CurrentPV = currentPV;
-      _CurrentPVLong = currentPVLong;
       _AdjustToRunningAverage = adjustToRunningAverage;
-      if (currentLoad is null || currentPV is null || currentPVLong is null)
+      if (currentLoad is null || currentPV is null)
         _AdjustToRunningAverage = false;
       Initialize("NetEnergy Prediction");
     }
@@ -33,8 +31,13 @@ namespace NetDeamon.apps.PVControl.Predictions
     {
       Dictionary<DateTime, int> result = [];
       var now = DateTime.Now;
+
+      int actualPVWh = 0;
+      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float pvKwh))
+        actualPVWh = (int)(pvKwh * 1000);
+
       var correctedPV = _AdjustToRunningAverage
-        ? WithRunningAvgCorrection(_SolarForecast.TodayAndTomorrow, _CurrentPV.GetAverage(), _CurrentPVLong.GetAverage(), now)
+        ? WithRunningAvgCorrection(_SolarForecast.TodayAndTomorrow, _CurrentPV.GetAverage(), actualPVWh, now)
         : _SolarForecast.TodayAndTomorrow;
       var correctedLoad = _AdjustToRunningAverage
         ? WithRunningAvgCorrection(_LoadPrediction.TodayAndTomorrow, _CurrentLoad.GetAverage(), now)
@@ -53,25 +56,27 @@ namespace NetDeamon.apps.PVControl.Predictions
     }
 
     /// <summary>
-    /// PV overload: applies a day-scale ratio (derived from the 45-min long average vs the current
-    /// slot forecast) to all remaining today slots, then ramps the near-term 4 slots from the
-    /// 5-min short average down to the day-scaled values.  Tomorrow is untouched.
-    /// Day-scale is skipped when the current slot forecast is below 50 Wh (night/dawn/dusk).
+    /// PV overload: applies a day-scale ratio (actual PV energy today / sum of forecast slots
+    /// from midnight to now) to all remaining today slots, then ramps the near-term 4 slots
+    /// from the 5-min short average down to the day-scaled values.  Tomorrow is untouched.
+    /// Day-scale is skipped when the forecast sum so far is below 50 Wh (night/dawn/dusk).
     /// </summary>
     public static Dictionary<DateTime, int> WithRunningAvgCorrection(
-      Dictionary<DateTime, int> raw, int shortAvgW, int longAvgW, DateTime now)
+      Dictionary<DateTime, int> raw, int shortAvgW, int actualPVEnergyWh, DateTime now)
     {
-      var result = new Dictionary<DateTime, int>(raw);
-      var currentSlot = now.RoundToNearestQuarterHour();
-      var endOfToday  = now.Date.AddDays(1);
+      var result     = new Dictionary<DateTime, int>(raw);
+      var today      = now.Date;
+      var endOfToday = today.AddDays(1);
 
-      // Compute day-scale ratio from long average; skip at night
+      // Sum forecast slots from midnight up to (not including) now — same window as actual energy
+      int forecastSumWh = raw
+        .Where(kvp => kvp.Key >= today && kvp.Key < now)
+        .Sum(kvp => kvp.Value);
+
+      // Compute day-scale ratio; skip before meaningful generation has been forecast
       double ratio = 1.0;
-      if (raw.TryGetValue(currentSlot, out int currentForecast) && currentForecast >= 50)
-      {
-        int longAvgPerSlot = longAvgW / 4;
-        ratio = Math.Clamp((double)longAvgPerSlot / currentForecast, 0.0, 2.0);
-      }
+      if (forecastSumWh >= 50)
+        ratio = Math.Clamp((double)actualPVEnergyWh / forecastSumWh, 0.0, 2.0);
 
       // Apply day-scale to all remaining today slots
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
@@ -89,7 +94,7 @@ namespace NetDeamon.apps.PVControl.Predictions
       {
         if (remaining <= 0) break;
         if (key < now) continue;
-        int scaled = result[key]; // already day-scaled above
+        int scaled = result[key];
         result[key] = scaled + (shortAvgPerSlot - scaled) * remaining / slotsToCorrect;
         remaining--;
       }

@@ -23,7 +23,6 @@ namespace NetDeamon.apps.PVControl
   {
     private readonly RunningIntAverage _loadRunningAverage;
     private readonly RunningIntAverage _pvRunningAverage;
-    private readonly RunningIntAverage _pvLongRunningAverage;
     private readonly RunningIntAverage _gridRunningAverage;
     private string _currentInverterRunMode = "unknown";
     public Prediction Prediction_Load
@@ -47,14 +46,10 @@ namespace NetDeamon.apps.PVControl
         _loadRunningAverage.AddValue(load);
 
       _pvRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
-      _pvLongRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(45));
       if (PVCC_Config.CurrentPVPowerEntity is null)
         throw new NullReferenceException("CurrentPVPowerEntity not available");
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
-      {
         _pvRunningAverage.AddValue(pv);
-        _pvLongRunningAverage.AddValue(pv);
-      }
 
       _gridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
@@ -78,7 +73,7 @@ namespace NetDeamon.apps.PVControl
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
 
-      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, _pvLongRunningAverage, true);
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, true);
 
       if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
@@ -174,7 +169,6 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
         _pvRunningAverage.AddValue(pv);
-        _pvLongRunningAverage.AddValue(pv);
       }
       if (entity.EntityId == PVCC_Config.DailyExportEnergyEntity?.EntityId && PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float export))
       {
@@ -322,7 +316,7 @@ namespace NetDeamon.apps.PVControl
         ImportPrices = Prices.PriceListImport,
         ExportPrices = Prices.PriceListExport,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
-        PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), _pvLongRunningAverage.GetAverage(), now),
+        PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), ActualPVEnergyTodayWh(), now),
         ExtraLoads = extraLoads ?? [],
         EnableCheapForceCharge = EnableCheapForceCharge,
         OpportunisticDischarge = OpportunisticDischarge,
@@ -666,6 +660,13 @@ namespace NetDeamon.apps.PVControl
     public int CurrentAverageHouseLoad => _loadRunningAverage.GetAverage();
 
     public int CurrentAveragePVPower => _pvRunningAverage.GetAverage();
+
+    private int ActualPVEnergyTodayWh()
+    {
+      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float kWh))
+        return (int)(kWh * 1000);
+      return 0;
+    }
 
     public int CurrentAverageGridPower => _gridRunningAverage.GetAverage() * -1;
 
