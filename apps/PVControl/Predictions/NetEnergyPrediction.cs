@@ -28,34 +28,44 @@ namespace NetDeamon.apps.PVControl.Predictions
     {
       Dictionary<DateTime, int> result = [];
       var now = DateTime.Now;
-      int diffLoad = 0;
-      int diffPV = 0;
-      int quarterHourCount = 4;
-      foreach (var item in _LoadPrediction.TodayAndTomorrow)
+      var correctedPV   = _AdjustToRunningAverage
+        ? WithRunningAvgCorrection(_SolarForecast.TodayAndTomorrow, _CurrentPV.GetAverage(), now)
+        : _SolarForecast.TodayAndTomorrow;
+      var correctedLoad = _AdjustToRunningAverage
+        ? WithRunningAvgCorrection(_LoadPrediction.TodayAndTomorrow, _CurrentLoad.GetAverage(), now)
+        : _LoadPrediction.TodayAndTomorrow;
+
+      foreach (var item in correctedLoad)
       {
-        if (!_SolarForecast.TodayAndTomorrow.TryGetValue(item.Key, out int value))
-        { 
-          value = 0;
+        if (!correctedPV.TryGetValue(item.Key, out int pv))
+        {
+          pv = 0;
           PVCC_Logger.LogError("Could not find SolarForeCast for {date}", item.Key);
         }
-        // adjust for actual values and revert to the original prediction over an hour
-        int predictedLoad = item.Value;
-        int predictedPV = value;
-        if (item.Key >= now && _AdjustToRunningAverage && quarterHourCount > 0)
-        {
-          int avgLoad = _CurrentLoad.GetAverage() / 4;
-          int avgPV = _CurrentPV.GetAverage() / 4;
-
-          diffLoad = (avgLoad - predictedLoad) * 1/4 * quarterHourCount;
-          diffPV = (avgPV - predictedPV) * 1/4 * quarterHourCount;
-
-          quarterHourCount--;
-          predictedLoad += diffLoad;
-          predictedPV += diffPV;
-        }
-        result.Add(item.Key, predictedPV - predictedLoad);
+        result.Add(item.Key, pv - item.Value);
       }
       return result.OrderBy(o => o.Key).ToDictionary();
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="raw"/> with the next <paramref name="slotsToCorrect"/>
+    /// future slots blended toward <paramref name="runningAvgW"/> (in watts).
+    /// Slot 0 gets a full correction, slot 1 gets 75%, …, slot N-1 gets 1/N — then raw prediction resumes.
+    /// </summary>
+    public static Dictionary<DateTime, int> WithRunningAvgCorrection(
+      Dictionary<DateTime, int> raw, int runningAvgW, DateTime now, int slotsToCorrect = 4)
+    {
+      var result = new Dictionary<DateTime, int>(raw);
+      int avgPerSlot = runningAvgW / 4;  // W → Wh per 15-min slot
+      int remaining = slotsToCorrect;
+      foreach (var key in result.Keys.OrderBy(k => k).ToList())
+      {
+        if (key < now || remaining <= 0) break;
+        int predicted = result[key];
+        result[key] = predicted + (avgPerSlot - predicted) * remaining / slotsToCorrect;
+        remaining--;
+      }
+      return result;
     }
   }
 }

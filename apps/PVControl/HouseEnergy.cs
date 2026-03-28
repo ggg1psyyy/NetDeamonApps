@@ -316,7 +316,7 @@ namespace NetDeamon.apps.PVControl
         ImportPrices = Prices.PriceListImport,
         ExportPrices = Prices.PriceListExport,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
-        PVPredictionWh = Prediction_PV.TodayAndTomorrow,
+        PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), now),
         ExtraLoads = extraLoads ?? [],
         EnableCheapForceCharge = EnableCheapForceCharge,
         OpportunisticDischarge = OpportunisticDischarge,
