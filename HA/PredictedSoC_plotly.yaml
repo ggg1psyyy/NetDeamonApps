@@ -152,7 +152,7 @@ entities:
       width: 2
       shape: spline
 
-  # ── SoC line on top: dotted future ────────────────────────────────────────
+  # ── SoC line on top: gradient-colored future (red=0% → green=100%, pastel) ─
   - entity: sensor.pv_control_info_predicted_soc
     name: Predicted SoC (future)
     showlegend: false
@@ -164,15 +164,14 @@ entities:
             return {
               xs: future.map(({ datetime }) => new Date(datetime)),
               ys: future.map(({ soc }) => soc),
+              marker: {
+                color: future.map(({ soc }) => `hsl(${(soc * 1.2).toFixed(0)},70%,78%)`),
+                size: 5,
+              },
             };
           }
     type: scatter
-    mode: lines
-    line:
-      color: cyan
-      width: 2
-      shape: spline
-      dash: dot
+    mode: markers
 
   # ── Import price (y2) ─────────────────────────────────────────────────────
   - entity: sensor.pv_control_current_import_price_brutto
