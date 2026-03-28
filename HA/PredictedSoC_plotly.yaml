@@ -3,17 +3,146 @@ title: Predicted SoC
 refresh_interval: 60
 
 entities:
-  # ── Past: solid line ──────────────────────────────────────────────────────
+  # ── Base fill: normal/automatic = default blue (covers full SoC area) ────
+  - entity: sensor.pv_control_info_predicted_soc
+    showlegend: false
+    filters:
+      - fn: |-
+          ({ meta, vars }) => {
+            vars.d = meta.data_actual || [];
+            const now = new Date();
+            vars.f = vars.d.filter(s => new Date(s.datetime) >= now);
+            return {
+              xs: vars.f.map(({ datetime }) => new Date(datetime)),
+              ys: vars.f.map(({ soc }) => soc),
+            };
+          }
+    type: scatter
+    mode: lines
+    fill: tozeroy
+    fillcolor: "rgba(50,150,255,0.20)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  # ── Mode fills: overlap on top of base, only where mode is active ─────────
+  - entity: sensor.pv_control_info_predicted_soc
+    name: feedin_priority
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'feedin_priority' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(50,210,80,0.30)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_charge
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_charge' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,100,50,0.35)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_charge_grid_only
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_charge_grid_only' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,150,50,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: grid_only
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'grid_only' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(180,80,220,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_discharge
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_discharge' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,200,0,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: house_only
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'house_only' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(160,160,100,0.28)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: reset
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'reset' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(220,50,50,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  # ── SoC line on top: solid past ───────────────────────────────────────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Predicted SoC
     filters:
       - fn: |-
-          ({ meta }) => {
+          ({ vars }) => {
             const now = new Date();
-            const d = meta.data_actual.filter(s => new Date(s.datetime) <= now);
+            const past = vars.d.filter(s => new Date(s.datetime) <= now);
             return {
-              xs: d.map(({ datetime }) => new Date(datetime)),
-              ys: d.map(({ soc }) => soc),
+              xs: past.map(({ datetime }) => new Date(datetime)),
+              ys: past.map(({ soc }) => soc),
             };
           }
     type: scatter
@@ -23,18 +152,18 @@ entities:
       width: 2
       shape: spline
 
-  # ── Future: dotted line ───────────────────────────────────────────────────
+  # ── SoC line on top: dotted future ────────────────────────────────────────
   - entity: sensor.pv_control_info_predicted_soc
     name: Predicted SoC (future)
     showlegend: false
     filters:
       - fn: |-
-          ({ meta }) => {
+          ({ vars }) => {
             const now = new Date();
-            const d = meta.data_actual.filter(s => new Date(s.datetime) >= now);
+            const future = vars.d.filter(s => new Date(s.datetime) >= now);
             return {
-              xs: d.map(({ datetime }) => new Date(datetime)),
-              ys: d.map(({ soc }) => soc),
+              xs: future.map(({ datetime }) => new Date(datetime)),
+              ys: future.map(({ soc }) => soc),
             };
           }
     type: scatter
