@@ -304,7 +304,8 @@ public static class EnergySimulator
     if (input.EnableCheapForceCharge)
     {
       var cheapestToday = input.ImportPrices.GetCheapestWindowToday(now);
-      if (now > cheapestToday.StartTime.AddHours(-1) && now < cheapestToday.StartTime.AddHours(2))
+      if (cheapestToday.StartTime != default &&
+          now > cheapestToday.StartTime.AddHours(-1) && now < cheapestToday.StartTime.AddHours(2))
       {
         // Hysteresis: if already charging in this slot, keep going until target is reached
         if (currentMode.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice
