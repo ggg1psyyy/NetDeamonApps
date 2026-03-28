@@ -663,8 +663,8 @@ namespace NetDeamon.apps.PVControl
 
     private int ActualPVEnergyTodayWh()
     {
-      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float kWh))
-        return (int)(kWh * 1000);
+      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float wh))
+        return (int)wh;
       return 0;
     }
 

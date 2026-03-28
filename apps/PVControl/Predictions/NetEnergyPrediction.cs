@@ -33,8 +33,8 @@ namespace NetDeamon.apps.PVControl.Predictions
       var now = DateTime.Now;
 
       int actualPVWh = 0;
-      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float pvKwh))
-        actualPVWh = (int)(pvKwh * 1000);
+      if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float pvWh))
+        actualPVWh = (int)pvWh;
 
       var correctedPV = _AdjustToRunningAverage
         ? WithRunningAvgCorrection(_SolarForecast.TodayAndTomorrow, _CurrentPV.GetAverage(), actualPVWh, now)
