@@ -1,6 +1,6 @@
 type: custom:plotly-graph
 title: Predicted SoC
-refresh_interval: 60
+refresh_interval: auto
 
 entities:
   # ── Base fill: normal/automatic = default blue (covers full SoC area) ────
@@ -168,7 +168,7 @@ entities:
         - [1,    "rgb(120,210,130)"]
       cmin: 0
       cmax: 100
-      size: 5
+      size: 3
       showscale: false
 
   # ── Import price (y2) ─────────────────────────────────────────────────────
