@@ -198,7 +198,7 @@ public static class EnergySimulator
   // Pure-function equivalent of HouseEnergy.CalculateNewInverterMode.
   // All inputs are passed explicitly so this can run without any live HA state.
   // The logic is evaluated top-to-bottom; the first matching condition wins:
-  //   override → negative import → negative export →
+  //   negative import → negative export →
   //   opportunistic discharge → user force-charge slot → need-to-charge → normal
 
   private static InverterState ComputeMode(
@@ -206,12 +206,6 @@ public static class EnergySimulator
     DateTime now, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC,
     int pvWhSlot, int totalLoadWhSlot)
   {
-    // ── User override ─────────────────────────────────────────────────────────────────────
-    // The HA UI select.pv_control_mode_override lets the user lock a specific mode.
-    // All automated logic is bypassed when this is active.
-    if (input.OverrideMode != InverterModes.automatic)
-      return new InverterState(input.OverrideMode, ForceChargeReasons.UserMode);
-
     float importPriceNow = input.ImportPrices.GetPrice(now);
     float exportPriceNow = input.ExportPrices.GetPrice(now);
 

@@ -121,13 +121,6 @@ public class SimulationInput
   public required int ForceChargeTargetSocPercent { get; init; }
 
   /// <summary>
-  /// User override for the inverter mode (e.g. force the inverter to grid_only for maintenance).
-  /// When set to anything other than <see cref="InverterModes.automatic"/> all simulation logic
-  /// is bypassed and every slot returns this fixed mode.
-  /// </summary>
-  public required InverterModes OverrideMode { get; init; }
-
-  /// <summary>
   /// The inverter mode that was active at the end of the previous simulation run.
   /// Passed into the simulator so the first slot inherits hysteresis state
   /// (e.g. knowing we were already in force_charge prevents unnecessary mode flips).
@@ -202,7 +195,6 @@ public class SimulationInput
     OpportunisticDischarge = OpportunisticDischarge,
     ForceChargeMaxPrice = ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
-    OverrideMode = OverrideMode,
     CurrentMode = CurrentMode,
   };
 

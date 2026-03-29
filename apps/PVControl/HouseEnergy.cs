@@ -322,7 +322,6 @@ namespace NetDeamon.apps.PVControl
         OpportunisticDischarge = OpportunisticDischarge,
         ForceChargeMaxPrice = Prices.ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
-        OverrideMode = OverrideMode,
         CurrentMode = _currentMode,
       };
 
@@ -616,6 +615,15 @@ namespace NetDeamon.apps.PVControl
         var currentSlot = _simulationResult.Slots.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
                           ?? _simulationResult.Slots[0];
         _currentMode = currentSlot.State;
+
+        // ── User override ──────────────────────────────────────────────────────────────────
+        // Applied here (not in the simulator) so the simulation always reflects autonomous
+        // logic. The override only affects the command sent to the inverter right now.
+        if (OverrideMode != InverterModes.automatic)
+        {
+          _currentMode = new InverterState(OverrideMode, ForceChargeReasons.UserMode);
+          return _currentMode;
+        }
 
         // ── Reset signal ──────────────────────────────────────────────────────────────────
         // After the inverter returns from manual/remote mode, _resetCounter is set to 2.
