@@ -14,10 +14,10 @@ the same 15-minute slot is a known future improvement.
                     │
                     ├─ 4 × Prediction  ──► SimulationInput
                     │                              │
-                    └─ RunSimulation()  ──►  PVSimulator.Simulate()
+                    └─ RunSimulation()  ──►  EnergySimulator.Simulate()
                                                    │
-                                              SimulationSlot[]
-                                         (one slot per 15 min, 2 days)
+                                            SimulationResult
+                                         (slots + pre-computed derived values)
                                                    │
                                         ProposedState  ──► Inverter command
                                         ChargeNow      ──► Schedulable load outputs
@@ -27,13 +27,21 @@ the same 15-minute slot is a known future improvement.
 
 ## The simulation oracle
 
-`PVSimulator.Simulate(SimulationInput)` is a **pure function** — no HA, no side effects.
-It returns a two-day timeline (`List<SimulationSlot>`) with one entry every 15 minutes.
+`EnergySimulator.Simulate(SimulationInput)` is a **pure function** — no HA, no side effects.
+It returns a `SimulationResult` which wraps a two-day timeline (`IReadOnlyList<SimulationSlot>`) plus pre-computed derived values so callers never have to re-derive them from the raw slot list.
 
 Each slot contains:
 - `Time` — the 15-min bucket it covers
 - `SoC` — battery state of charge at the end of that slot
 - `State` — the `InverterState` chosen for that slot (mode + reason)
+
+`SimulationResult` pre-computes:
+- PV window boundaries (`FirstRelevantPVEnergyToday/Tomorrow`, `LastRelevantPVEnergyToday/Tomorrow`) — first/last slot where net PV > 50 Wh
+- `CurrentPVPeriod` — `BeforePV` / `InPVPeriod` / `AfterPV`
+- `WillReachMaxSocToday/Tomorrow` — whether any slot hits ≥ 99 %
+- `OvernightMinSocReached` — lowest SoC in the sunset → sunrise window
+- `ForceChargeSlots` — set of slot times where `force_charge` was chosen
+- `HasNewGridVs(baseline)` / `IsGridCheapVs(baseline)` — used by load scheduling
 
 The simulator decides slot by slot: should the inverter force-charge from grid, export,
 or run normally? All price/forecast data is baked into `SimulationInput` upfront.
@@ -52,12 +60,28 @@ Values are in **Wh per 15-min slot**.
 |---|---|---|
 | `Prediction_Load` | SQLite history (weighted avg by day-of-week) | House base load |
 | `Prediction_PV` | OpenMeteo via HA sensors (today + tomorrow kWh) | Solar production |
-| `Prediction_NetEnergy` | PV − Load | Net surplus/deficit |
+| `Prediction_NetEnergy` | PV − Load (with running-average correction) | Net surplus/deficit |
 | `Prediction_BatterySoC` | Simulation output | Battery SoC % per slot |
 
 `HourlyWeightedAverageLoadPrediction` strips historical EV/car-charging from the base load
 (`excludeScheduledLoads: true`) so scheduled loads can be added back as `ExtraLoad` without
 double-counting.
+
+### PV running-average correction (`NetEnergyPrediction.WithRunningAvgCorrection`)
+
+Applied to the PV forecast both when computing `Prediction_NetEnergy` and when building
+`SimulationInput.PVPredictionWh`. Two-stage:
+
+1. **Day-scale ratio** (all remaining today slots):
+   `ratio = actual_PV_energy_today_Wh / Σ(forecast slots midnight → now)`
+   Corrects for persistent over/under-prediction (e.g. cloudy day).
+   Skipped when forecast sum < 50 Wh (night/dawn/dusk). Clamped to [0.0, 2.0]. Tomorrow untouched.
+
+2. **Near-term 4-slot ramp** (slots 0–3 from now, applied after day-scale):
+   Blends from the 5-minute running average down to the day-scaled forecast.
+   `slot[i] = scaled[i] + (shortAvgPerSlot − scaled[i]) × (4 − i) / 4`
+
+Load uses only the near-term ramp (no day-scale — load follows historical patterns, not weather).
 
 ---
 
@@ -159,12 +183,14 @@ battery today) from incorrectly rejecting a valid solar window today.
 | `PVControl.cs` | NetDaemon app entry point; registers HA entities; 15-second cron |
 | `PVControlCommon.cs` | Static singleton holding shared dependencies (IHaContext, EntityManager, Config, Logger) |
 | `HouseEnergy.cs` | Core model: predictions, simulation, scheduling decisions, prices |
-| `Simulator/PVSimulator.cs` | Pure simulation engine |
-| `Simulator/SimulationInput.cs` | All inputs to the simulation (snapshot in time) |
+| `Simulator/EnergySimulator.cs` | Pure simulation engine |
+| `Simulator/SimulationInput.cs` | All inputs to the simulation (snapshot in time) + PV-window helpers |
+| `Simulator/SimulationResult.cs` | All outputs: slot timeline + pre-computed PV windows, SoC peaks, force-charge slots |
 | `Simulator/ExtraLoad.cs` | A load injected into a simulation (name, power, time window) |
 | `Managers/SchedulableLoadConfig.cs` | YAML config + `PVConfig` partial |
 | `Managers/SchedulableLoadRuntime.cs` | Live runtime state per load |
-| `Predictions/` | 4 prediction classes + abstract base `Prediction` |
+| `Predictions/NetEnergyPrediction.cs` | PV − load + `WithRunningAvgCorrection` (day-scale + near-term ramp) |
+| `Predictions/` | 4 prediction classes + abstract base `Prediction` + `PredictionContainer` |
 | `Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic (used only via unit tests; main flow uses simulation oracle) |
 
 ---

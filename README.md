@@ -91,7 +91,9 @@ dotnet test NetDeamonApps.Tests/
 |---|---|
 | `PredictionContainerTests` | 192-slot 15-min window validation (`DataOK`) |
 | `MidnightRolloverTests` | Load data staleness detection after midnight |
-| `SimulatorTests` | End-to-end `PVSimulator.Simulate()` with injectable inputs |
+| `SimulatorTests` | End-to-end `EnergySimulator.Simulate()` with injectable `SimulationInput` |
+| `LoadSchedulingDecisionTests` | Schmitt-trigger start/keep semantics for schedulable load decisions |
+| `RunningAvgCorrectionTests` | PV running-average correction: day-scale ratio + 4-slot near-term ramp |
 
 ---
 
