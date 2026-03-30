@@ -255,7 +255,7 @@ namespace NetDeamon.apps.PVControl
       {
         if (float.TryParse(newState, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out float value))
           _house.Prices.ForceChargeMaxPrice = value * _forceChargeMaxPriceEntity.GetUnitMultiplicator();
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, (_house.Prices.ForceChargeMaxPrice / _forceChargeMaxPriceEntity.GetUnitMultiplicator()).ToString(CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, ((float)Math.Round(_house.Prices.ForceChargeMaxPrice / _forceChargeMaxPriceEntity.GetUnitMultiplicator(), 2)).ToString(CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == _forceChargeTargetSoCEntity.EntityId && entity.State is not null)
       {
