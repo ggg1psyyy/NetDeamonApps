@@ -80,10 +80,11 @@ namespace NetDeamon.apps.PVControl.Predictions
       if (forecastSumWh >= 50)
         ratio = Math.Clamp((double)actualPVEnergyWh / forecastSumWh, 0.0, 2.0);
 
-      // Confidence: count how many slots before now had non-trivial forecast (> 20 Wh).
-      // This is a time proxy that grows with solar activity regardless of cloud cover.
-      // Full confidence is reached after 6 such slots (≈ 1.5 h after sunrise).
-      int solarSlotCount = raw.Count(kvp => kvp.Key >= today && kvp.Key < now && kvp.Value > 20);
+      // Confidence: count how many slots before now had meaningful forecast (>= 100 Wh = ~400 W).
+      // 100 Wh/slot filters out the low-irradiance dawn/dusk fringe where the ratio is unreliable.
+      // Self-seasonal: threshold is met earlier in summer, later in winter/spring.
+      // Full confidence is reached after 6 such slots (≈ 1.5 h of meaningful solar activity).
+      int solarSlotCount = raw.Count(kvp => kvp.Key >= today && kvp.Key < now && kvp.Value >= 100);
       double confidence  = Math.Clamp(solarSlotCount / 6.0, 0.0, 1.0);
 
       // Blend: near sunrise use raw forecast (ratio→1.0); full correction only after 6 solar slots.
