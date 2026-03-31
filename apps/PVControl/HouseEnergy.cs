@@ -45,7 +45,7 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
         _loadRunningAverage.AddValue(load);
 
-      _pvRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(5));
+      _pvRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(15));
       if (PVCC_Config.CurrentPVPowerEntity is null)
         throw new NullReferenceException("CurrentPVPowerEntity not available");
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
