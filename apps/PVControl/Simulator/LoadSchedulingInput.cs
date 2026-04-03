@@ -59,4 +59,12 @@ public record LoadSchedulingInput
 
   /// <summary>Max price threshold for PriorityPlus grid-import allow, in ct/kWh.</summary>
   public required float MaxPriceCt { get; init; }
+
+  /// <summary>
+  /// Absolute hardware floor SoC % (from inverter config / MinBatterySoCEntity).
+  /// Used to compute the Optimal-mode stop threshold:
+  ///   stopFloor = max(PreferredMinSoC − 10, AbsoluteMinSoC + 5)
+  /// Default 0 is safe for tests that don't exercise the Optimal stop-floor path.
+  /// </summary>
+  public int AbsoluteMinSoC { get; init; } = 0;
 }

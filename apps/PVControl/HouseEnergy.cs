@@ -504,12 +504,45 @@ namespace NetDeamon.apps.PVControl
         return;
       }
 
+      // ── Optimal mode: real-time battery SoC gate ────────────────────────────────────────────
+      // Placed before the min-window latch so a real SoC drop always takes immediate effect
+      // (latch is for simulation transients, not hardware state).
+      //
+      // Start gate: Optimal never activates when current SoC < PreferredMinimalSoC, regardless
+      //   of EnforcePreferredSoC. Prevents morning charging that would draw from an already-low
+      //   battery before PV has had a chance to recharge it.
+      //
+      // Stop gate (hysteresis): once active, continue only while
+      //   SoC ≥ max(preferred − 10 %, absolute + 5 %)
+      //   The −10 % band prevents on/off cycling near the start threshold.
+      //   The absolute+5 floor keeps the stop threshold safely above the hardware minimum
+      //   even when preferred is configured close to absolute.
+      if (load.Mode == LoadSchedulingMode.Optimal)
+      {
+        int preferred  = Battery.PreferredMinimalSoC;
+        int stopFloor  = Math.Max(preferred - 10, Battery.AbsoluteMinimalSoC + 5);
+        int currentSoC = Battery.BatterySoc;
+
+        if (!wasActive && currentSoC < preferred)
+        {
+          SetResult([], false,
+            $"Optimal: SoC {currentSoC}% < preferred min {preferred}% — waiting for battery to charge", null);
+          return;
+        }
+        if (wasActive && currentSoC < stopFloor)
+        {
+          SetResult([], false,
+            $"Optimal: SoC {currentSoC}% dropped below stop floor {stopFloor}% (preferred {preferred}% − 10%)", null);
+          return;
+        }
+      }
+
       // ── Minimum on-time latch ────────────────────────────────────────────────────────────────
       // The simulation re-runs every 15 s and at borderline SoC levels the predicate can flip
       // on/off every cycle. Once a session starts, keep it active for MinWindowMinutes before
       // allowing the simulation to stop it — same threshold already used to prevent marginal starts.
-      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV) always
-      // take immediate effect regardless of the latch.
+      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV, Optimal-SoC)
+      // always take immediate effect regardless of the latch.
       if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0)
       {
         var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;

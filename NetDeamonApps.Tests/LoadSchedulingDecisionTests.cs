@@ -11,7 +11,8 @@ namespace NetDeamonApps.Tests;
 /// Coverage:
 ///   - Off / target-reached short-circuits
 ///   - Emergency ignores PV and battery
-///   - Optimal: start requires WillReachMaxSocToday; keep ignores that flag
+///   - Optimal: start requires WillReachMaxSocToday AND SoC ≥ preferred min;
+///             keep uses Schmitt stop floor = max(preferred−10%, absolute+5%)
 ///   - Priority / PriorityPlus: Schmitt-trigger on SoC and PV
 ///   - Hysteresis: different start vs keep thresholds
 ///   - PV level variations (parametrised)
@@ -115,10 +116,54 @@ public class LoadSchedulingDecisionTests
   [Fact]
   public void Optimal_Keep_WillNotReachMaxSocToday_ButPvSurplus_ReturnsTrue()
   {
-    // Once active, socOk=true regardless of WillReachMaxSocToday
+    // Once active, WillReachMaxSocToday is irrelevant — only the SoC stop floor and PV matter.
+    // Default batterySoC=90 >> stopFloor=max(20-10, 0+5)=10 → socOk; pvOk ✓
     var input = Build(mode: LoadSchedulingMode.Optimal,
                       willReachMaxSocToday: false, netPvW: 4_000,
                       currentlyActive: true);
+    Assert.True(LoadSchedulingDecision.Decide(input));
+  }
+
+  [Fact]
+  public void Optimal_Start_BatterySoCBelowPreferredMin_ReturnsFalse()
+  {
+    // SoC(15) < preferred(20) → start gate blocks even when WillReachMaxSocToday=true
+    var input = Build(mode: LoadSchedulingMode.Optimal,
+                      batterySoC: 15, preferredMinSoC: 20,
+                      willReachMaxSocToday: true, currentlyActive: false);
+    Assert.False(LoadSchedulingDecision.Decide(input));
+  }
+
+  [Fact]
+  public void Optimal_Start_BatterySoCAtExactPreferredMin_ReturnsTrue()
+  {
+    // SoC(20) == preferred(20) — exactly at start boundary ✓
+    var input = Build(mode: LoadSchedulingMode.Optimal,
+                      batterySoC: 20, preferredMinSoC: 20,
+                      willReachMaxSocToday: true, currentlyActive: false);
+    Assert.True(LoadSchedulingDecision.Decide(input));
+  }
+
+  [Fact]
+  public void Optimal_Keep_BatterySoCBelowStopFloor_ReturnsFalse()
+  {
+    // stopFloor = max(preferred(20) - 10, absolute(12) + 5) = max(10, 17) = 17
+    // SoC(16) < 17 → stop gate fires even though PV is sufficient
+    var input = Build(mode: LoadSchedulingMode.Optimal,
+                      batterySoC: 16, preferredMinSoC: 20,
+                      willReachMaxSocToday: true, netPvW: 4_000,
+                      currentlyActive: true) with { AbsoluteMinSoC = 12 };
+    Assert.False(LoadSchedulingDecision.Decide(input));
+  }
+
+  [Fact]
+  public void Optimal_Keep_BatterySoCAtExactStopFloor_ReturnsTrue()
+  {
+    // stopFloor = max(20-10, 12+5) = 17; SoC(17) == 17 — exactly at boundary ✓
+    var input = Build(mode: LoadSchedulingMode.Optimal,
+                      batterySoC: 17, preferredMinSoC: 20,
+                      willReachMaxSocToday: true, netPvW: 4_000,
+                      currentlyActive: true) with { AbsoluteMinSoC = 12 };
     Assert.True(LoadSchedulingDecision.Decide(input));
   }
 

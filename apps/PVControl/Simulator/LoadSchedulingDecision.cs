@@ -63,15 +63,18 @@ public static class LoadSchedulingDecision
     // ── Battery SoC condition ─────────────────────────────────────────────
     // Each mode defines different SoC requirements; hysteresis relaxes the threshold
     // once the load is already active (CurrentlyActive = true).
-    // Optimal-start: only begin when the simulation says the house battery will
-    //   reach 100 % today anyway (excess solar available).
-    // Optimal-keep:  no SoC threshold — once started, let the PV condition
-    //   (pvOk above) decide when to stop.
+    // Optimal-start: simulation predicts 100 % today AND current SoC ≥ preferred min
+    //   (regardless of EnforcePreferredSoC). Prevents morning activation on a depleted battery.
+    // Optimal-keep:  Schmitt-trigger stop floor = max(preferred − 10 %, absolute + 5 %).
+    //   The 10 %-wide hysteresis band below the start threshold prevents on/off cycling.
+    //   The absolute+5 floor keeps the stop threshold safely above the hardware minimum.
     // Priority/PriorityPlus: classic Schmitt-trigger on preferred-min SoC.
     bool socOk = (input.Mode, input.CurrentlyActive) switch
     {
-      (LoadSchedulingMode.Optimal, false) => input.WillReachMaxSocToday,
-      (LoadSchedulingMode.Optimal, true)  => true,
+      (LoadSchedulingMode.Optimal, false) =>
+        input.WillReachMaxSocToday && input.BatterySoC >= input.PreferredMinSoC,
+      (LoadSchedulingMode.Optimal, true) =>
+        input.BatterySoC >= Math.Max(input.PreferredMinSoC - 10, input.AbsoluteMinSoC + 5),
 
       (LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus, false) =>
         input.BatterySoC >= input.PreferredMinSoC + input.HysteresisMarginPct,
@@ -89,18 +92,24 @@ public static class LoadSchedulingDecision
     }
     if (!socOk)
     {
-      // Only reachable for Optimal-start (WillReachMaxSocToday=false) and Priority/PriorityPlus.
       int socThreshold = (input.Mode, input.CurrentlyActive) switch
       {
+        (LoadSchedulingMode.Optimal, false) => input.PreferredMinSoC,
+        (LoadSchedulingMode.Optimal, true)  => Math.Max(input.PreferredMinSoC - 10, input.AbsoluteMinSoC + 5),
         (LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus, false) =>
           input.PreferredMinSoC + input.HysteresisMarginPct,
         (LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus, true) =>
           input.PreferredMinSoC,
         _ => 101,
       };
-      string socDesc = input.Mode == LoadSchedulingMode.Optimal
-        ? $"won't reach 100% today (bat={input.BatterySoC}%)"
-        : $"bat={input.BatterySoC}% < {socThreshold}%";
+      string socDesc = (input.Mode, input.CurrentlyActive) switch
+      {
+        (LoadSchedulingMode.Optimal, false) when !input.WillReachMaxSocToday =>
+          $"won't reach 100% today (bat={input.BatterySoC}%)",
+        (LoadSchedulingMode.Optimal, _) =>
+          $"bat={input.BatterySoC}% < {socThreshold}% (preferred {input.PreferredMinSoC}% − 10%)",
+        _ => $"bat={input.BatterySoC}% < {socThreshold}%",
+      };
       reason = $"Battery SoC too low ({socDesc})";
       return false;
     }
