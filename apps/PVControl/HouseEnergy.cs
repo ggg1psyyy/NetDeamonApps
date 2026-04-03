@@ -525,6 +525,41 @@ namespace NetDeamon.apps.PVControl
 
         if (!wasActive && currentSoC < preferred)
         {
+          // Even though we can't start now, scan the base trajectory for when SoC is predicted
+          // to recover to preferred, then search for a valid window from that point so the
+          // dashboard can show a predicted start/end time.
+          var recoverySlot = baseResult.Slots
+            .Where(s => s.Time > currentSlot && s.SoC >= preferred)
+            .Select(s => s.Time)
+            .FirstOrDefault();
+
+          if (recoverySlot != default)
+          {
+            bool recoveryIsToday = recoverySlot.Date == now.Date;
+            var  pvEnd     = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday
+                                             : baseResult.LastRelevantPVEnergyTomorrow;
+            var  recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+
+            if (recoveryMax > recoverySlot)
+            {
+              var end = FindMaxSessionEnd(recoverySlot, recoveryMax,
+                e => RunSimFrom(recoverySlot, e),
+                sim => (recoveryIsToday ? sim.WillReachMaxSocToday : sim.WillReachMaxSocTomorrow)
+                       && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
+
+              if (end is not null &&
+                  (durationMinutes < load.Config.MinWindowMinutes || load.Config.MinWindowMinutes <= 0 ||
+                   (end.Value - recoverySlot).TotalMinutes >= load.Config.MinWindowMinutes))
+              {
+                SetResult(
+                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
+                  false,
+                  $"Optimal: SoC {currentSoC}% < preferred {preferred}% — expected start ~{recoverySlot:HH:mm}", end);
+                return;
+              }
+            }
+          }
+
           SetResult([], false,
             $"Optimal: SoC {currentSoC}% < preferred min {preferred}% — waiting for battery to charge", null);
           return;
