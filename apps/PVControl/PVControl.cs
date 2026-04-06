@@ -68,6 +68,8 @@ namespace NetDeamon.apps.PVControl
     private bool _logEnergy = false;
     private DateTime _nextQuarterHour = DateTime.Now.GetNextQuarterHour();
     private Costs _lastCostsEntry = new();
+    private readonly SemaphoreSlim _schedLock = new(1, 1);
+    private bool _schedPendingRerun = false;
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger, IHomeAssistantApiManager apiManager)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
@@ -289,13 +291,27 @@ namespace NetDeamon.apps.PVControl
     }
     private async Task ScheduledOperations()
     {
+      if (!await _schedLock.WaitAsync(0))
+      {
+        _schedPendingRerun = true;
+        return;
+      }
       try
       {
-      await ScheduledOperationsCore();
+        await ScheduledOperationsCore();
       }
       catch (Exception ex)
       {
         PVCC_Logger.LogError(ex, "ScheduledOperations threw an exception");
+      }
+      finally
+      {
+        _schedLock.Release();
+      }
+      if (_schedPendingRerun)
+      {
+        _schedPendingRerun = false;
+        await ScheduledOperations();
       }
     }
     private async Task ScheduledOperationsCore()

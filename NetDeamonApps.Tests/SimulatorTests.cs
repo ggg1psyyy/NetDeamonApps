@@ -75,7 +75,6 @@ public class SimulatorTests : TestBase
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,
       ForceChargeTargetSocPercent = 100,
-      OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
     };
   }
@@ -247,7 +246,7 @@ public class SimulatorTests : TestBase
     var baseSlots = EnergySimulator.Simulate(baseInput);
 
     // Base simulation must reach ≥ 99 % today
-    Assert.Contains(baseSlots, s => s.Time.Date == start.Date && s.SoC >= 99);
+    Assert.Contains(baseSlots.Slots, s => s.Time.Date == start.Date && s.SoC >= 99);
 
     // Now add a large EV load that absorbs the entire PV surplus from session start to sunset.
     // Sunset proxy: last slot today (23:45).
@@ -280,12 +279,129 @@ public class SimulatorTests : TestBase
       OpportunisticDischarge      = baseInput.OpportunisticDischarge,
       ForceChargeMaxPrice         = baseInput.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = baseInput.ForceChargeTargetSocPercent,
-      OverrideMode                = baseInput.OverrideMode,
       CurrentMode                 = baseInput.CurrentMode,
     };
     var evSlots = EnergySimulator.Simulate(evInput);
 
     // EV-loaded simulation must NOT reach 99 % today (EV consumes the surplus)
-    Assert.DoesNotContain(evSlots, s => s.Time.Date == start.Date && s.SoC >= 99);
+    Assert.DoesNotContain(evSlots.Slots, s => s.Time.Date == start.Date && s.SoC >= 99);
+  }
+
+  // ── overnight window fix tests ─────────────────────────────────────────────
+
+  /// <summary>
+  /// Builds an input with PV only during daytime hours, suitable for testing overnight window.
+  /// </summary>
+  static SimulationInput BuildInputDayPV(
+    DateTime startTime,
+    int startSocPct,
+    int pvWhPerSlot,
+    int pvStartHour    = 8,
+    int pvEndHour      = 18,
+    int loadWhPerSlot  = 300,
+    int absMinSocPct   = 12,
+    int prefMinSocPct  = 20,
+    int batteryCapWh   = 10_000)
+  {
+    var date        = startTime.Date;
+    var horizonDate = date.AddDays(3);
+    var load = new Dictionary<DateTime, int>();
+    var pv   = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = loadWhPerSlot;
+      pv[t]   = (t.Hour >= pvStartHour && t.Hour < pvEndHour) ? pvWhPerSlot : 0;
+    }
+    var prices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+      prices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), 20f));
+
+    return new SimulationInput
+    {
+      StartTime                   = startTime,
+      StartSocPercent             = startSocPct,
+      BatteryCapacityWh           = batteryCapWh,
+      AbsoluteMinSocPercent       = absMinSocPct,
+      PreferredMinSocPercent      = prefMinSocPct,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = 10,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = load,
+      PVPredictionWh              = pv,
+      EnableCheapForceCharge      = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = 0.25f,
+      ForceChargeTargetSocPercent = 100,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+  }
+
+  [Fact]
+  public void OvernightMin_BeforePV_UsesPreDawnWindow()
+  {
+    // Regression: before the fix, OvernightMinSocReached used LastPVToday→FirstPVTomorrow.
+    // At 03:00 AM that window is ~15 h in the future — battery will have recharged by then via PV.
+    // So IsOvernightMinSocOk always returned true even while the current overnight drained the battery.
+    //
+    // After the fix: overnight window = now → FirstRelevantPVEnergyToday (this morning's sunrise).
+    // Battery at 25% drains to AbsMin (12%) well before sunrise at 08:00.
+    // OvernightMinSocReached must reflect that drain, not the post-PV-recharge level.
+    var start  = new DateTime(2025, 6, 15, 3, 0, 0); // 03:00 — BeforePV
+    var result = EnergySimulator.Simulate(BuildInputDayPV(
+      start,
+      startSocPct:   25,
+      pvWhPerSlot:   2000,  // strong daytime PV — battery fully recharges during day
+      loadWhPerSlot: 300)); // 1200 W load; (25%−12%) × 10000 Wh / 1200 W ≈ 65 min → hits AbsMin before 08:00
+
+    Assert.Equal(PVPeriods.BeforePV, result.CurrentPVPeriod);
+
+    // Pre-dawn drain must be captured: OvernightMinSocReached must be below PreferredMinSoC (20 %).
+    // The exact floor depends on the simulator's discharge accounting; what matters is that the
+    // pre-dawn drain brings SoC well below the preferred threshold before 08:00 sunrise.
+    Assert.True(result.OvernightMinSocReached < 20,
+      $"Expected OvernightMinSocReached < PreferredMinSoC (20 %), got {result.OvernightMinSocReached} %");
+
+    // Priority mode (alwaysEnforcePreferred=true) must reject a session that drains below PreferredMinSoC (20 %).
+    Assert.False(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true),
+      "IsOvernightMinSocOk should be false: pre-dawn drain drops battery below PreferredMinSoC (20 %)");
+  }
+
+  [Fact]
+  public void OvernightMin_BeforePV_SufficientBattery_IsOk()
+  {
+    // Battery at 80 % at 03:00 AM, modest load = 800 W.
+    // Pre-dawn drain over 5 h: 5 × 3600 s × 800 W / 3600 = 4000 Wh → battery drops to 40 %.
+    // 40 % is well above PreferredMinSoC (20 %), so IsOvernightMinSocOk should be true.
+    var start  = new DateTime(2025, 6, 15, 3, 0, 0);
+    var result = EnergySimulator.Simulate(BuildInputDayPV(
+      start,
+      startSocPct:   80,
+      pvWhPerSlot:   2000,
+      loadWhPerSlot: 200)); // 800 W; 5 h × 200 Wh/slot × 20 slots = 4000 Wh → 40 % remaining
+
+    Assert.Equal(PVPeriods.BeforePV, result.CurrentPVPeriod);
+    Assert.True(result.OvernightMinSocReached >= 20,
+      $"Expected OvernightMinSocReached ≥ 20 % (battery survives pre-dawn), got {result.OvernightMinSocReached} %");
+    Assert.True(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true));
+  }
+
+  [Fact]
+  public void OvernightMin_AfterPV_UsesTonightWindow_Regression()
+  {
+    // Regression: after PV (AfterPV), overnight window must still be LastPVToday→FirstPVTomorrow.
+    // Battery at 80 % at 20:00 with modest load — should survive the night above PreferredMinSoC.
+    var start  = new DateTime(2025, 6, 15, 20, 0, 0); // 20:00 — AfterPV
+    var result = EnergySimulator.Simulate(BuildInputDayPV(
+      start,
+      startSocPct:   80,
+      pvWhPerSlot:   2000,
+      loadWhPerSlot: 100));
+
+    Assert.Equal(PVPeriods.AfterPV, result.CurrentPVPeriod);
+    // 80 % → 400 W drain; (80%−20%) × 10000 = 6000 Wh / 400 W = 15 h → survives past 11:00 AM
+    Assert.True(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true),
+      "Evening session with high battery should have overnight min above preferred (20 %)");
   }
 }

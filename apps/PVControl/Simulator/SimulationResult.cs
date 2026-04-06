@@ -17,7 +17,11 @@ namespace NetDeamon.apps.PVControl.Simulator;
 /// PV window boundaries are computed from the full prediction dictionaries (not only the
 /// simulated slots), so they are correct even when the simulation starts mid-day.
 /// </summary>
-public class SimulationResult
+/// <summary>
+/// Implements <see cref="IReadOnlyList{SimulationSlot}"/> so callers can iterate slots
+/// directly (e.g. LINQ, foreach, indexer) without going through the <see cref="Slots"/> property.
+/// </summary>
+public class SimulationResult : IReadOnlyList<SimulationSlot>
 {
   private readonly SimulationInput _input;
   private const int PvNetThresholdWh = 50;
@@ -25,6 +29,12 @@ public class SimulationResult
   // ── Core timeline ─────────────────────────────────────────────────────────────────────
   /// <summary>Per-slot simulation timeline from start time through end of tomorrow.</summary>
   public IReadOnlyList<SimulationSlot> Slots { get; }
+
+  // IReadOnlyList<SimulationSlot> delegation — lets callers treat SimulationResult as a slot list
+  public int Count => Slots.Count;
+  public SimulationSlot this[int index] => Slots[index];
+  public IEnumerator<SimulationSlot> GetEnumerator() => Slots.GetEnumerator();
+  System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => ((System.Collections.IEnumerable)Slots).GetEnumerator();
 
   // ── PV window boundaries ──────────────────────────────────────────────────────────────
   /// <summary>First slot today where net PV (PV − load) exceeds 50 Wh. Null if no PV today.</summary>
@@ -54,7 +64,11 @@ public class SimulationResult
 
   // ── Overnight SoC floor ───────────────────────────────────────────────────────────────
   /// <summary>
-  /// Lowest SoC (%) reached in the overnight window (sunset today → first PV tomorrow).
+  /// Lowest SoC (%) reached in the relevant overnight window:
+  /// — BeforePV (pre-dawn): StartTime → FirstRelevantPVEnergyToday.
+  ///   Captures the current early-morning drain before today's sunrise.
+  /// — InPVPeriod / AfterPV: LastRelevantPVEnergyToday → FirstRelevantPVEnergyTomorrow.
+  ///   Captures tonight's dark window after today's PV ends.
   /// Returns 100 when no overnight window exists within this simulation.
   /// </summary>
   public int OvernightMinSocReached { get; }
@@ -92,11 +106,33 @@ public class SimulationResult
     WillReachMaxSocTomorrow = slots.Any(s => s.Time.Date == tomorrow && s.SoC >= 99);
     MaxSocDurationToday     = TimeSpan.FromMinutes(15 * slots.Count(s => s.Time.Date == today && s.SoC >= 99));
 
-    // Overnight floor: window from last PV today to first PV tomorrow
-    if (LastRelevantPVEnergyToday.HasValue && FirstRelevantPVEnergyTomorrow.HasValue)
+    // Overnight floor: the dark window from now to the next PV start.
+    //
+    // Before today's PV (pre-dawn): now → FirstRelevantPVEnergyToday.
+    //   The simulation may look far into tomorrow, but the relevant question is whether the
+    //   battery survives until THIS morning's sunrise — not tomorrow night's window (which
+    //   will be fine after PV recharges the battery during the day).
+    //
+    // During or after today's PV: LastRelevantPVEnergyToday → FirstRelevantPVEnergyTomorrow.
+    //   Standard tonight window.
+    DateTime? overnightStart;
+    DateTime? overnightEnd;
+
+    if (CurrentPVPeriod == PVPeriods.BeforePV && FirstRelevantPVEnergyToday.HasValue)
+    {
+      overnightStart = now;
+      overnightEnd   = FirstRelevantPVEnergyToday;
+    }
+    else
+    {
+      overnightStart = LastRelevantPVEnergyToday;
+      overnightEnd   = FirstRelevantPVEnergyTomorrow;
+    }
+
+    if (overnightStart.HasValue && overnightEnd.HasValue)
     {
       var overnight = slots
-        .Where(s => s.Time >= LastRelevantPVEnergyToday && s.Time <= FirstRelevantPVEnergyTomorrow)
+        .Where(s => s.Time >= overnightStart && s.Time <= overnightEnd)
         .ToList();
       OvernightMinSocReached = overnight.Count > 0 ? overnight.Min(s => s.SoC) : 100;
     }

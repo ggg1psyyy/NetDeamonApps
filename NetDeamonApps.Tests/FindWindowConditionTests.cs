@@ -129,7 +129,6 @@ public class FindWindowConditionTests : TestBase
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = 0.25f,
       ForceChargeTargetSocPercent = 95,
-      OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
 
     };
@@ -154,7 +153,6 @@ public class FindWindowConditionTests : TestBase
     OpportunisticDischarge      = src.OpportunisticDischarge,
     ForceChargeMaxPrice         = src.ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
-    OverrideMode                = src.OverrideMode,
     CurrentMode                 = src.CurrentMode,
   };
 
@@ -164,16 +162,16 @@ public class FindWindowConditionTests : TestBase
   /// True if any slot on <paramref name="today"/> shows SoC ≥ 99 %
   /// (mirrors SimWillReachMaxSocToday).
   /// </summary>
-  static bool Reaches99Today(List<SimulationSlot> sim, DateTime today)
-    => sim.Any(s => s.Time.Date == today.Date && s.SoC >= 99);
+  static bool Reaches99Today(SimulationResult sim, DateTime today)
+    => sim.Slots.Any(s => s.Time.Date == today.Date && s.SoC >= 99);
 
   /// <summary>
   /// True if all slots in the overnight window [lastPV, firstPVTomorrow] have SoC ≥ absMinSoc
   /// (mirrors SimOvernightMinSocOk with EnforcePreferredSoc=false).
   /// </summary>
-  static bool OvernightOk(List<SimulationSlot> sim, DateTime lastPV, DateTime firstPV, int absMin)
+  static bool OvernightOk(SimulationResult sim, DateTime lastPV, DateTime firstPV, int absMin)
   {
-    var night = sim.Where(s => s.Time >= lastPV && s.Time <= firstPV).ToList();
+    var night = sim.Slots.Where(s => s.Time >= lastPV && s.Time <= firstPV).ToList();
     return night.Count == 0 || night.Min(s => s.SoC) >= absMin;
   }
 
@@ -181,8 +179,8 @@ public class FindWindowConditionTests : TestBase
   /// True if the test sim introduced NO new force_charge slots at ANY time
   /// (mirrors !HasNewGrid — checks all slots, not just the overnight window).
   /// </summary>
-  static bool NoNewGrid(List<SimulationSlot> sim, HashSet<DateTime> baseFCS)
-    => !sim.Any(s =>
+  static bool NoNewGrid(SimulationResult sim, HashSet<DateTime> baseFCS)
+    => !sim.Slots.Any(s =>
       s.State.Mode == InverterModes.force_charge
       && !baseFCS.Contains(s.Time));
 
@@ -190,9 +188,9 @@ public class FindWindowConditionTests : TestBase
   /// True if every NEW force_charge slot (at any time) has an import price ≤ maxPrice
   /// (mirrors IsGridCheap — checks all slots, not just the overnight window).
   /// </summary>
-  static bool GridCheap(List<SimulationSlot> sim, HashSet<DateTime> baseFCS,
+  static bool GridCheap(SimulationResult sim, HashSet<DateTime> baseFCS,
       List<PriceTableEntry> prices, float maxPrice)
-    => !sim.Any(s =>
+    => !sim.Slots.Any(s =>
       s.State.Mode == InverterModes.force_charge
       && !baseFCS.Contains(s.Time)
       && !prices.Any(p => p.StartTime <= s.Time && p.EndTime > s.Time && p.Price <= maxPrice));
@@ -219,7 +217,7 @@ public class FindWindowConditionTests : TestBase
     // With EV for 390 min, house STILL hits ≥ 99 % today (battery tops up after EV stops).
     Assert.True(Reaches99Today(evSim, start.Date),
       $"T=26 (390 min EV): battery should reach ≥99 % today. Max SoC today = " +
-      $"{evSim.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
+      $"{evSim.Slots.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
 
     // The base simulation (no EV) also reaches 100 % — confirms PV is genuinely strong.
     Assert.True(Reaches99Today(baseSim, start.Date),
@@ -243,7 +241,7 @@ public class FindWindowConditionTests : TestBase
     // With T=27 the battery peaks at ≈97.6 % (just short of 99 %).
     Assert.False(Reaches99Today(evSim, start.Date),
       $"T=27 (405 min EV): battery should NOT reach ≥99 % today. Max SoC today = " +
-      $"{evSim.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
+      $"{evSim.Slots.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
   }
 
   /// <summary>
@@ -280,14 +278,13 @@ public class FindWindowConditionTests : TestBase
       OpportunisticDischarge      = src.OpportunisticDischarge,
       ForceChargeMaxPrice         = src.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = src.ForceChargeTargetSocPercent,
-      OverrideMode                = src.OverrideMode,
       CurrentMode                 = src.CurrentMode,
 
     };
     var baseSim = EnergySimulator.Simulate(baseIn);
     var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
     var baseFCS = new HashSet<DateTime>(
-      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
     // Battery must still reach 99 % today (PV surplus is strong enough despite EV).
     Assert.True(Reaches99Today(evSim, start.Date),
@@ -324,7 +321,7 @@ public class FindWindowConditionTests : TestBase
     var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
 
     var baseFCS = new HashSet<DateTime>(
-      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
     // Priority condition: overnightOk AND no new grid overnight.
     Assert.True(OvernightOk(evSim, LastPVToday, FirstPVTomorrow, AbsMin),
@@ -353,7 +350,7 @@ public class FindWindowConditionTests : TestBase
     var baseSim = EnergySimulator.Simulate(baseIn);
     var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
     var baseFCS = new HashSet<DateTime>(
-      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
     // T=27 fails Optimal (battery doesn't hit 99 %)
     Assert.False(Reaches99Today(evSim, start.Date),
@@ -410,14 +407,13 @@ public class FindWindowConditionTests : TestBase
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = MaxPrice,
       ForceChargeTargetSocPercent = 95,
-      OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
 
     };
 
     var baseSim = EnergySimulator.Simulate(baseIn);
     var baseFCS = new HashSet<DateTime>(
-      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
     // ── 1. Base overnight OK ─────────────────────────────────────────────────────────────
     // With house load (100 Wh/slot) only, battery (85 %) should comfortably last the night.
@@ -430,7 +426,7 @@ public class FindWindowConditionTests : TestBase
     var sessionEnd = new DateTime(2026, 3, 23, 6, 15, 0); // EV until next sunrise
     var evSim = EnergySimulator.Simulate(WithEV(baseIn, start, sessionEnd));
 
-    var newForceSlots = evSim
+    var newForceSlots = evSim.Slots
       .Where(s => s.State.Mode == InverterModes.force_charge
                   && !baseFCS.Contains(s.Time)
                   && s.Time >= lastPVToday && s.Time <= firstPVTomorrow)
@@ -498,7 +494,6 @@ public class FindWindowConditionTests : TestBase
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = 0.25f,
       ForceChargeTargetSocPercent = 95,
-      OverrideMode                = InverterModes.automatic,
       CurrentMode                 = new InverterState(InverterModes.normal),
 
     };
@@ -522,17 +517,16 @@ public class FindWindowConditionTests : TestBase
       OpportunisticDischarge      = baseIn.OpportunisticDischarge,
       ForceChargeMaxPrice         = baseIn.ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = baseIn.ForceChargeTargetSocPercent,
-      OverrideMode                = baseIn.OverrideMode,
       CurrentMode                 = baseIn.CurrentMode,
     };
 
     var baseSim = EnergySimulator.Simulate(baseIn);
     var evSim   = EnergySimulator.Simulate(evIn);
     var baseFCS = new HashSet<DateTime>(
-      baseSim.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
     // The EV causes new force_charge — confirm at least one fires BEFORE sunset.
-    var newForceSlots = evSim
+    var newForceSlots = evSim.Slots
       .Where(s => s.State.Mode == InverterModes.force_charge && !baseFCS.Contains(s.Time))
       .ToList();
     Assert.NotEmpty(newForceSlots);

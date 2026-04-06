@@ -188,7 +188,6 @@ public class EnergyCostTests : TestBase
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,   // €/kWh — all live slots are below this threshold
       ForceChargeTargetSocPercent = 100,
-      OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
     };
 
@@ -244,7 +243,6 @@ public class EnergyCostTests : TestBase
       OpportunisticDischarge    = false,
       ForceChargeMaxPrice       = 0.25f,
       ForceChargeTargetSocPercent = 100,
-      OverrideMode              = InverterModes.automatic,
       CurrentMode               = new InverterState(InverterModes.normal),
     };
 

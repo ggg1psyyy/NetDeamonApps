@@ -572,12 +572,39 @@ namespace NetDeamon.apps.PVControl
         }
       }
 
+      // ── Priority / PriorityPlus mode: real-time battery SoC gate ────────────────────────────
+      // Placed before the min-window latch so a real SoC drop always takes immediate effect.
+      //
+      // Priority always enforces PreferredMinSoC as the floor (regardless of EnforcePreferredSoC).
+      // PriorityPlus uses PreferredMinSoC when EnforcePreferredSoC is on, AbsoluteMinSoC when off.
+      //
+      // Without this gate, the simulation's IsOvernightMinSocOk looks at the NEXT overnight
+      // window (sunset today → sunrise tomorrow). In the pre-dawn hours that window is 18h
+      // away — the battery will have fully recharged by then, so the check always passes even
+      // while the current overnight drain pushes SoC below the required floor.
+      // This gate provides a direct live-SoC check that the simulation cannot substitute for.
+      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
+      {
+        bool isPriority = load.Mode == LoadSchedulingMode.Priority;
+        int socFloor = isPriority || Battery.EnforcePreferredSoC
+          ? Battery.PreferredMinimalSoC
+          : Battery.AbsoluteMinimalSoC;
+        int currentSoC = Battery.BatterySoc;
+
+        if (currentSoC < socFloor)
+        {
+          SetResult([], false,
+            $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — {(wasActive ? "stopping, battery depleted" : "waiting for battery to recharge")}", null);
+          return;
+        }
+      }
+
       // ── Minimum on-time latch ────────────────────────────────────────────────────────────────
       // The simulation re-runs every 15 s and at borderline SoC levels the predicate can flip
       // on/off every cycle. Once a session starts, keep it active for MinWindowMinutes before
       // allowing the simulation to stop it — same threshold already used to prevent marginal starts.
-      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV, Optimal-SoC)
-      // always take immediate effect regardless of the latch.
+      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV, Optimal-SoC,
+      // Priority-SoC) always take immediate effect regardless of the latch.
       if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0)
       {
         var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
