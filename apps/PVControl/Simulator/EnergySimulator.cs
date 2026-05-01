@@ -211,15 +211,24 @@ public static class EnergySimulator
 
     // ── Negative import price ─────────────────────────────────────────────────────────────
     // Grid is paying us to consume electricity → fill battery as fast as possible.
-    // Use force_charge_grid_only (PV disconnected) unless battery is already ≥ 95 % or PV
-    // is negligible; in that case grid_only keeps PV running for the house without wasting
-    // charge cycles on a nearly-full battery.
+    // But if a cheaper (more negative) import window is still coming today, defer grid
+    // charging to that window. Stay in house_only with battery charging disabled so PV
+    // surplus is curtailed rather than exported (export price is also typically negative),
+    // preserving battery room for the cheapest grid energy.
+    // Once at or past the cheapest window: use force_charge_grid_only to fill the battery.
+    // If the battery is already ≥ 95 %: use house_only (not grid_only) to avoid exporting
+    // PV surplus at negative export prices.
     if (importPriceNow < 0)
     {
+      bool cheaperImportComingToday = input.ImportPrices
+        .Any(p => p.StartTime.Date == now.Date && p.StartTime > now && p.Price < importPriceNow);
+      if (cheaperImportComingToday)
+        return new InverterState(InverterModes.house_only, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false);
+
       int pvPowerW = pvWhSlot * 4; // convert Wh/slot → W
       var mode = (simulatedSoc <= 95 || pvPowerW < 100)
         ? InverterModes.force_charge_grid_only
-        : InverterModes.grid_only;
+        : InverterModes.house_only; // avoid exporting PV at negative export prices
       return new InverterState(mode, ForceChargeReasons.ImportPriceNegative);
     }
 
@@ -336,35 +345,48 @@ public static class EnergySimulator
     // Exception: if the NEXT hour is even cheaper, hold off (importing now would just cost more).
     if (need.NeedToCharge)
     {
-      // Use the cheapest window between now and the next PV peak.
+      // Choose the search window for the cheapest charge slot.
       //
-      // Two problems with the original deadline-constrained GetBestChargeWindow:
+      // Two problems with always using deadline-constrained GetBestChargeWindow:
       //   1. LatestChargeTime collapses to "now" when the base SoC first touches the floor
       //      → bestChargeWindow = current (expensive) hour → premature force_charge.
-      //   2. A fully unconstrained search (whole 48 h) finds the global price minimum, which
-      //      could be tomorrow afternoon when PV is already generating — the simulation then
-      //      waits for that distant minimum and skips the real overnight cheap window.
+      //   2. A fully unconstrained search finds a global price minimum that could be tomorrow
+      //      afternoon when PV is already generating — the simulation waits for that distant
+      //      minimum and skips the real overnight cheap window.
       //
-      // Correct bound: search only up to the next PV recovery peak. After that point, solar
-      // will charge the battery; no grid charging is needed before then.
+      // pvTakeover = first slot where PV > load (solar takes over from the grid).
+      // When the critical minimum is BEFORE pvTakeover (battery will drain below floor
+      // tonight before solar arrives), we must charge before pvTakeover and that bound
+      // prevents problem #2.
+      // When the critical minimum is AFTER pvTakeover (e.g. tomorrow night), using pvTakeover
+      // as the bound is too narrow: it excludes cheap afternoon solar-surplus hours like 14:00
+      // that arrive while PV is already running today. In that case LatestChargeTime safely
+      // extends to tomorrow early morning — it won't reach tomorrow afternoon (where PV would
+      // handle it for free), so GetBestChargeWindow is the right bound.
       int floorSoc = input.GetEffectiveMinSoC();
-      // Search only for prices before PV first exceeds house load.
-      // That is the moment solar takes over from the grid — any grid charging after that
-      // point is unnecessary. Using the SoC peak was too late (battery already full by then),
-      // causing the search to include cheap afternoon prices that arrive after PV has already
-      // charged the battery.
       var pvTakeover = baseFutureSoC.Keys
         .Where(t => t > now
                     && input.PVPredictionWh.GetValueOrDefault(t, 0) > input.LoadPredictionWh.GetValueOrDefault(t, 0))
         .DefaultIfEmpty(now.AddHours(24))
         .First();
 
-      var bestChargeWindow = input.ImportPrices
-        .Where(p => p.StartTime >= now.Date.AddHours(now.Hour) && p.StartTime < pvTakeover)
-        .OrderBy(p => p.Price)
-        .FirstOrDefault();
-      if (bestChargeWindow.StartTime == default)
-        bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now); // safety fallback
+      PriceTableEntry bestChargeWindow;
+      if (need.LatestChargeTime <= pvTakeover)
+      {
+        // Battery will hit minimum before today's PV recovery → must charge before solar arrives.
+        bestChargeWindow = input.ImportPrices
+          .Where(p => p.StartTime >= now.Date.AddHours(now.Hour) && p.StartTime < pvTakeover)
+          .OrderBy(p => p.Price)
+          .FirstOrDefault();
+        if (bestChargeWindow.StartTime == default)
+          bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now); // safety fallback
+      }
+      else
+      {
+        // Battery hits minimum after today's PV window (e.g. tomorrow) → broader search up to
+        // LatestChargeTime naturally includes cheap afternoon hours without reaching tomorrow PV.
+        bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now);
+      }
 
       // Simulation slots are always on exact quarter-hour boundaries, so the ±30-second
       // guard used by the live system (to avoid triggering before the price feed updates)
