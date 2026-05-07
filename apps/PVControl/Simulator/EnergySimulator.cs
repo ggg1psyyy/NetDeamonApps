@@ -641,8 +641,13 @@ public static class EnergySimulator
 
     // Candidate hours: today's remaining export price entries that fall within the PV window.
     // Only include entries whose full hour ends before PV stops.
+    // Floor to the current hour so a valley that started earlier in the same price-hour stays
+    // valid for all 15-min slots within it — without this, StartTime < now at 13:15 would
+    // exclude the 13:00 entry and push valleyStart to 14:00, re-engaging feedin_priority for
+    // the remaining 45 min of the already-started charging window.
+    var nowHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0);
     var pvHours = input.ExportPrices
-      .Where(p => p.StartTime >= now
+      .Where(p => p.StartTime >= nowHour
                && p.StartTime.Date == now.Date
                && p.EndTime <= lastPVToday.AddHours(1))
       .OrderBy(p => p.StartTime)
