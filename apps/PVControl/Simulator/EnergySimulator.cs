@@ -263,11 +263,23 @@ public static class EnergySimulator
       int loadPowerW = totalLoadWhSlot * 4;
 
       // Case A: during PV peak, battery will hit 100 % anyway → export the overflow now
-      // at today's price (even if not a daily maximum) rather than wasting it
+      // at today's price (even if not a daily maximum) rather than wasting it.
+      // But: exit feedin_priority during the cheapest window where PV can refill the battery,
+      // so we charge from free PV at the lowest opportunity cost instead of exporting at
+      // midday low prices — the full battery can then be discharged at expensive evening peaks.
       if (!need.NeedToCharge && inPVPeriod && maxSocDurationCalc > maxSocDuration
           && exportPriceNow >= 0.01f && exportPriceNow >= exportPriceNextHour
           && simulatedSoc > (input.GetEffectiveMinSoC()) + 3)
-        return new InverterState(InverterModes.feedin_priority, ForceChargeReasons.OpportunisticDischarge);
+      {
+        // Battery near-full: nothing to gain from valley optimisation — export overflow directly.
+        // Battery has room: find the cheapest window to refill; stay in feedin_priority until then.
+        var valleyStart = simulatedSoc < 98
+          ? FindChargingValleyStart(now, baseFutureSoC, input)
+          : null;
+        if (valleyStart == null || now < valleyStart.Value)
+          return new InverterState(InverterModes.feedin_priority, ForceChargeReasons.OpportunisticDischarge);
+        // Reached the valley: fall through so normal mode lets PV fill the battery cheaply.
+      }
 
       // Case B: we are at one of the two highest daily export price peaks
       // → actively discharge the battery to the grid if the SoC forecast allows it
@@ -596,6 +608,59 @@ public static class EnergySimulator
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Finds the start of the cheapest contiguous export-price window today during which PV is
+  /// available, wide enough for natural charging to bring the battery to full.
+  ///
+  /// Window width (whole hours) is derived from <paramref name="baseFutureSoC"/>: how long
+  /// normal PV charging takes from the current simulated SoC to 99 %. The cheapest contiguous
+  /// block of that many price hours, within today's remaining PV window, is the "valley" —
+  /// the optimal moment to pause feedin_priority so free PV energy refills the battery at the
+  /// lowest opportunity cost. The fully-charged battery can then be discharged at peak prices.
+  ///
+  /// Returns null when the battery will not reach 99 % today or there are insufficient PV
+  /// price hours to form a valid window.
+  /// </summary>
+  private static DateTime? FindChargingValleyStart(
+    DateTime now, Dictionary<DateTime, int> baseFutureSoC, SimulationInput input)
+  {
+    // When does natural charging (base trajectory) first bring the battery to 99 %?
+    var chargeComplete = baseFutureSoC
+      .Where(kv => kv.Key > now && kv.Value >= 99)
+      .OrderBy(kv => kv.Key)
+      .Select(kv => (DateTime?)kv.Key)
+      .FirstOrDefault();
+    if (chargeComplete is null) return null;
+
+    // Window width: hours needed for natural charging, minimum 1
+    int durationHours = Math.Max(1, (int)Math.Ceiling((chargeComplete.Value - now).TotalHours));
+
+    // Cap the valley search to today's PV window so charging stays solar-powered.
+    var lastPVToday = input.GetLastRelevantPVTime(now.Date);
+
+    // Candidate hours: today's remaining export price entries that fall within the PV window.
+    // Only include entries whose full hour ends before PV stops.
+    var pvHours = input.ExportPrices
+      .Where(p => p.StartTime >= now
+               && p.StartTime.Date == now.Date
+               && p.EndTime <= lastPVToday.AddHours(1))
+      .OrderBy(p => p.StartTime)
+      .ToList();
+
+    if (pvHours.Count < durationHours) return null;
+
+    // Sliding window of durationHours: find the contiguous block with the lowest total price.
+    DateTime? best = null;
+    float bestTotal = float.MaxValue;
+    for (int i = 0; i <= pvHours.Count - durationHours; i++)
+    {
+      float windowTotal = 0;
+      for (int j = 0; j < durationHours; j++) windowTotal += pvHours[i + j].Price;
+      if (windowTotal < bestTotal) { bestTotal = windowTotal; best = pvHours[i].StartTime; }
+    }
+    return best;
+  }
 
   /// <summary>
   /// How many hours the battery stays at or above 99 % SoC in the given base forecast.
