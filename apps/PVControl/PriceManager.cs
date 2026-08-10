@@ -33,7 +33,8 @@ namespace NetDeamon.apps.PVControl
             if (data.Deserialize<System.Collections.Generic.List<PriceTableEntry>>()
                     ?.OrderBy(x => x.StartTime).ToList() is System.Collections.Generic.List<PriceTableEntry> priceList)
             {
-              _priceListCache = new PriceList(priceList.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.Price)));
+              _priceListCache = new PriceList(priceList.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.Price)))
+                .NormalizeToQuarterHourly();
             }
           }
         }
@@ -43,7 +44,8 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>Brutto import prices (netto × multiplier + addition + network) × (1 + tax).</summary>
     public PriceList PriceListImport =>
-      new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true, p.StartTime))));
+      new(PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution)
+          .Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true, p.StartTime))));
 
     /// <summary>Brutto export prices — either variable (scaled netto) or fixed feed-in tariff.</summary>
     public PriceList PriceListExport
@@ -51,7 +53,8 @@ namespace NetDeamon.apps.PVControl
       get
       {
         if (PVCC_Config.ExportPriceIsVariable)
-          return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
+          return new(PriceListNetto.WithResolution(PVCC_Config.ExportPriceResolution)
+              .Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
 
         return new(PriceListNetto.Select(p => new PriceTableEntry(
           p.StartTime, p.EndTime,

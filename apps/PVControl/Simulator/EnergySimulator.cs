@@ -284,9 +284,9 @@ public static class EnergySimulator
       // Case B: we are at one of the two highest daily export price peaks
       // → actively discharge the battery to the grid if the SoC forecast allows it
       var sellMaxima = input.ExportPrices.GetLocalMaxima(end: now.Date.AddDays(1))
-        .OrderByDescending(t => t.Price).Select(t => t.StartTime).Take(2);
+        .OrderByDescending(t => t.Price).Take(2).ToList();
 
-      if (sellMaxima.Any(t => t.Date == now.Date && t.Hour == now.Hour)
+      if (sellMaxima.Any(t => t.StartTime <= now && t.EndTime > now)
           && (exportPriceNow >= input.ForceChargeMaxPrice || input.ImportPrices.NegativeImportUpcoming(now)))
       {
         // Near solar time we can go lower (absolute minimum), otherwise stay at preferred

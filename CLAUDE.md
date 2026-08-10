@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NetDaemon4 home automation apps written in C# (.NET 9.0) for Home Assistant. Three apps:
+NetDaemon4 home automation apps written in C# (.NET 10.0) for Home Assistant. Three apps:
 - **PVControl** — Solar/battery optimization with dynamic EPEX Spot pricing, load forecasting, and heatpump scheduling
 - **DataLogger** — Logs energy sensor history to SQLite for ML training
 - **MidiControl** — BCF2000 MIDI controller integration (side project, low priority)
@@ -15,10 +15,10 @@ NetDaemon4 home automation apps written in C# (.NET 9.0) for Home Assistant. Thr
 dotnet build                   # Debug build
 dotnet build -c Release        # Release build
 dotnet publish -c Release      # Publish; copy output to /config/netdaemon4 on HA
-dotnet test ../NetDeamonApps.Tests/  # Run unit tests (from repo root)
+dotnet test NetDeamonApps.Tests/     # Run unit tests (from repo root)
 ```
 
-The test project lives at `../NetDeamonApps.Tests/` (sibling directory to the repo). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with valid HA host/token.
+The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with valid HA host/token.
 
 ## Testing Requirements
 

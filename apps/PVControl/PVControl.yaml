@@ -20,6 +20,12 @@ NetDeamon.apps.PVControl.PVConfig:
       EndHour: 16
       Price: 0.06882
   ImportPriceTax: 0.2
+  # How the raw price data is interpreted:
+  #   QuarterHourly = use each 15-min price as-is
+  #   Hourly        = average the four 15-min prices within each hour and apply that
+  #                    mean to all four slots (use this if your provider bills the
+  #                    hourly EPEX average rather than the raw 1/4h price)
+  ImportPriceResolution: Hourly
   # Net price of exported energy
   CurrentExportPriceEntity: sensor.epex_spot_data_price
   ExportPriceIsVariable: true
@@ -27,6 +33,8 @@ NetDeamon.apps.PVControl.PVConfig:
   ExportPriceAddition: 0.0
   ExportPriceNetwork: 0.0
   ExportPriceTax: 0.0
+  # Same as ImportPriceResolution, but for the export price (only applies when ExportPriceIsVariable is true)
+  ExportPriceResolution: Hourly
   # Inverter status/run mode
   InverterStatusEntity: sensor.solax_run_mode
   InverterStatusNormalString: "Normal Mode"

@@ -128,12 +128,14 @@ namespace NetDeamon.apps.PVControl
     public float ImportPriceNetwork { get; set; } = default;
     public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
+    public PriceResolution ImportPriceResolution { get; set; } = PriceResolution.Hourly;
     public Entity CurrentExportPriceEntity { get; set; } = null!;
     public bool ExportPriceIsVariable { get; set; } = default;
     public float ExportPriceMultiplier { get; set; } = default;
     public float ExportPriceAddition { get; set; } = default;
     public float ExportPriceNetwork { get; set; } = default;
     public float ExportPriceTax { get; set; } = default;
+    public PriceResolution ExportPriceResolution { get; set; } = PriceResolution.Hourly;
     public Entity InverterStatusEntity { get; set; } = null!;
     public string InverterStatusNormalString { get; set; } = "Normal Mode";
     public Entity DailyImportEnergyEntity { get; set; } = null!;

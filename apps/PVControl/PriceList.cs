@@ -27,6 +27,49 @@ namespace NetDeamon.apps.PVControl
     public IEnumerator<PriceTableEntry> GetEnumerator() => _entries.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => _entries.GetEnumerator();
 
+    // ── Resolution handling ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Splits every entry into consecutive 15-minute slots at the same price, so the list always
+    /// has quarter-hourly granularity regardless of the source sensor's native resolution
+    /// (an hourly entry becomes four identical-price 15-min entries).
+    /// </summary>
+    public PriceList NormalizeToQuarterHourly()
+    {
+      var result = new List<PriceTableEntry>();
+      foreach (var e in _entries)
+      {
+        var slotStart = e.StartTime;
+        while (slotStart < e.EndTime)
+        {
+          var slotEnd = slotStart.AddMinutes(15) < e.EndTime ? slotStart.AddMinutes(15) : e.EndTime;
+          result.Add(new PriceTableEntry(slotStart, slotEnd, e.Price));
+          slotStart = slotEnd;
+        }
+      }
+      return new PriceList(result);
+    }
+
+    /// <summary>
+    /// Returns a copy of this list with prices adjusted for the given billing resolution.
+    /// QuarterHourly returns the list unchanged. Hourly averages all entries that share a
+    /// calendar hour and applies that mean price to each of them (matches providers that
+    /// bill the hourly EPEX average rather than the raw 15-min price).
+    /// </summary>
+    public PriceList WithResolution(PriceResolution resolution)
+    {
+      if (resolution == PriceResolution.QuarterHourly) return this;
+
+      var result = new List<PriceTableEntry>();
+      foreach (var hourGroup in _entries.GroupBy(p => new DateTime(p.StartTime.Year, p.StartTime.Month,
+                 p.StartTime.Day, p.StartTime.Hour, 0, 0)))
+      {
+        float avg = hourGroup.Average(p => p.Price);
+        result.AddRange(hourGroup.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, avg)));
+      }
+      return new PriceList(result);
+    }
+
     // ── Point-in-time queries ────────────────────────────────────────────────────────────────
 
     /// <summary>Price at the given time (0 if no matching entry).</summary>
@@ -92,21 +135,21 @@ namespace NetDeamon.apps.PVControl
 
     // ── Ranking / percentile ─────────────────────────────────────────────────────────────────
 
-    /// <summary>Rank of the given hour in this list (1 = cheapest).</summary>
+    /// <summary>Rank of the entry covering the given time (1 = cheapest).</summary>
     public int GetPriceRank(DateTime time)
     {
       var ordered = _entries.OrderBy(p => p.Price).ToList();
-      var entry = _entries.FirstOrDefault(p => p.StartTime.Date == time.Date && p.StartTime.Hour == time.Hour);
+      var entry = _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time);
       return ordered.IndexOf(entry) + 1;
     }
 
-    /// <summary>Price percentile of the given hour (0 = cheapest, 100 = most expensive).</summary>
+    /// <summary>Price percentile of the entry covering the given time (0 = cheapest, 100 = most expensive).</summary>
     public int GetPricePercentage(DateTime time)
     {
       if (_entries.Count == 0) return -1;
       float minPrice = _entries.Min(p => p.Price);
       float maxPrice = _entries.Max(p => p.Price);
-      var entry = _entries.FirstOrDefault(p => p.StartTime.Hour == time.Hour);
+      var entry = _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time);
       return maxPrice - minPrice == 0 ? 0 : (int)Math.Round((entry.Price - minPrice) / (maxPrice - minPrice) * 100, 0);
     }
 

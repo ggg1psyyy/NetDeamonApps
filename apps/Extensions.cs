@@ -54,6 +54,12 @@ namespace NetDeamon.apps
     UserMode,
   }
 
+  public enum PriceResolution
+  {
+    QuarterHourly,
+    Hourly,
+  }
+
   public enum PVPeriods
   {
     BeforePV,
