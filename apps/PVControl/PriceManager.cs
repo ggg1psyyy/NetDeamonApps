@@ -42,10 +42,29 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/> — i.e. <see cref="PriceListNetto"/>
+    /// after applying <see cref="PVConfig.ImportPriceResolution"/> (so it reconciles with the shown brutto price).</summary>
+    public PriceList PriceListNettoImport => PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
+
+    /// <summary>Network fee component of <see cref="PriceListImport"/> (tax-inclusive), per slot,
+    /// with any active <see cref="PVConfig.ImportPriceNetworkPeriods"/> override applied.</summary>
+    public PriceList PriceListNetworkImport =>
+      new(PriceListNettoImport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, NetworkPriceAt(p.StartTime) * (1 + PVCC_Config.ImportPriceTax))));
+
     /// <summary>Brutto import prices (netto × multiplier + addition + network) × (1 + tax).</summary>
     public PriceList PriceListImport =>
-      new(PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution)
+      new(PriceListNettoImport
           .Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true, p.StartTime))));
+
+    /// <summary>Netto prices actually used to compute the variable branch of <see cref="PriceListExport"/>.
+    /// Empty when <see cref="PVConfig.ExportPriceIsVariable"/> is false (fixed feed-in tariff has no netto breakdown).</summary>
+    public PriceList PriceListNettoExport =>
+      PVCC_Config.ExportPriceIsVariable ? PriceListNetto.WithResolution(PVCC_Config.ExportPriceResolution) : new PriceList();
+
+    /// <summary>Network fee component of <see cref="PriceListExport"/> (tax-inclusive), per slot.
+    /// Empty when <see cref="PVConfig.ExportPriceIsVariable"/> is false.</summary>
+    public PriceList PriceListNetworkExport =>
+      new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, PVCC_Config.ExportPriceNetwork * (1 + PVCC_Config.ExportPriceTax))));
 
     /// <summary>Brutto export prices — either variable (scaled netto) or fixed feed-in tariff.</summary>
     public PriceList PriceListExport
@@ -53,8 +72,7 @@ namespace NetDeamon.apps.PVControl
       get
       {
         if (PVCC_Config.ExportPriceIsVariable)
-          return new(PriceListNetto.WithResolution(PVCC_Config.ExportPriceResolution)
-              .Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
+          return new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
 
         return new(PriceListNetto.Select(p => new PriceTableEntry(
           p.StartTime, p.EndTime,
@@ -95,7 +113,7 @@ namespace NetDeamon.apps.PVControl
     // ── Component price breakdowns (need config, no dedicated PriceList) ────────────────────
 
     /// <summary>Brutto import price at current time, excluding network fee.</summary>
-    public float CurrentEnergyImportPriceEnergyOnly => CalculateBruttoPriceImport(PriceListNetto.GetPrice(System.DateTime.Now), false);
+    public float CurrentEnergyImportPriceEnergyOnly => CalculateBruttoPriceImport(PriceListNettoImport.GetPrice(System.DateTime.Now), false);
 
     /// <summary>Network fee component of the current import price (tax-inclusive), with any active period override applied.</summary>
     public float CurrentEnergyImportPriceNetworkOnly => NetworkPriceAt(System.DateTime.Now) * (1 + PVCC_Config.ImportPriceTax);

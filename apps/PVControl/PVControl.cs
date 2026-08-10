@@ -597,6 +597,9 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetStateAsync(_activeNetworkPricePeriodEntity.EntityId, _house.Prices.ActiveNetworkPricePeriodName);
       var attr_currentImportPrice = new
       {
+        _netto_price = _house.Prices.PriceListNettoImport.GetPrice(now),
+        _provider_price = _house.Prices.CurrentEnergyImportPriceEnergyOnly, 
+        _network_price = _house.Prices.PriceListNetworkImport.GetPrice(now),
         data = _house.Prices.PriceListImport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
@@ -604,6 +607,8 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.Prices.PriceListExport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
       var attr_currentExportPrice = new
       {
+        _netto_price = _house.Prices.PriceListNettoExport.GetPrice(now),
+        _network_price = _house.Prices.PriceListNetworkExport.GetPrice(now),
         data = _house.Prices.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
