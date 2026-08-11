@@ -66,8 +66,8 @@ public class SimulationInput
 
   /// <summary>
   /// Hourly export/feed-in price table, in ct/kWh.
-  /// Either the same variable spot prices as import (scaled) or a fixed feed-in tariff,
-  /// depending on ExportPriceIsVariable in config.
+  /// Either the resolved import netto prices (scaled), an independent variable price series,
+  /// or a fixed feed-in tariff, depending on ExportPriceSameAsImport/ExportPriceFixed in config.
   /// </summary>
   public required PriceList ExportPrices { get; init; }
 

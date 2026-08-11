@@ -26,14 +26,23 @@ NetDeamon.apps.PVControl.PVConfig:
   #                    mean to all four slots (use this if your provider bills the
   #                    hourly EPEX average rather than the raw 1/4h price)
   ImportPriceResolution: Hourly
-  # Net price of exported energy
-  CurrentExportPriceEntity: sensor.epex_spot_data_price
-  ExportPriceIsVariable: true
+  # How to determine the export (feed-in) price, checked in order:
+  #   1. ExportPriceSameAsImport: true  -> reuse the resolved import netto price (scaled below)
+  #   2. ExportPriceFixed: true         -> use a fixed feed-in tariff (entity takes priority over value)
+  #   3. otherwise                      -> use CurrentExportPriceEntities (own fallback list, like import)
+  ExportPriceSameAsImport: true
+  ExportPriceFixed: false
+  # ExportPriceFixedEntity: sensor.some_fixed_feedin_tariff
+  # ExportPriceFixedValue: 0.05
+  # CurrentExportPriceEntities:
+  #   - sensor.epex_spot_data_price_2
   ExportPriceMultiplier: 0.8
   ExportPriceAddition: 0.0
   ExportPriceNetwork: 0.0
   ExportPriceTax: 0.0
-  # Same as ImportPriceResolution, but for the export price (only applies when ExportPriceIsVariable is true)
+  # Same as ImportPriceResolution, but for the export price. Only applies when the export price
+  # is variable (ExportPriceSameAsImport or the independent-entities fallback) — a fixed feed-in
+  # tariff (ExportPriceFixed: true) has no resolution concept.
   ExportPriceResolution: Hourly
   # Inverter status/run mode
   InverterStatusEntity: sensor.solax_run_mode

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text.Json;
+using NetDaemon.HassModel.Entities;
 using static NetDeamon.apps.PVControl.PVControlCommon;
 using NetDeamon.apps;
 
@@ -13,32 +14,54 @@ namespace NetDeamon.apps.PVControl
   public class PriceManager
   {
     private PriceList _priceListCache = new();
+    private PriceList _independentExportPriceListCache = new();
 
     /// <summary>Maximum import price (€/kWh) at which force-charging is permitted.</summary>
     public float ForceChargeMaxPrice { get; set; }
 
-    /// <summary>Clears the netto cache, forcing a re-fetch on the next access.</summary>
-    public void UpdatePriceList() => _priceListCache = new();
+    /// <summary>Clears the netto caches, forcing a re-fetch on the next access.</summary>
+    public void UpdatePriceList()
+    {
+      _priceListCache = new();
+      _independentExportPriceListCache = new();
+    }
 
-    /// <summary>Raw EPEX Spot netto prices (€/kWh), lazily fetched and cached.</summary>
+    /// <summary>Fetches and normalizes a netto price list from a resolved entity's "data"
+    /// attribute (the ha_epex_spot forecast array shape). Returns an empty list if the entity
+    /// is null or has no valid data.</summary>
+    private static PriceList FetchNettoPriceList(Entity? sourceEntity)
+    {
+      if (sourceEntity is not null && sourceEntity.TryGetJsonAttribute("data", out JsonElement data)
+          && data.Deserialize<System.Collections.Generic.List<PriceTableEntry>>()
+              ?.OrderBy(x => x.StartTime).ToList() is System.Collections.Generic.List<PriceTableEntry> priceList)
+      {
+        return new PriceList(priceList.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.Price)))
+          .NormalizeToQuarterHourly();
+      }
+      return new PriceList();
+    }
+
+    /// <summary>Raw EPEX Spot netto import prices (€/kWh), lazily fetched and cached.</summary>
     public PriceList PriceListNetto
     {
       get
       {
         if (_priceListCache.Count == 0)
-        {
-          if (PVCC_Config.CurrentImportPriceEntity is not null
-              && PVCC_Config.CurrentImportPriceEntity.TryGetJsonAttribute("data", out JsonElement data))
-          {
-            if (data.Deserialize<System.Collections.Generic.List<PriceTableEntry>>()
-                    ?.OrderBy(x => x.StartTime).ToList() is System.Collections.Generic.List<PriceTableEntry> priceList)
-            {
-              _priceListCache = new PriceList(priceList.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.Price)))
-                .NormalizeToQuarterHourly();
-            }
-          }
-        }
+          _priceListCache = FetchNettoPriceList(PVCC_Config.CurrentImportPriceEntity);
         return _priceListCache;
+      }
+    }
+
+    /// <summary>Raw netto prices for the independent-variable export price case (neither
+    /// <see cref="PVConfig.ExportPriceSameAsImport"/> nor <see cref="PVConfig.ExportPriceFixed"/>),
+    /// lazily fetched and cached from <see cref="PVConfig.CurrentExportPriceEntity"/>.</summary>
+    public PriceList PriceListNettoIndependentExport
+    {
+      get
+      {
+        if (_independentExportPriceListCache.Count == 0)
+          _independentExportPriceListCache = FetchNettoPriceList(PVCC_Config.CurrentExportPriceEntity);
+        return _independentExportPriceListCache;
       }
     }
 
@@ -56,27 +79,36 @@ namespace NetDeamon.apps.PVControl
       new(PriceListNettoImport
           .Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceImport(p.Price, true, p.StartTime))));
 
-    /// <summary>Netto prices actually used to compute the variable branch of <see cref="PriceListExport"/>.
-    /// Empty when <see cref="PVConfig.ExportPriceIsVariable"/> is false (fixed feed-in tariff has no netto breakdown).</summary>
+    /// <summary>Netto prices actually used to compute <see cref="PriceListExport"/> when not
+    /// <see cref="PVConfig.ExportPriceFixed"/> — either <see cref="PriceListNetto"/> (reused from
+    /// import, when <see cref="PVConfig.ExportPriceSameAsImport"/>) or the independent export
+    /// price series. Empty when <see cref="PVConfig.ExportPriceFixed"/> is true (a fixed feed-in
+    /// tariff has no netto breakdown).</summary>
     public PriceList PriceListNettoExport =>
-      PVCC_Config.ExportPriceIsVariable ? PriceListNetto.WithResolution(PVCC_Config.ExportPriceResolution) : new PriceList();
+      PVCC_Config.ExportPriceFixed ? new PriceList()
+      : (PVCC_Config.ExportPriceSameAsImport ? PriceListNetto : PriceListNettoIndependentExport)
+          .WithResolution(PVCC_Config.ExportPriceResolution);
 
     /// <summary>Network fee component of <see cref="PriceListExport"/> (tax-inclusive), per slot.
-    /// Empty when <see cref="PVConfig.ExportPriceIsVariable"/> is false.</summary>
+    /// Empty when <see cref="PVConfig.ExportPriceFixed"/> is true.</summary>
     public PriceList PriceListNetworkExport =>
       new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, PVCC_Config.ExportPriceNetwork * (1 + PVCC_Config.ExportPriceTax))));
 
-    /// <summary>Brutto export prices — either variable (scaled netto) or fixed feed-in tariff.</summary>
+    /// <summary>Brutto export prices — either a fixed feed-in tariff (entity, falling back to a
+    /// static value), or scaled netto (reused from import, or an independent export price series).</summary>
     public PriceList PriceListExport
     {
       get
       {
-        if (PVCC_Config.ExportPriceIsVariable)
-          return new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
+        if (PVCC_Config.ExportPriceFixed)
+        {
+          float fixedPrice = PVCC_Config.ExportPriceFixedEntity is not null
+              && PVCC_Config.ExportPriceFixedEntity.TryGetStateValue(out float v, numericalGetBaseValue: false)
+            ? v : PVCC_Config.ExportPriceFixedValue;
+          return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, fixedPrice)));
+        }
 
-        return new(PriceListNetto.Select(p => new PriceTableEntry(
-          p.StartTime, p.EndTime,
-          PVCC_Config.CurrentExportPriceEntity.TryGetStateValue(out float value, numericalGetBaseValue: false) ? value : 0)));
+        return new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, CalculateBruttoPriceExport(p.Price, true))));
       }
     }
 

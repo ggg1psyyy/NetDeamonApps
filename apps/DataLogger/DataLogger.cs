@@ -45,7 +45,31 @@ namespace PVControl
       }
     }
 
-    public Entity? PriceEnergyExportEntity { get; set; }
+    /// <summary>How to determine which entity's value to log as priceenergyexport, checked in order:
+    /// 1. PriceEnergyExportSameAsImport: true -> reuse the resolved PriceEnergyImportEntity
+    /// 2. PriceEnergyExportFixed: true        -> PriceEnergyExportFixedEntity (falls back to
+    ///    PriceEnergyExportFixedValue in PopulateDB if the entity has no value)
+    /// 3. otherwise                           -> first available entity in PriceEnergyExportEntities</summary>
+    public bool PriceEnergyExportSameAsImport { get; set; }
+    public bool PriceEnergyExportFixed { get; set; }
+    public Entity? PriceEnergyExportFixedEntity { get; set; }
+    public float PriceEnergyExportFixedValue { get; set; }
+    public List<Entity>? PriceEnergyExportEntities { get; set; }
+
+    public Entity? PriceEnergyExportEntity
+    {
+      get
+      {
+        if (PriceEnergyExportSameAsImport) return PriceEnergyImportEntity;
+        if (PriceEnergyExportFixed) return PriceEnergyExportFixedEntity;
+        if (PriceEnergyExportEntities is null) return null;
+        foreach (var entity in PriceEnergyExportEntities)
+          if (float.TryParse(entity.State, NumberStyles.Any, CultureInfo.InvariantCulture, out _))
+            return entity;
+        return null;
+      }
+    }
+
     public Entity? ImportEnergyEntity { get; set; }
     public Entity? ExportEnergyEntity { get; set; }
     public Entity? HouseEnergyEntity { get; set; }
@@ -108,6 +132,7 @@ namespace PVControl
         await con.CloseAsync();
       }
       await InitializeDB();
+      LogUnavailableSensors();
 #if DEBUG
       //await PopulateDB();
       //await PopulateDB(true);
@@ -115,6 +140,46 @@ namespace PVControl
 #endif
       _scheduler.ScheduleCron("*/15 * * * *", async () => await ScheduleRun());
       //_scheduler.ScheduleCron("59 23 * * *", async () => await PopulateDB(true));
+    }
+    /// <summary>
+    /// Logs a warning for every configured sensor that's unavailable/unknown/missing at startup.
+    /// Runs once (InitializeAsync only runs once per app lifetime) rather than on every
+    /// ScheduleRun tick, so a sensor that's been down for hours doesn't flood the log.
+    /// </summary>
+    private void LogUnavailableSensors()
+    {
+      (string Name, Entity? Entity)[] entities =
+      [
+        (nameof(_config.TemperatureOutsideEntity), _config.TemperatureOutsideEntity),
+        (nameof(_config.TemperatureInsideEntity), _config.TemperatureInsideEntity),
+        (nameof(_config.AtmoPressureEntity), _config.AtmoPressureEntity),
+        (nameof(_config.TemperatureWarmwaterEntity), _config.TemperatureWarmwaterEntity),
+        (nameof(_config.CloudCoverEntity), _config.CloudCoverEntity),
+        (nameof(_config.HumidityEntity), _config.HumidityEntity),
+        (nameof(_config.BatterySoCEntity), _config.BatterySoCEntity),
+        (nameof(_config.PVYieldEntity), _config.PVYieldEntity),
+        ($"{nameof(_config.PriceEnergyImportEntity)} (resolved)", _config.PriceEnergyImportEntity),
+        ($"{nameof(_config.PriceEnergyExportEntity)} (resolved)", _config.PriceEnergyExportEntity),
+        (nameof(_config.HouseEnergyEntity), _config.HouseEnergyEntity),
+        (nameof(_config.ImportEnergyEntity), _config.ImportEnergyEntity),
+        (nameof(_config.ExportEnergyEntity), _config.ExportEnergyEntity),
+        (nameof(_config.BatteryChargeEntity), _config.BatteryChargeEntity),
+        (nameof(_config.BatteryDischargeEntity), _config.BatteryDischargeEntity),
+        (nameof(_config.CarSoCEntity), _config.CarSoCEntity),
+        (nameof(_config.CarChargeEntity), _config.CarChargeEntity),
+        (nameof(_config.CarDischargeEntity), _config.CarDischargeEntity),
+        (nameof(_config.HeatPumpEnergyEntity), _config.HeatPumpEnergyEntity),
+        (nameof(_config.WarmwaterEnergyEntity), _config.WarmwaterEnergyEntity),
+      ];
+
+      foreach (var (name, entity) in entities)
+      {
+        if (entity is null) continue; // not configured — expected, not a failure
+        if (entity.State is null
+            || entity.State.Equals("unavailable", StringComparison.OrdinalIgnoreCase)
+            || entity.State.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+          _logger.LogWarning("DataLogger: {name} ({entityId}) is not available at startup", name, entity.EntityId);
+      }
     }
     /// <summary>
     /// Run this at least every 15-30 minutes to make sure every period is correctly logged even if netDeamon or HA restarts
@@ -238,8 +303,11 @@ namespace PVControl
         AddFloatTask(averageTasks, _config.CloudCoverEntity, FloatTask.average, historyStart, historyEnd);
         AddFloatTask(averageTasks, _config.HumidityEntity, FloatTask.average, historyStart, historyEnd);
         AddFloatTask(averageTasks, _config.BatterySoCEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.PriceEnergyExportEntity, FloatTask.last, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.PriceEnergyImportEntity, FloatTask.last, historyStart, historyEnd);
+        // Price entities may update every 15 min while this window can span an hour (or a full
+        // day) — average rather than "last", so a logged row always represents the true mean
+        // price over its window regardless of the source sensor's native update granularity.
+        AddFloatTask(averageTasks, _config.PriceEnergyExportEntity, FloatTask.average, historyStart, historyEnd);
+        AddFloatTask(averageTasks, _config.PriceEnergyImportEntity, FloatTask.average, historyStart, historyEnd);
         AddFloatTask(averageTasks, _config.PVYieldEntity, FloatTask.diff, historyStart, historyEnd);
         AddFloatTask(averageTasks, _config.HouseEnergyEntity, FloatTask.diff, historyStart, historyEnd);
         AddFloatTask(averageTasks, _config.ImportEnergyEntity, FloatTask.diff, historyStart, historyEnd);
@@ -260,7 +328,8 @@ namespace PVControl
         int? humidity = (int?)GetFloatTaskResult(averageTasks, _config.HumidityEntity);
         int? batterySoC = (int?)GetFloatTaskResult(averageTasks, _config.BatterySoCEntity);
         float? priceEnergyImport = GetFloatTaskResult(averageTasks, _config.PriceEnergyImportEntity);
-        float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity);
+        float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity)
+          ?? (_config.PriceEnergyExportFixed ? _config.PriceEnergyExportFixedValue : null);
         int? pvYield = (int?)(GetFloatTaskResult(averageTasks, _config.PVYieldEntity) * 1000);
         int? houseEnergyUsed = (int?)(GetFloatTaskResult(averageTasks, _config.HouseEnergyEntity));
         int? energyImport = (int?)(GetFloatTaskResult(averageTasks, _config.ImportEnergyEntity) * 1000);

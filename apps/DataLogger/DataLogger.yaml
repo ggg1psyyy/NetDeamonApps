@@ -14,7 +14,16 @@ PVControl.DataLoggerConfig:
     - sensor.epex_spot_data_market_price_3
     - sensor.epex_spot_data_market_price
     - sensor.epex_spot_data_market_price_2
-  PriceEnergyExportEntity: sensor.oemag_marktpreis
+  # How to determine which entity's value to log as priceenergyexport, checked in order:
+  #   1. PriceEnergyExportSameAsImport: true -> reuse the resolved import price entity
+  #   2. PriceEnergyExportFixed: true        -> PriceEnergyExportFixedEntity or PriceEnergyExportFixedValue
+  #   3. otherwise                           -> first available entity in PriceEnergyExportEntities
+  PriceEnergyExportSameAsImport: false
+  PriceEnergyExportFixed: false
+  # PriceEnergyExportFixedEntity: sensor.some_fixed_feedin_tariff
+  # PriceEnergyExportFixedValue: 0.05
+  PriceEnergyExportEntities:
+    - sensor.oemag_marktpreis
   HouseEnergyEntity: sensor.house_energy_consumption_day
   ImportEnergyEntity: sensor.solax_today_s_import_energy
   ExportEnergyEntity: sensor.solax_today_s_export_energy

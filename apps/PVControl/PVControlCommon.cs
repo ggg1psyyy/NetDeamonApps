@@ -129,8 +129,11 @@ namespace NetDeamon.apps.PVControl
     public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
     public PriceResolution ImportPriceResolution { get; set; } = PriceResolution.Hourly;
-    public Entity CurrentExportPriceEntity { get; set; } = null!;
-    public bool ExportPriceIsVariable { get; set; } = default;
+    public bool ExportPriceSameAsImport { get; set; } = true;
+    public bool ExportPriceFixed { get; set; } = default;
+    public Entity? ExportPriceFixedEntity { get; set; }
+    public float ExportPriceFixedValue { get; set; } = default;
+    public List<Entity>? CurrentExportPriceEntities { get; set; }
     public float ExportPriceMultiplier { get; set; } = default;
     public float ExportPriceAddition { get; set; } = default;
     public float ExportPriceNetwork { get; set; } = default;
@@ -166,6 +169,23 @@ namespace NetDeamon.apps.PVControl
             return entity;
         }
         return null!;
+      }
+    }
+    /// <summary>First entity in <see cref="CurrentExportPriceEntities"/> with a valid "data"
+    /// attribute, mirroring <see cref="CurrentImportPriceEntity"/>. Only used for the
+    /// independent-variable export price case (neither <see cref="ExportPriceSameAsImport"/>
+    /// nor <see cref="ExportPriceFixed"/>).</summary>
+    public Entity? CurrentExportPriceEntity
+    {
+      get
+      {
+        if (CurrentExportPriceEntities is null) return null;
+        foreach (var entity in CurrentExportPriceEntities)
+        {
+          if (entity.TryGetJsonAttribute("data", out _))
+            return entity;
+        }
+        return null;
       }
     }
     public int MaxBatteryChargePower
