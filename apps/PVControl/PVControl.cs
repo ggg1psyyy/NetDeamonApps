@@ -73,9 +73,6 @@ namespace NetDeamon.apps.PVControl
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger, IHomeAssistantApiManager apiManager)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
-      // Converter often needs some time after restart of HA to give values
-      while (!config.Value.BatterySoCEntity.TryGetStateValue<int>(out _))
-        System.Threading.Thread.Sleep(1000);
       PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler, apiManager);
       if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
         PVCC_Config.DBLocation = "apps/DataLogger/energy_history.db";
@@ -89,6 +86,21 @@ namespace NetDeamon.apps.PVControl
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
     {
+      // Converter often needs some time after restart of HA to give values. Everything
+      // downstream depends on a real BatterySoC reading, so we wait for it here rather than in
+      // the constructor — NetDaemon loads apps one at a time and awaits each one's
+      // InitializeAsync before starting the next, so waiting here (instead of blocking a raw
+      // thread with Thread.Sleep in the constructor) at least logs progress and stays cancellable.
+      int waitSeconds = 0;
+      while (!PVCC_Config.BatterySoCEntity.TryGetStateValue<int>(out _))
+      {
+        if (waitSeconds % 30 == 0)
+          PVCC_Logger.LogWarning("Waiting for {entity} to become available ({seconds}s so far)",
+            PVCC_Config.BatterySoCEntity.EntityId, waitSeconds);
+        await Task.Delay(1000, cancellationToken);
+        waitSeconds++;
+      }
+
       // Remove old legacy sensors
       #if DEBUG
       foreach (var id in new[] {
@@ -386,10 +398,10 @@ namespace NetDeamon.apps.PVControl
       var attr_RemainingTime = new
       {
         Estimated_time = now.AddMinutes(_house.Battery.EstimatedTimeToBatteryFullOrEmpty).ToISO8601(),
-        next_relevant_pv_charge = _house.PVWindows.FirstRelevantPVEnergyToday.ToISO8601(),
+        next_relevant_pv_charge = _house.SimulationState?.FirstRelevantPVEnergyToday?.ToISO8601() ?? "none",
         avg_battery_charge_or_discharge_Power = _house.Battery.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         status = _house.Battery.BatteryStatus.ToString(),
-        time_on_max = _house.PVWindows.MaxSocDurationToday.ToString(CultureInfo.InvariantCulture) + " h",
+        time_on_max = (_house.SimulationState?.MaxSocDurationToday.TotalHours ?? 0).ToString(CultureInfo.InvariantCulture) + " h",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
       #endregion

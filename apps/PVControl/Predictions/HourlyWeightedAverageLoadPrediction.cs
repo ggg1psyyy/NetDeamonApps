@@ -61,6 +61,8 @@ namespace NetDeamon.apps.PVControl.Predictions
 
       float weightedSum = weights.Sum(w => w.Value * w.Weight);
       float sumOfWeights = weights.Sum(w => w.Weight);
+      if (sumOfWeights == 0)
+        return 0;
       float weightedAverage = weightedSum / sumOfWeights;
       return (int)Math.Round(weightedAverage, 0);
     }

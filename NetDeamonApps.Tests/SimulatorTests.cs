@@ -287,6 +287,144 @@ public class SimulatorTests : TestBase
     Assert.DoesNotContain(evSlots.Slots, s => s.Time.Date == start.Date && s.SoC >= 99);
   }
 
+  // ── charge/discharge rate limit tests ───────────────────────────────────────
+
+  [Fact]
+  public void PVDeficitExceedsChargeRate_DischargeIsCappedAndRemainderComesFromGrid()
+  {
+    // MaxChargePowerAmps=10 -> maxChargeWh = 10 * 230V / 4 = 575 Wh/slot (EnergySimulator's
+    // hardware rate limit). A 2000 Wh/slot load with no PV creates a 2000 Wh deficit, far
+    // beyond what the battery/inverter can physically discharge in one 15-min slot, so the
+    // remainder must show up as grid import rather than being modeled as instant battery drain.
+    var start = new DateTime(2025, 6, 15, 9, 0, 0);
+    var slots = EnergySimulator.Simulate(BuildInput(start, startSocPct: 70, loadWhPerSlot: 2000, pvWhPerSlot: 0));
+    var firstSlot = slots[0];
+
+    Assert.True(firstSlot.BatteryDischargeWh <= 575);
+    Assert.Equal(2000 - firstSlot.BatteryDischargeWh, firstSlot.GridImportWh);
+    Assert.True(firstSlot.GridImportWh > 0);
+  }
+
+  [Fact]
+  public void HouseOnly_PVSurplusExceedsChargeRate_ChargeIsCappedAndSurplusCurtailed()
+  {
+    // Negative export price -> house_only (no grid export allowed). PV surplus of 2700 Wh/slot
+    // (3000 pv - 300 load) far exceeds the 575 Wh/slot rate limit, so charging must be capped
+    // and the excess simply curtailed (house_only never exports), not smuggled in over the limit.
+    var start = new DateTime(2025, 6, 15, 12, 0, 0);
+    var date = start.Date;
+    var horizonDate = date.AddDays(3);
+
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = 300;
+      pv[t] = 3000;
+    }
+
+    var importPrices = new List<PriceTableEntry>();
+    var exportPrices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+    {
+      importPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), 20f)); // never negative
+      exportPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), -5f)); // always negative
+    }
+
+    var input = new SimulationInput
+    {
+      StartTime                  = start,
+      StartSocPercent            = 50,
+      BatteryCapacityWh          = 10_000,
+      AbsoluteMinSocPercent      = 12,
+      PreferredMinSocPercent     = 20,
+      EnforcePreferredSoc        = false,
+      MaxChargePowerAmps         = 10,
+      InverterEfficiency         = 0.9f,
+      ImportPrices               = importPrices,
+      ExportPrices               = exportPrices,
+      LoadPredictionWh           = load,
+      PVPredictionWh             = pv,
+      EnableCheapForceCharge     = false,
+      OpportunisticDischarge     = false,
+      ForceChargeMaxPrice        = 0.25f,
+      ForceChargeTargetSocPercent = 100,
+      CurrentMode                = new InverterState(InverterModes.normal),
+    };
+
+    var slots = EnergySimulator.Simulate(input);
+    var firstSlot = slots[0];
+
+    Assert.Equal(InverterModes.house_only, firstSlot.State.Mode);
+    Assert.Equal(575, firstSlot.BatteryChargeWh);
+    Assert.Equal(0, firstSlot.GridExportWh);
+  }
+
+  // ── battery charge enable tests ───────────────────────────────────────────
+
+  [Fact]
+  public void NegativeImportPrice_WithCheaperWindowLaterToday_CurtailsPVSurplusInsteadOfCharging()
+  {
+    // 09:00 import price is negative but a cheaper (more negative) window is still coming
+    // at 14:00 today — ComputeMode defers grid charging to that window and disables battery
+    // charging in the meantime so PV surplus doesn't fill the battery first (HouseEnergy.cs
+    // ComputeMode / EnergySimulator.HouseOnly). PV surplus during 09:00 must be curtailed,
+    // not captured, and the slot must show zero flow in every direction.
+    var start = new DateTime(2025, 6, 15, 9, 0, 0);
+    var date = start.Date;
+    var horizonDate = date.AddDays(3);
+
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = 300;
+      pv[t] = 1000; // 700 Wh/slot surplus over load
+    }
+
+    var importPrices = new List<PriceTableEntry>();
+    var exportPrices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+    {
+      float price = (h % 24) == 9 ? -5f
+                  : (h % 24) == 14 ? -10f
+                  : 20f;
+      importPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), price));
+      exportPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), 10f));
+    }
+
+    var input = new SimulationInput
+    {
+      StartTime                  = start,
+      StartSocPercent            = 50,
+      BatteryCapacityWh          = 10_000,
+      AbsoluteMinSocPercent      = 12,
+      PreferredMinSocPercent     = 20,
+      EnforcePreferredSoc        = false,
+      MaxChargePowerAmps         = 10,
+      InverterEfficiency         = 0.9f,
+      ImportPrices               = importPrices,
+      ExportPrices               = exportPrices,
+      LoadPredictionWh           = load,
+      PVPredictionWh             = pv,
+      EnableCheapForceCharge     = false,
+      OpportunisticDischarge     = false,
+      ForceChargeMaxPrice        = 0.25f,
+      ForceChargeTargetSocPercent = 100,
+      CurrentMode                = new InverterState(InverterModes.normal),
+    };
+
+    var slots = EnergySimulator.Simulate(input);
+    var firstSlot = slots[0];
+
+    Assert.Equal(InverterModes.house_only, firstSlot.State.Mode);
+    Assert.False(firstSlot.State.BatteryChargeEnable);
+    Assert.Equal(0, firstSlot.BatteryChargeWh);
+    Assert.Equal(0, firstSlot.BatteryDischargeWh);
+    Assert.Equal(0, firstSlot.GridImportWh);
+    Assert.Equal(0, firstSlot.GridExportWh);
+  }
+
   // ── overnight window fix tests ─────────────────────────────────────────────
 
   /// <summary>

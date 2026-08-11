@@ -77,10 +77,9 @@ namespace NetDeamon.apps.PVControl
 
       if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
-      Prediction_BatterySoC = new BatterySoCPrediction(Prediction_NetEnergy, PVCC_Config.BatterySoCEntity, Battery.BatteryCapacity);
+      Prediction_BatterySoC = new BatterySoCPrediction();
       Battery.SoCPrediction = Prediction_BatterySoC;
 
-      PVWindows = new PVWindows(Prediction_NetEnergy, Prediction_BatterySoC);
       Snapshots = new DailySnapshots(Prediction_PV, Prediction_Load, Prediction_BatterySoC, () => _simulationResult!);
 
       PVCC_Config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentImportPriceEntity));
@@ -118,7 +117,6 @@ namespace NetDeamon.apps.PVControl
     // ── Sub-objects ───────────────────────────────────────────────────────────────────────
     public BatteryState Battery { get; }
     public CostTracker Costs { get; }
-    public PVWindows PVWindows { get; }
     public DailySnapshots Snapshots { get; }
 
     /// <summary>UserSetting: ForceCharge to 100%</summary>
@@ -783,16 +781,6 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>Full simulation result including PV windows and derived predicates.</summary>
     public SimulationResult? SimulationState => _simulationResult;
-
-    public bool NegativeImportPriceUpcomingToday
-    {
-      get
-      {
-        var now = DateTime.Now;
-        var negativeImportPrices = Prices.PriceListImport.Where(p => p.StartTime.Date == now.Date && p.Price < 0).ToList();
-        return negativeImportPrices.Count > 0 && negativeImportPrices.FirstOrDefault().StartTime > now;
-      }
-    }
 
     public void UpdatePredictions(bool all = false)
     {

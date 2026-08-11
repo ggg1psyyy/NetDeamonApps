@@ -129,30 +129,4 @@ public class BatteryState
     int pow = amps * volts;
     return CalculateChargingDurationWh(startSoC, endSoC, pow);
   }
-
-  public DateTime CalculateRuntime(DateTime startTime, int startSoc, int minSoc = -1)
-  {
-    if (minSoc < 0)
-      minSoc = PreferredMinimalSoC;
-    if (SoCPrediction is null) return startTime;
-    int pred_Soc_At_StartTime = SoCPrediction.TodayAndTomorrow.GetEntryAtTime(startTime).Value;
-    int diff = pred_Soc_At_StartTime - startSoc;
-    var pred_New = SoCPrediction.TodayAndTomorrow
-      .Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff))
-      .ToDictionary();
-    return pred_New.FirstUnderOrDefault(minSoc, start: startTime).Key;
-  }
-
-  public int CalculateSocNeedeedToReachTime(DateTime startTime, DateTime endTime, int minSoc = -1)
-  {
-    if (minSoc < 0)
-      minSoc = PreferredMinimalSoC;
-    if (SoCPrediction is null) return minSoc;
-    int pred_Soc_At_EndTime = SoCPrediction.TodayAndTomorrow.GetEntryAtTime(endTime).Value;
-    int diff = pred_Soc_At_EndTime - minSoc;
-    var pred_New = SoCPrediction.TodayAndTomorrow
-      .Select(kvp => new KeyValuePair<DateTime, int>(kvp.Key, kvp.Value - diff))
-      .ToDictionary();
-    return pred_New.GetEntryAtTime(startTime).Value;
-  }
 }

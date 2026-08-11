@@ -8,7 +8,12 @@ PVControl.DataLoggerConfig:
   HumidityEntity: sensor.pirateweather_humidity
   BatterySoCEntity: sensor.solax_battery_capacity
   PVYieldEntity: sensor.solax_today_s_solar_energy
-  PriceEnergyImportEntity: sensor.epex_spot_data_net_price
+  # Priority-ordered fallback list — same epex_spot source family PVControl.yaml uses,
+  # since one or another provider variant occasionally stops reporting for hours/days.
+  PriceEnergyImportEntities:
+    - sensor.epex_spot_data_market_price_3
+    - sensor.epex_spot_data_market_price
+    - sensor.epex_spot_data_market_price_2
   PriceEnergyExportEntity: sensor.oemag_marktpreis
   HouseEnergyEntity: sensor.house_energy_consumption_day
   ImportEnergyEntity: sensor.solax_today_s_import_energy

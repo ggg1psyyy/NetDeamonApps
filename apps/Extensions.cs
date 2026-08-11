@@ -135,17 +135,28 @@ namespace NetDeamon.apps
     {
       if (!entity.TryGetJsonAttribute("unit_of_measurement", out JsonElement unitAttr))
         return 1f;
-      string unit = unitAttr.ToString().ToLower();
+      return GetUnitMultiplicator(unitAttr.ToString());
+    }
+    public static float GetUnitMultiplicator(string? unit)
+    {
       if (unit is not null && unit.Length > 1)
       {
-        if (unit.StartsWith("ct"))
+        string lowerUnit = unit.ToLower();
+        if (lowerUnit.StartsWith("ct"))
           return 0.01f;  // ct → € (base unit is €)
-        if (unit.StartsWith('€') || unit.StartsWith("eur"))
+        if (lowerUnit.StartsWith('€') || lowerUnit.StartsWith("eur"))
           return 1f;
-        if (unit.StartsWith('k'))
-          return 1000f;
-        if (unit.StartsWith('m'))
-          return 1000000f;
+        // Only apply SI prefix scaling to the known power/energy base units (W, Wh) — HA has
+        // plenty of legitimate units that merely start with k/M/m without being SI-prefixed
+        // (e.g. "min", "mbar", "Mbit/s"), so match the prefix + exact base unit, not just the
+        // first letter. SI prefixes are case-sensitive: k = kilo, M = mega, m = milli.
+        string baseUnit = unit[1..];
+        if (baseUnit is "W" or "Wh")
+        {
+          if (unit[0] == 'k') return 1000f;
+          if (unit[0] == 'M') return 1000000f;
+          if (unit[0] == 'm') return 0.001f;
+        }
       }
       return 1f;
     }

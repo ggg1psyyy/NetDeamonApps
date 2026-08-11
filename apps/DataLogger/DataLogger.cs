@@ -26,7 +26,25 @@ namespace PVControl
     public Entity? HumidityEntity { get; set; }
     public Entity? BatterySoCEntity { get; set; }
     public Entity? PVYieldEntity { get; set; }
-    public Entity? PriceEnergyImportEntity { get; set; }
+
+    /// <summary>Priority-ordered fallback list — the EPEX provider occasionally stops
+    /// reporting for hours/days, so we fall through to the next source that has a valid state.</summary>
+    public List<Entity>? PriceEnergyImportEntities { get; set; }
+
+    /// <summary>First entity in <see cref="PriceEnergyImportEntities"/> with a currently
+    /// parseable numeric state, or null if none are available.</summary>
+    public Entity? PriceEnergyImportEntity
+    {
+      get
+      {
+        if (PriceEnergyImportEntities is null) return null;
+        foreach (var entity in PriceEnergyImportEntities)
+          if (float.TryParse(entity.State, NumberStyles.Any, CultureInfo.InvariantCulture, out _))
+            return entity;
+        return null;
+      }
+    }
+
     public Entity? PriceEnergyExportEntity { get; set; }
     public Entity? ImportEnergyEntity { get; set; }
     public Entity? ExportEnergyEntity { get; set; }
@@ -242,7 +260,7 @@ namespace PVControl
         int? humidity = (int?)GetFloatTaskResult(averageTasks, _config.HumidityEntity);
         int? batterySoC = (int?)GetFloatTaskResult(averageTasks, _config.BatterySoCEntity);
         float? priceEnergyImport = GetFloatTaskResult(averageTasks, _config.PriceEnergyImportEntity);
-        float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity) * 100;
+        float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity);
         int? pvYield = (int?)(GetFloatTaskResult(averageTasks, _config.PVYieldEntity) * 1000);
         int? houseEnergyUsed = (int?)(GetFloatTaskResult(averageTasks, _config.HouseEnergyEntity));
         int? energyImport = (int?)(GetFloatTaskResult(averageTasks, _config.ImportEnergyEntity) * 1000);

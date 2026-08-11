@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl.Simulator;
 using NetDaemon.HassModel.Entities;
+using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Managers
 {
@@ -68,7 +69,8 @@ namespace NetDeamon.apps.PVControl.Managers
     {
       get
       {
-        Config.CurrentLevelEntity.TryGetStateValue(out float v);
+        if (!Config.CurrentLevelEntity.TryGetStateValue(out float v))
+          PVCC_Logger.LogError("Load {load}: could not get current level from {entity}", Config.Name, Config.CurrentLevelEntity.EntityId);
         return v;
       }
     }

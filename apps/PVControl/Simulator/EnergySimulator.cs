@@ -386,8 +386,10 @@ public static class EnergySimulator
       if (need.LatestChargeTime <= pvTakeover)
       {
         // Battery will hit minimum before today's PV recovery → must charge before solar arrives.
+        // `now` is always on an exact quarter-hour slot boundary, so searching from `now` itself
+        // (rather than flooring to the top of the hour) never lets an already-elapsed slot win.
         bestChargeWindow = input.ImportPrices
-          .Where(p => p.StartTime >= now.Date.AddHours(now.Hour) && p.StartTime < pvTakeover)
+          .Where(p => p.StartTime >= now && p.StartTime < pvTakeover)
           .OrderBy(p => p.Price)
           .FirstOrDefault();
         if (bestChargeWindow.StartTime == default)
@@ -484,7 +486,7 @@ public static class EnergySimulator
       // PV → house only, no grid export; battery charges from PV surplus or discharges for deficit.
       // Grid import is still allowed as a fallback if the battery is depleted.
       InverterModes.house_only
-        => HouseOnly(pvWh, totalLoadWh, availEnergy, maxCapacity, minEnergy),
+        => HouseOnly(pvWh, totalLoadWh, availEnergy, maxCapacity, minEnergy, maxChargeWh, state.BatteryChargeEnable),
 
       InverterModes.feedin_priority
         => FeedinPriority(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
@@ -512,9 +514,9 @@ public static class EnergySimulator
       int battCharge = Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy));
       return (battCharge, 0, 0, net - battCharge);
     }
-    // PV deficit: discharge battery down to the absolute minimum; grid covers the rest
+    // PV deficit: discharge battery down to the absolute minimum, up to the rate limit; grid covers the rest
     int deficit = -net;
-    int battDischarge = Math.Min(deficit, Math.Max(0, availEnergy - minEnergy));
+    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, Math.Max(0, availEnergy - minEnergy)));
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 
@@ -570,24 +572,27 @@ public static class EnergySimulator
 
   /// <summary>
   /// House-only mode: no grid export. PV covers house load first; any PV surplus charges
-  /// the battery (up to capacity). If PV is insufficient the battery discharges for the
-  /// deficit; if the battery is depleted the grid covers the remainder as a fallback.
+  /// the battery (up to capacity and the rate limit), unless <paramref name="batteryChargeEnable"/>
+  /// is false — in which case the surplus is curtailed instead, preserving battery room for a
+  /// deferred cheap/negative-price grid-charge window. If PV is insufficient the battery
+  /// discharges for the deficit (up to the rate limit); if the battery is depleted or the
+  /// deficit exceeds the rate limit, the grid covers the remainder as a fallback.
   /// This mode is active when the export price is negative — we avoid feeding in but still
   /// need to power the house and can use the battery normally.
   /// </summary>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) HouseOnly(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int minEnergy)
+    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int minEnergy, int maxChargeWh, bool batteryChargeEnable = true)
   {
     int net = pvWh - totalLoadWh;
     if (net >= 0)
     {
-      // PV surplus: charge battery, no export
-      int battCharge = Math.Min(net, maxCapacity - availEnergy);
+      // PV surplus: charge battery up to the rate limit, no export — or curtail if battery charging is disabled
+      int battCharge = batteryChargeEnable ? Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy)) : 0;
       return (battCharge, 0, 0, 0);
     }
-    // PV deficit: discharge battery first, grid as fallback — never export
+    // PV deficit: discharge battery first (up to the rate limit), grid as fallback — never export
     int deficit = -net;
-    int battDischarge = Math.Min(deficit, availEnergy - minEnergy);
+    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, availEnergy - minEnergy));
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 
