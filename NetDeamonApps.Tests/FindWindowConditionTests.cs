@@ -12,7 +12,10 @@ namespace NetDeamonApps.Tests;
 /// Tests verifying the SIMULATION CONDITIONS that drive FindLoadWindow's binary search
 /// for each LoadSchedulingMode.  FindLoadWindow itself is private, so these tests operate
 /// directly on EnergySimulator.Simulate() and check the predicates that each binary-search
-/// step relies on.
+/// step relies on. This also means FindLoadWindow's own early-exit branches (Off, target-reached,
+/// AvailabilityEntity not present, …) aren't covered here — they read live Entity/PVCC_Config
+/// state and FindLoadWindow has no public/reflective test seam, matching the HA-integration
+/// testing exception documented in CLAUDE.md.
 ///
 /// Live data source: 2026-03-22 morning (~09:30), confirmed via Home Assistant sensors:
 ///   - Battery: 11 520 Wh capacity, SoC 59 % (solax_battery_capacity = 59)

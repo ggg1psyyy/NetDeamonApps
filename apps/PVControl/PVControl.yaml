@@ -109,6 +109,11 @@ NetDeamon.apps.PVControl.PVConfig:
       CurrentLevelEntity: sensor.byd_atto_2_ladezustand
       ActualPowerEntity: sensor.esp_ct8_carport
       ActualEnergyEntity: sensor.esp_ct8_daily_energy_carport
+      # Reflects whether a chargeable car is at home (HA-side; already accounts for the
+      # other-car-at-home override there) — used only to skip planning a charge window when
+      # nothing is actually here to charge. The physical charger's own "ignore ChargeNow if
+      # not Home" safety gate stays entirely in HA, unaffected by this.
+      AvailabilityEntity: binary_sensor.ev_is_home
       # Subtract historical car-charging from the base load prediction (avoids double-counting).
       # Known DB column names: carcharge, warmwaterenergy, heatpumpenergy. Omit if no DB history.
       HistoryDbColumn: "carcharge"

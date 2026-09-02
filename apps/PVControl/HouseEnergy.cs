@@ -396,6 +396,10 @@ namespace NetDeamon.apps.PVControl
       if (load.Mode == LoadSchedulingMode.Off)
       { SetResult([], false, "Off", null); return; }
 
+      if (load.Config.AvailabilityEntity is not null &&
+          (!load.Config.AvailabilityEntity.TryGetStateValue(out bool available) || !available))
+      { SetResult([], false, $"{load.Config.Name} not available (not present/plugged in)", null); return; }
+
       if (load.Config.CurrentLevelEntity is null || load.Config.EnergyPerLevelUnitKwh <= 0)
       { SetResult([], false, "CurrentLevelEntity or EnergyPerLevelUnitKwh not configured", null); return; }
 

@@ -51,6 +51,16 @@ namespace NetDeamon.apps.PVControl.Managers
     public Entity? ActualEnergyEntity { get; set; }
 
     /// <summary>
+    /// HA binary_sensor reporting whether this load's device is currently available/present
+    /// (e.g. car is home/plugged in). Optional — when null, the load is always considered
+    /// available (backward-compatible default for loads with no presence concept, e.g. a heat pump).
+    /// This is a scheduling-quality input only: it must never be treated as a hardware safety
+    /// gate — any HA-side automation that actually starts/stops physical hardware based on
+    /// presence/location remains solely responsible for that and is unaffected by this field.
+    /// </summary>
+    public Entity? AvailabilityEntity { get; set; }
+
+    /// <summary>
     /// Column name in the hourly DB table whose historical values should be subtracted from the
     /// base load prediction, so this load's past energy is not double-counted when it is added
     /// back as an ExtraLoad in the simulation.
