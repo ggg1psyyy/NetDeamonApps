@@ -212,6 +212,21 @@ namespace NetDeamon.apps.PVControl
           {
             PVCC_Logger.LogInformation("Load {load}: TargetLevelEntity is null (static target from config)", load.Config.Name);
           }
+
+          // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
+          // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
+          // subscription pattern as other external sensors — recompute immediately on toggle
+          // instead of waiting for the next 15 s cron tick.
+          if (load.Config.AvailabilityEntity is not null)
+          {
+            PVCC_Logger.LogInformation("Subscribing to availability changes for {load} ({id})", load.Config.Name, load.Config.AvailabilityEntity.EntityId);
+            load.Config.AvailabilityEntity.StateChanges().SubscribeAsync(async _ =>
+            {
+#if !DEBUG
+              await ScheduledOperations();
+#endif
+            });
+          }
         }
 
 #if !DEBUG
@@ -377,6 +392,13 @@ namespace NetDeamon.apps.PVControl
             datetime = s.Key.ToISO8601(),
             charging = load.ExtraLoads.Any(e => s.Key >= e.StartTime && s.Key < e.EndTime),
           }).ToList();
+        // Derived from the actual planned window(s), not TargetLevel — FindLoadWindow's search
+        // is often capped short of the full target (PV window, price, SoC gates), so echoing
+        // TargetLevel would overstate the real outcome in exactly the cases this is meant to show.
+        float plannedWh = load.ExtraLoads.Sum(e => (float)(e.EndTime - e.StartTime).TotalHours * e.PowerW);
+        float? chargeEndPredictedSoc = load.ExtraLoads.Count > 0 && load.Config.EnergyPerLevelUnitKwh > 0
+          ? load.CurrentLevel + plannedWh / 1000f / load.Config.EnergyPerLevelUnitKwh
+          : null;
         var attr_load = new
         {
           reason = load.ChargeReason,
@@ -388,6 +410,7 @@ namespace NetDeamon.apps.PVControl
           net_pv_w = netPvW,
           charge_start_predicted = load.ExtraLoads.Count > 0 ? load.ExtraLoads[0].StartTime.ToISO8601() : "n/a",
           charge_end_predicted = load.PredictedEnd?.ToISO8601() ?? "n/a",
+          charge_end_predicted_soc = chargeEndPredictedSoc?.ToString("F0") ?? "n/a",
           charge_timeline = chargeTimeline,
         };
         await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);
