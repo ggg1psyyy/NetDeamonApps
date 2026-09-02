@@ -82,7 +82,14 @@ namespace NetDeamon.apps.PVControl
 
       Snapshots = new DailySnapshots(Prediction_PV, Prediction_Load, Prediction_BatterySoC, () => _simulationResult!);
 
-      PVCC_Config.CurrentImportPriceEntity?.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentImportPriceEntity));
+      // Subscribe to every candidate price entity (not just the one currently resolved as
+      // "active") so failover to/from a fallback provider is picked up live instead of only
+      // after a restart re-evaluates CurrentImportPriceEntity/CurrentExportPriceEntity fresh.
+      foreach (var priceEntity in PVCC_Config.CurrentImportPriceEntities)
+        priceEntity.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(priceEntity));
+      if (PVCC_Config.CurrentExportPriceEntities is not null)
+        foreach (var priceEntity in PVCC_Config.CurrentExportPriceEntities)
+          priceEntity.StateAllChanges().SubscribeAsync(async _ => await UserStateChanged(priceEntity));
       PVCC_Config.CurrentBatteryPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentBatteryPowerEntity));
       PVCC_Config.CurrentPVPowerEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentPVPowerEntity));
       PVCC_Config.CurrentHouseLoadEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentHouseLoadEntity));
@@ -144,7 +151,8 @@ namespace NetDeamon.apps.PVControl
 
     private async Task UserStateChanged(Entity entity)
     {
-      if (entity.EntityId == PVCC_Config.CurrentImportPriceEntity?.EntityId)
+      if (PVCC_Config.CurrentImportPriceEntities.Any(e => e.EntityId == entity.EntityId)
+        || (PVCC_Config.CurrentExportPriceEntities?.Any(e => e.EntityId == entity.EntityId) ?? false))
       {
         Prices.UpdatePriceList();
       }

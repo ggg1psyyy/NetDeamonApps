@@ -37,15 +37,26 @@ public class BatteryState
   public int BatterySoc =>
     PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
 
+  private int? _lastKnownMinBatterySoC;
+
+  /// <summary>Absolute minimum battery SoC floor (%), plus a 2% safety margin. Falls back to the
+  /// last known-good sensor reading (or the static config fallback) when the entity is transiently
+  /// unavailable or reports an implausible value, instead of collapsing toward 0 — this is a
+  /// safety-relevant floor that must not silently drop just because a sensor blipped (same failure
+  /// class as the BatteryCapacity divide-by-zero bug).</summary>
   public int AbsoluteMinimalSoC
   {
     get
     {
-      int minAllowedSoC = PVCC_Config.MinBatterySoCValue != default ? PVCC_Config.MinBatterySoCValue : 0;
-      if (PVCC_Config.MinBatterySoCEntity is not null && PVCC_Config.MinBatterySoCEntity.TryGetStateValue(out int minSoc))
-        minAllowedSoC = minSoc;
+      if (PVCC_Config.MinBatterySoCEntity is not null
+          && PVCC_Config.MinBatterySoCEntity.TryGetStateValue(out int minSoc)
+          && minSoc is >= 0 and <= 100)
+        _lastKnownMinBatterySoC = minSoc;
+      else if (_lastKnownMinBatterySoC is null)
+        _lastKnownMinBatterySoC = PVCC_Config.MinBatterySoCValue != default ? PVCC_Config.MinBatterySoCValue : 10;
+
       // add 2% to prevent inverter from shutting off early and needing to import probably expensive energy
-      return minAllowedSoC + 2;
+      return _lastKnownMinBatterySoC.Value + 2;
     }
   }
 
@@ -55,14 +66,21 @@ public class BatteryState
   public float InverterEfficiency =>
     PVCC_Config.InverterEfficiency != default ? PVCC_Config.InverterEfficiency : _defaultInverterEfficiency;
 
+  private float _lastKnownBatteryCapacity;
+
+  /// <summary>Physical battery capacity (Wh). Falls back to the last known-good reading when the
+  /// sensor is transiently unavailable (e.g. a BMS dropout) instead of collapsing to 0 — capacity
+  /// is a near-constant, and a 0 here causes a divide-by-zero in <c>EnergySimulator</c>.</summary>
   public int BatteryCapacity
   {
     get
     {
-      float batteryCapacity = PVCC_Config.BatteryCapacityValue != default ? PVCC_Config.BatteryCapacityValue : 0;
-      if (PVCC_Config.BatteryCapacityEntity is not null && PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out float battCapacity))
-        batteryCapacity = battCapacity;
-      return (int)batteryCapacity;
+      if (PVCC_Config.BatteryCapacityEntity is not null && PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out float battCapacity) && battCapacity > 0)
+        _lastKnownBatteryCapacity = battCapacity;
+      else if (_lastKnownBatteryCapacity == default && PVCC_Config.BatteryCapacityValue != default)
+        _lastKnownBatteryCapacity = PVCC_Config.BatteryCapacityValue;
+
+      return (int)_lastKnownBatteryCapacity;
     }
   }
 
