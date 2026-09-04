@@ -444,4 +444,54 @@ public class LoadSchedulingDecisionTests
     LoadSchedulingDecision.Decide(input, out string reason);
     Assert.Contains("cheap price", reason);
   }
+
+  // ── PrioritySoCGateOk (HouseEnergy.FindLoadWindow's real-time SoC gate) ────────────────────
+
+  [Fact]
+  public void PrioritySoCGateOk_Stop_BelowFloor_ReturnsFalse()
+    => Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: true, currentSoC: 19, socFloor: 20, netPvW: 4_000, chargeRateW: 1_800, hysteresisMarginPct: 5));
+
+  [Fact]
+  public void PrioritySoCGateOk_Stop_AtFloor_ReturnsTrue()
+    => Assert.True(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: true, currentSoC: 20, socFloor: 20, netPvW: -4_000, chargeRateW: 1_800, hysteresisMarginPct: 5));
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_JustOverFloor_NoPV_StaysBlocked()
+  {
+    // This is the reported bug: without hysteresis, currentSoC=21 > floor=20 would restart
+    // immediately after stopping — then drain straight back under the floor.
+    Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 21, socFloor: 20, netPvW: 0, chargeRateW: 1_800, hysteresisMarginPct: 5));
+  }
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_AtHysteresisThreshold_ReturnsTrue()
+    => Assert.True(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 25, socFloor: 20, netPvW: 0, chargeRateW: 1_800, hysteresisMarginPct: 5));
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_JustBelowHysteresisThreshold_ReturnsFalse()
+    => Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 24, socFloor: 20, netPvW: 0, chargeRateW: 1_800, hysteresisMarginPct: 5));
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_PvCoversChargeRate_BypassesHysteresis()
+  {
+    // Battery just over floor (no hysteresis climb yet) but PV alone can sustain the charge
+    // rate, so restarting won't draw the battery down further — allowed immediately.
+    Assert.True(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 21, socFloor: 20, netPvW: 1_800, chargeRateW: 1_800, hysteresisMarginPct: 5));
+  }
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_PvBelowChargeRate_StaysBlocked()
+    => Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 21, socFloor: 20, netPvW: 1_799, chargeRateW: 1_800, hysteresisMarginPct: 5));
+
+  [Fact]
+  public void PrioritySoCGateOk_Restart_BelowFloor_StaysBlockedEvenWithPV()
+    => Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
+        currentlyActive: false, currentSoC: 19, socFloor: 20, netPvW: 10_000, chargeRateW: 1_800, hysteresisMarginPct: 5));
 }

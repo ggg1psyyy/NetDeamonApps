@@ -144,6 +144,11 @@ namespace NetDeamon.apps.PVControl
     /// on each entry during every RunSimulation call.
     /// </summary>
     public List<SchedulableLoadRuntime> SchedulableLoads { get; private set; } = [];
+    /// <summary>
+    /// Restart hysteresis band (in SoC %) applied above the Priority/PriorityPlus SoC floor in
+    /// FindLoadWindow — see LoadSchedulingDecision.PrioritySoCGateOk.
+    /// </summary>
+    private const int PrioritySoCHysteresisPct = 5;
     /// <summary>Sum of average power (W) from all schedulable loads that are actively drawing above their minimum threshold.</summary>
     private int ActiveSchedulableLoadPowerW() => SchedulableLoads
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
@@ -593,6 +598,12 @@ namespace NetDeamon.apps.PVControl
       // away — the battery will have fully recharged by then, so the check always passes even
       // while the current overnight drain pushes SoC below the required floor.
       // This gate provides a direct live-SoC check that the simulation cannot substitute for.
+      //
+      // Restarting uses a Schmitt trigger (LoadSchedulingDecision.PrioritySoCGateOk) rather than
+      // the bare floor: without hysteresis, a session that just stopped at the floor restarts on
+      // the next tiny SoC uptick and immediately drains back under the floor again. PV surplus
+      // that already covers the charge rate bypasses the wait since it won't draw the battery
+      // down further.
       if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
       {
         bool isPriority = load.Mode == LoadSchedulingMode.Priority;
@@ -600,11 +611,14 @@ namespace NetDeamon.apps.PVControl
           ? Battery.PreferredMinimalSoC
           : Battery.AbsoluteMinimalSoC;
         int currentSoC = Battery.BatterySoc;
+        int netPvW = CurrentAveragePVPower - CurrentAverageHouseLoad;
 
-        if (currentSoC < socFloor)
+        if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct))
         {
-          SetResult([], false,
-            $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — {(wasActive ? "stopping, battery depleted" : "waiting for battery to recharge")}", null);
+          string reason = wasActive
+            ? $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — stopping, battery depleted"
+            : $"{load.Mode}: SoC {currentSoC}% < restart floor {socFloor + PrioritySoCHysteresisPct}% (net PV {netPvW}W < {chargeRateW}W needed) — waiting for battery to recover or PV to cover the load";
+          SetResult([], false, reason, null);
           return;
         }
       }

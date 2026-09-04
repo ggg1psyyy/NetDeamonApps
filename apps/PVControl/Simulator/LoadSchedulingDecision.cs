@@ -120,4 +120,33 @@ public static class LoadSchedulingDecision
     reason = $"Active ({input.Mode}: {chargeDesc})";
     return true;
   }
+
+  /// <summary>
+  /// Real-time Schmitt-trigger gate on the Priority/PriorityPlus SoC floor, used by
+  /// HouseEnergy.FindLoadWindow as a live safety overlay on top of the simulation-oracle window
+  /// search (which already owns price/PV window optimization for the session itself). Kept
+  /// separate from <see cref="Decide"/> above: that method also gates continuously on live PV
+  /// and price, which would fight the window search once a session is running.
+  ///
+  /// The hard floor (currentSoC &gt;= socFloor) always applies first, regardless of PV — a
+  /// depleted battery below the floor never allows charging to start or continue.
+  ///
+  /// Stop (currentlyActive):  currentSoC &lt; socFloor — hard cutoff, no hysteresis.
+  /// Start (!currentlyActive): currentSoC &gt;= socFloor + hysteresisMarginPct, i.e. the battery
+  ///   must recover a few percent above the floor before restarting. Without this, a session
+  ///   that just stopped at the floor restarts on the very next tiny SoC uptick and immediately
+  ///   drains back under the floor again (start/stop thrashing).
+  ///   Exception: once above the hard floor, if PV alone already covers the charge rate
+  ///   (netPvW >= chargeRateW), starting won't draw the battery down further, so the
+  ///   hysteresis wait is skipped.
+  /// </summary>
+  public static bool PrioritySoCGateOk(
+    bool currentlyActive, int currentSoC, int socFloor, int netPvW, int chargeRateW, int hysteresisMarginPct)
+  {
+    if (currentSoC < socFloor)
+      return false;
+    if (currentlyActive)
+      return true;
+    return currentSoC >= socFloor + hysteresisMarginPct || netPvW >= chargeRateW;
+  }
 }

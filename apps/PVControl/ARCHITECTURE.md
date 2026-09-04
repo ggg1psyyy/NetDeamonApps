@@ -191,7 +191,7 @@ battery today) from incorrectly rejecting a valid solar window today.
 | `Managers/SchedulableLoadRuntime.cs` | Live runtime state per load |
 | `Predictions/NetEnergyPrediction.cs` | PV − load + `WithRunningAvgCorrection` (day-scale + near-term ramp) |
 | `Predictions/` | 4 prediction classes + abstract base `Prediction` + `PredictionContainer` |
-| `Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic (used only via unit tests; main flow uses simulation oracle) |
+| `Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic. `Decide()` is used only via unit tests (main flow uses the simulation oracle); `PrioritySoCGateOk()` is wired into `HouseEnergy.FindLoadWindow`'s live Priority/PriorityPlus SoC gate |
 
 ---
 
