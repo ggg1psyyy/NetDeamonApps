@@ -57,7 +57,7 @@ PVControl itself only sets entity states — you use HA automations to act on th
 | `binary_sensor.pv_control_need_to_charge_from_grid_today` | Grid charging needed before next PV period |
 | `binary_sensor.pv_control_battery_charging_enabled` | Whether battery charging is currently enabled |
 | `sensor.pv_control_battery_status` | Battery status: `idle`, `charging`, `discharging`, `unknown` |
-| `sensor.pv_control_active_network_price_period` | Current SNAP (Structured Network Access Pricing) period name |
+| `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
 
 #### Price entities
 

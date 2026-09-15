@@ -115,15 +115,8 @@ namespace NetDeamon.apps.PVControl
     // ── Brutto price calculations ────────────────────────────────────────────────────────────
 
     /// <summary>Returns the first period whose month+hour window contains <paramref name="t"/>, or null.</summary>
-    private NetworkPricePeriod? ActivePeriodAt(System.DateTime t)
-    {
-      if (PVCC_Config.ImportPriceNetworkPeriods != null)
-        foreach (var p in PVCC_Config.ImportPriceNetworkPeriods)
-          if (t.Month >= p.StartMonth && t.Month <= p.EndMonth
-              && t.Hour >= p.StartHour && t.Hour < p.EndHour)
-            return p;
-      return null;
-    }
+    private NetworkPricePeriod? ActivePeriodAt(System.DateTime t) =>
+      PVCC_Config.ImportPriceNetworkPeriods?.FirstOrDefault(p => p.IsActiveAt(t));
 
     /// <summary>Returns the effective network import price at the given time,
     /// applying any matching <see cref="PVConfig.ImportPriceNetworkPeriods"/> override.</summary>

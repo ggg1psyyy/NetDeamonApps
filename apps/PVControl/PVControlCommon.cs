@@ -219,6 +219,9 @@ namespace NetDeamon.apps.PVControl
   /// <summary>
   /// A time-bounded override for the network import price.
   /// Active when the current month is in [StartMonth, EndMonth] and hour in [StartHour, EndHour).
+  /// Both ranges wrap around their boundary when Start &gt; End — e.g. StartMonth=10,
+  /// EndMonth=3 covers Oct-Mar across the year boundary (WiNAP); StartHour=22, EndHour=4
+  /// covers 22:00-04:00 across midnight.
   /// </summary>
   public class NetworkPricePeriod
   {
@@ -228,5 +231,15 @@ namespace NetDeamon.apps.PVControl
     public int StartHour { get; set; }
     public int EndHour { get; set; }
     public float Price { get; set; }
+
+    /// <summary>True when <paramref name="t"/> falls within this period's month and hour ranges.</summary>
+    public bool IsActiveAt(DateTime t) =>
+      InRange(t.Month, StartMonth, EndMonth, inclusiveEnd: true)
+      && InRange(t.Hour, StartHour, EndHour, inclusiveEnd: false);
+
+    private static bool InRange(int value, int start, int end, bool inclusiveEnd) =>
+      start <= end
+        ? value >= start && (inclusiveEnd ? value <= end : value < end)
+        : value >= start || (inclusiveEnd ? value <= end : value < end);
   }
 }

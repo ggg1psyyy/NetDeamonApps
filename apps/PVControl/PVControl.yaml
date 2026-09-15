@@ -19,6 +19,17 @@ NetDeamon.apps.PVControl.PVConfig:
       StartHour: 10
       EndHour: 16
       Price: 0.06882
+    # WiNAP (Winter-Nieder-Arbeitspreis): same 20% network-fee discount as SNAP, but for the
+    # winter half of the year, Oct 1 - Mar 31, 22:00-04:00. Starts Oct 2026 (source: meinbezirk.at,
+    # "WiNAP folgt SNAP: Österreich wechselt von Sommer-Tarif auf Winter-Strompreis").
+    # Month/hour ranges both wrap across their boundary (Oct→Mar, 22:00→04:00) — see
+    # NetworkPricePeriod.IsActiveAt in PVControlCommon.cs.
+    - Name: WiNAP (Winter-Nieder-Arbeitspreis)
+      StartMonth: 10
+      EndMonth: 3
+      StartHour: 22
+      EndHour: 4
+      Price: 0.06882
   ImportPriceTax: 0.2
   # How the raw price data is interpreted:
   #   QuarterHourly = use each 15-min price as-is
