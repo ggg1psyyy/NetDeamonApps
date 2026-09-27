@@ -126,7 +126,16 @@ namespace NetDeamon.apps.PVControl
     /// </summary>
     public PriceTableEntry GetBestChargeWindow(NeedToChargeResult need, DateTime now)
     {
-      var upcoming = _entries.Where(p => p.StartTime >= now.Date.AddHours(now.Hour))
+      // Candidates must not have already ended. Filtering by a calendar-hour floor instead (as
+      // this used to) leaves an earlier, already-elapsed quarter-hour in the SAME hour eligible
+      // — and since entries are always quarter-hourly (PriceList.NormalizeToQuarterHourly) an
+      // hourly-native source normalizes to several consecutive entries tied at the same price,
+      // so OrderBy(Price)'s stable sort keeps picking that stale earliest-tied entry for the
+      // whole rest of the hour. The caller's `now >= StartTime && now < EndTime` check then
+      // fails for a window that's already over, so the charge doesn't start until the NEXT,
+      // genuinely different (and possibly pricier) bracket arrives — even though later
+      // equally-cheap quarter-hours in the SAME bracket were still available right now.
+      var upcoming = _entries.Where(p => p.EndTime > now)
                              .OrderBy(p => p.StartTime).ToList();
       if (need.NeedToCharge)
         return upcoming.Where(p => p.StartTime <= need.LatestChargeTime).OrderBy(p => p.Price).FirstOrDefault();

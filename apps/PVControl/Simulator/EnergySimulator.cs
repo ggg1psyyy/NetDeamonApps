@@ -105,8 +105,18 @@ public static class EnergySimulator
         var troughWindowEnd = (pvPeak.Key != default && pvPeak.Value > floorSoc + 10)
           ? pvPeak.Key
           : slotTime.AddHours(24);
-        var troughEntry = baseFutureSoC.FirstMinOrDefault(end: troughWindowEnd);
-        int baseTrough = troughEntry.Key != default ? troughEntry.Value : needToCharge.EstimatedSoc;
+        // baseFutureSoC clamps at 0 % (ComputeBaseFutureSoC), so once the no-charging trajectory
+        // reaches empty it just sits there instead of showing how much FURTHER it would have
+        // dropped — silently hiding the true depth of the deficit. Sizing off that clamped value
+        // charges only enough to lift the visible (already-floored) trough to floorSoc + buffer,
+        // which under-corrects whenever the real, unclamped deficit is larger — so the very next
+        // slot finds the same kind of clamped-at-zero trough again and charges a bit more, and
+        // again, instead of covering the whole remaining deficit in one shot. Recompute the same
+        // window WITHOUT the lower clamp to find the true minimum.
+        var cappedTroughWindowEnd = troughWindowEnd < endSlot ? troughWindowEnd : endSlot;
+        var unclampedTrough = ComputeBaseFutureSoC(currentSoc, slotTime, cappedTroughWindowEnd, input, clampAtZero: false)
+          .FirstMinOrDefault();
+        int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : needToCharge.EstimatedSoc;
         int deficit = Math.Max(0, floorSoc - baseTrough);
         chargeTargetSocPercent = Math.Min(100, currentSoc + deficit + 2);
       }
@@ -130,10 +140,12 @@ public static class EnergySimulator
   // recover it, we need to force-charge from the grid.
 
   private static Dictionary<DateTime, int> ComputeBaseFutureSoC(
-    int currentSocPercent, DateTime startSlot, DateTime endSlot, SimulationInput input)
+    int currentSocPercent, DateTime startSlot, DateTime endSlot, SimulationInput input,
+    bool clampAtZero = true)
   {
     var result = new Dictionary<DateTime, int>();
     int energy = currentSocPercent * input.BatteryCapacityWh / 100;
+    int minEnergy = clampAtZero ? 0 : int.MinValue / 2; // avoid overflow when adding pv-load-extra
 
     for (var t = startSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
     {
@@ -142,8 +154,9 @@ public static class EnergySimulator
       int extra = input.ExtraLoads.Sum(e => e.GetWhForSlot(t));
       // Store SoC at the START of the slot (before applying energy) so the base look-ahead
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
+      // % can go negative here when clampAtZero is false — that's intentional, see call site.
       result[t] = energy * 100 / input.BatteryCapacityWh;
-      energy = Math.Clamp(energy + pv - load - extra, 0, input.BatteryCapacityWh);
+      energy = Math.Clamp(energy + pv - load - extra, minEnergy, input.BatteryCapacityWh);
     }
 
     return result;
@@ -405,8 +418,17 @@ public static class EnergySimulator
       if (need.LatestChargeTime <= pvTakeover)
       {
         // Battery will hit minimum before today's PV recovery → must charge before solar arrives.
-        // `now` is always on an exact quarter-hour slot boundary, so searching from `now` itself
-        // (rather than flooring to the top of the hour) never lets an already-elapsed slot win.
+        // `now` is always on an exact quarter-hour slot boundary, and PriceList entries are
+        // ALWAYS normalized to quarter-hourly granularity too (PriceList.NormalizeToQuarterHourly
+        // — an hourly-native source becomes four identical-price 15-min entries, it's never left
+        // as a single hour-spanning entry). So searching from `now` itself is correct and never
+        // lets an already-elapsed slot win; flooring to the top of the calendar hour here would
+        // be WRONG for this always-quarter-hourly data — it would let an already-elapsed
+        // same-hour slot outrank the current one, and since `inWindow` below requires
+        // `now < bestChargeWindow.EndTime`, an elapsed 15-min slot's EndTime (e.g. now itself)
+        // would immediately fail that check, silently preventing force_charge from ever
+        // triggering through this path. (An earlier revision of this comment incorrectly assumed
+        // hourly-spanning price entries reached this code — they don't.)
         bestChargeWindow = input.ImportPrices
           .Where(p => p.StartTime >= now && p.StartTime < pvTakeover)
           .OrderBy(p => p.Price)

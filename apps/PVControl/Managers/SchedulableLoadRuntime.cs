@@ -129,6 +129,15 @@ namespace NetDeamon.apps.PVControl.Managers
     /// </summary>
     public DateTime? SessionStartTime { get; internal set; }
 
+    /// <summary>
+    /// The scheduling mode that was active when the current session started. Used by
+    /// FindLoadWindow to bypass the minimum on-time latch when the user changes Mode mid-session
+    /// — otherwise a manual mode switch would silently keep echoing the PREVIOUS mode's schedule
+    /// for up to MinWindowMinutes, since the latch itself only checks whether the load was
+    /// already active, not which mode produced that session. Null when not active.
+    /// </summary>
+    public LoadSchedulingMode? SessionStartMode { get; internal set; }
+
     /// <summary>ExtraLoad windows found by the last FindLoadWindow call.</summary>
     public List<ExtraLoad> ExtraLoads { get; internal set; } = [];
 

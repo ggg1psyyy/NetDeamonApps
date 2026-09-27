@@ -157,9 +157,10 @@ Off          → skip
 Level done   → skip
 Emergency    → ChargeNow=true, no simulation check
 
-PriorityPlus → build windows: PV-hours now→sunset + cheap-grid slots after sunset
-               run ONE test simulation with those windows
-               accept if: overnight SoC ok AND any new force_charge is only in cheap slots
+PriorityPlus → try cheap-grid-OK rule directly (base case must survive overnight unassisted):
+                 binary-search session length, accept if any NEW force_charge stays ≤ ForceChargeMaxPrice
+               falls back to Priority's stricter zero-new-grid rule only if the base case
+                 doesn't survive overnight unassisted (cheap-grid rule unavailable)
 
 Optimal/Priority → scan start slots from now to sunset (15-min steps)
                    for each: run test simulation with a single ExtraLoad block

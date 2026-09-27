@@ -675,4 +675,102 @@ public class SimulatorTests : TestBase
     Assert.True(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true),
       "Evening session with high battery should have overnight min above preferred (20 %)");
   }
+
+  /// <summary>
+  /// Regression test for the clamped-at-zero trough sizing bug: NeedToCharge's force_charge
+  /// sizing (EnergySimulator.cs, the "charge enough to clear the WHOLE trough" block) measured
+  /// the trough depth off ComputeBaseFutureSoC, which clamps at 0 % SoC. Once the no-charging
+  /// baseline hits empty it just sits at 0 instead of showing how much FURTHER it would have
+  /// dropped — hiding the true depth of the deficit and under-sizing the charge, so the battery
+  /// drains back down and needs a second (or third...) top-up during the same no-PV stretch
+  /// instead of one that covers it in full.
+  ///
+  /// (A price-window boundary "fix" was also tried here and reverted: it was based on a test
+  /// that built raw hour-spanning PriceTableEntry objects directly, which never happens in
+  /// production — PriceManager always normalizes every source to quarter-hourly entries via
+  /// PriceList.NormalizeToQuarterHourly before it reaches SimulationInput. Against realistic
+  /// quarter-hourly price data, as used below, the original `p.StartTime >= now` comparison is
+  /// correct — flooring it to the calendar hour would have let an already-elapsed same-hour
+  /// slot win instead.)
+  ///
+  /// Scenario: battery starts just above the floor, then a long PV-free stretch (drains at a
+  /// constant rate, no EV/extra loads needed to isolate the mechanism) until PV recovers well
+  /// above the floor the next afternoon.
+  /// </summary>
+  [Fact]
+  public void ClampedTrough_LongNoPvStretch_SizesOneChargeInsteadOfRepeating()
+  {
+    // 8 h overnight with no PV (22:00 -> 06:00), constant load: total drain = 32 slots x 300 Wh
+    // = 9 600 Wh, which fits within the 11 520 Wh battery — a single charge to (near) 100 % can
+    // cover the whole night without ever needing a second top-up. If it takes more than one
+    // session, the sizing under-corrected somewhere.
+    var start = new DateTime(2025, 6, 15, 22, 0, 0);
+    var date = start.Date;
+    var horizonDate = date.AddDays(3);
+
+    const int LoadWhPerSlot = 300; // 1200 W constant house load
+    const int RecoveryPvWh = 900;  // strong PV once morning arrives — well above floor + 10
+
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = LoadWhPerSlot;
+      // No PV overnight; strong recovery starting 06:00 the next morning.
+      pv[t] = (t.Date == date.AddDays(1) && t.Hour >= 6 && t.Hour < 20) ? RecoveryPvWh : 0;
+    }
+
+    // PriceTableEntry lists are ALWAYS quarter-hourly in production (PriceManager normalizes
+    // every source through PriceList.NormalizeToQuarterHourly before it ever reaches
+    // SimulationInput) — build hourly entries and normalize them here too, so this test's price
+    // data has the same shape ComputeMode actually sees, not unrealistic hour-spanning entries.
+    var hourlyPrices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+      hourlyPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), 0.10f + h * 0.001f));
+    var prices = new PriceList(hourlyPrices).NormalizeToQuarterHourly().ToList();
+
+    var input = new SimulationInput
+    {
+      StartTime                  = start,
+      StartSocPercent            = 15, // just above the 10 % floor
+      BatteryCapacityWh          = 11_520,
+      AbsoluteMinSocPercent      = 10,
+      PreferredMinSocPercent     = 25,
+      EnforcePreferredSoc        = false,
+      MaxChargePowerAmps         = 30,
+      InverterEfficiency         = 0.9f,
+      ImportPrices               = prices,
+      ExportPrices               = prices,
+      LoadPredictionWh           = load,
+      PVPredictionWh             = pv,
+      ExtraLoads                 = [],
+      EnableCheapForceCharge     = false,
+      OpportunisticDischarge     = false,
+      ForceChargeMaxPrice        = 0.15f,
+      ForceChargeTargetSocPercent = 100,
+      CurrentMode                = new InverterState(InverterModes.normal),
+    };
+
+    var result = EnergySimulator.Simulate(input);
+
+    // No PV returns until 06:00 tomorrow — group force_charge slots into distinct sessions
+    // (separated by at least one non-force_charge slot) to count how many separate top-ups
+    // were needed to get through that whole stretch.
+    var beforeRecovery = result.Slots.Where(s => s.Time < date.AddDays(1).AddHours(6)).ToList();
+    int sessions = 0;
+    bool wasCharging = false;
+    foreach (var s in beforeRecovery)
+    {
+      bool isCharging = s.State.Mode == InverterModes.force_charge;
+      if (isCharging && !wasCharging) sessions++;
+      wasCharging = isCharging;
+    }
+
+    Assert.Equal(1, sessions);
+
+    // The floor must never actually be breached in the SIMULATED (charged) trajectory either.
+    Assert.True(beforeRecovery.All(s => s.SoC >= 10),
+      "Simulated SoC should never breach the absolute floor once charging is applied.");
+  }
+
 }

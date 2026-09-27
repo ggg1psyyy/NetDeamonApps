@@ -389,9 +389,15 @@ namespace NetDeamon.apps.PVControl
       void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
       {
         if (chargeNow && !wasActive)
+        {
           load.SessionStartTime = now;          // session just started
+          load.SessionStartMode = load.Mode;
+        }
         else if (!chargeNow)
+        {
           load.SessionStartTime = null;         // session ended
+          load.SessionStartMode = null;
+        }
         load.ExtraLoads = extraLoads;
         load.ChargeNow = chargeNow;
         load.ChargeReason = reason;
@@ -629,7 +635,14 @@ namespace NetDeamon.apps.PVControl
       // allowing the simulation to stop it — same threshold already used to prevent marginal starts.
       // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV, Optimal-SoC,
       // Priority-SoC) always take immediate effect regardless of the latch.
-      if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0)
+      //
+      // Bypassed when load.Mode no longer matches SessionStartMode: the latch exists to smooth
+      // over marginal predicate flips WITHIN one mode's own decision, not to keep echoing the
+      // PREVIOUS mode's schedule after the user deliberately switches modes — a manual mode
+      // change should take effect on the next cycle, not silently wait out up to MinWindowMinutes
+      // of stale ExtraLoads/PredictedEnd from before the switch.
+      if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0
+          && load.SessionStartMode == load.Mode)
       {
         var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
         if (elapsedMin < load.Config.MinWindowMinutes)
@@ -661,14 +674,26 @@ namespace NetDeamon.apps.PVControl
       // past sunset — the EV drains the battery from whatever level it reaches at dusk down to minSoC.
       // Priority always enforces PreferredMinSoC (regardless of EnforcePreferredSoC setting);
       // PriorityPlus may go to AbsoluteMinSoC when EnforcePreferredSoC is off.
-      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
+      //
+      // PriorityPlus skips this step whenever Step 3 is available (base case survives overnight
+      // unassisted): !HasNewGridVs(T) implies IsGridCheapVs(T) for any T (IsGridCheapVs is
+      // vacuously true when no new grid was introduced at all), so any session Step 2 would
+      // accept, Step 3 accepts too — Step 3's search can never land on a shorter answer than
+      // Step 2's here. Running Step 2 to completion first — as before — risked exactly the bug
+      // this fixes: a short Step 2 result returning before Step 3, the step that actually
+      // differentiates PriorityPlus (tolerating cheap self-correcting grid charging), ever got
+      // to search further. PriorityPlus only falls back to this step when Step 3's own
+      // precondition fails, below.
+      bool priorityPlusUsesStep3 = load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk();
+      if (load.Mode == LoadSchedulingMode.Priority ||
+          (load.Mode == LoadSchedulingMode.PriorityPlus && !priorityPlusUsesStep3))
       {
         bool priorityEnforcePreferred = load.Mode == LoadSchedulingMode.Priority;
         var end = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk(priorityEnforcePreferred) && !sim.HasNewGridVs(baseResult));
         if (end is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
-            true, $"Charging (Priority {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", end);
+            true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", end);
           return;
         }
       }
@@ -676,7 +701,7 @@ namespace NetDeamon.apps.PVControl
       // Step 3: PriorityPlus — base-case overnight OK; any new grid import only at cheap prices.
       // The EV session extends into the overnight window; what matters is that the battery would
       // survive the night without the EV (base case), and the EV runs on cheap grid power.
-      if (load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk())
+      if (priorityPlusUsesStep3)
       {
         var end = FindMax(tomorrowMax, sim => sim.IsGridCheapVs(baseResult));
         if (end is not null)

@@ -455,6 +455,80 @@ public class FindWindowConditionTests : TestBase
       "Priority should fail here: EV overnight causes new grid import (force_charge).");
   }
 
+  /// <summary>
+  /// Regression scenario for the FindLoadWindow Step 2/Step 3 ordering bug: house battery at
+  /// its daytime trough (19 %, well above the 10 % absolute floor but with little headroom),
+  /// import price flat and cheap (10 ct, under ForceChargeMaxPrice = 15 ct) for the whole
+  /// simulated period, EV session running from mid-afternoon through to next sunrise.
+  ///
+  /// This proves the predicate-level premise behind the Step 2/Step 3 fix:
+  ///   - Step 3's condition (IsGridCheapVs) STAYS TRUE for this long candidate — Step 3 would
+  ///     accept the full overnight session.
+  ///   - Step 2's condition (!HasNewGridVs) FLIPS FALSE for the very same candidate — Step 2
+  ///     alone would incorrectly reject it, even though the new grid import is exactly the kind
+  ///     of cheap self-correction PriorityPlus is designed to tolerate.
+  ///   - Step 3's own precondition (base case survives overnight unassisted) holds, confirming
+  ///     it is not what blocks PriorityPlus here — matching the live production scenario.
+  /// </summary>
+  [Fact]
+  public void PriorityPlus_DaytimeTroughEV_SelfCorrectingForceChargeStaysCheap()
+  {
+    const float FlatPrice = 0.10f; // flat cheap price all day/night, as in the live scenario
+    const float MaxPrice  = 0.15f; // ForceChargeMaxPrice; flat <= max
+    const int TroughSoc   = 19;    // % — daytime trough, well above AbsMin (10 %) but little headroom
+
+    var start    = new DateTime(2026, 3, 22, 14, 0, 0); // mid-afternoon, still in PV window
+    var baseDate = start.Date;
+    var prices   = HourlyPrices(baseDate, FlatPrice, FlatPrice, cheapHour: 0);
+
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = start,
+      StartSocPercent             = TroughSoc,
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = AbsMin,
+      PreferredMinSocPercent      = 30,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = ChargeA,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = FlatLoad(baseDate, LoadWh),
+      PVPredictionWh              = DaytimePV(baseDate, PvWh),
+      ExtraLoads                  = [],
+      EnableCheapForceCharge      = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeTargetSocPercent = 95,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+
+    var baseSim = EnergySimulator.Simulate(baseIn);
+    var baseFCS = new HashSet<DateTime>(
+      baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
+
+    // Base case survives overnight comfortably — Step 3's precondition holds.
+    Assert.True(OvernightOk(baseSim, LastPVToday, FirstPVTomorrow, AbsMin),
+      "Base (no EV): battery should survive overnight above AbsMin — Step 3's precondition holds.");
+
+    // With EV overnight: NeedToCharge self-corrects with a NEW, but cheap, force_charge.
+    var evSim = EnergySimulator.Simulate(WithEV(baseIn, start, FirstPVTomorrow));
+
+    var newForceSlots = evSim.Slots
+      .Where(s => s.State.Mode == InverterModes.force_charge && !baseFCS.Contains(s.Time))
+      .ToList();
+    Assert.NotEmpty(newForceSlots);
+
+    // Step 3 would accept: every new force_charge slot is at/under ForceChargeMaxPrice.
+    Assert.True(GridCheap(evSim, baseFCS, prices, MaxPrice),
+      "Flat cheap price means the self-correcting force_charge stays under ForceChargeMaxPrice.");
+
+    // Step 2 would incorrectly reject: it demands ZERO new grid, at any price.
+    Assert.False(NoNewGrid(evSim, baseFCS),
+      "Step 2 alone rejects this session solely because SOME new grid was used — " +
+      "even though it's exactly the cheap self-correction PriorityPlus should tolerate.");
+  }
+
   // ── HasNewGrid daytime regression ────────────────────────────────────────────────────────
 
   /// <summary>
