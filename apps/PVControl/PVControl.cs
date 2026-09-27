@@ -455,7 +455,8 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
       #endregion
       #region NeedToCharge
-      bool simNeedToCharge = _house.SimulationTimeline.Any(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
+      // nextChargeSlot was already computed above for the Mode section's attributes — reused here.
+      bool simNeedToCharge = nextChargeSlot != null;
       await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, simNeedToCharge ? "ON" : "OFF");
       var futureSoCEntries = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).ToList();
       var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.Battery.BatterySoc;
@@ -467,6 +468,8 @@ namespace NetDeamon.apps.PVControl
         minimal_estimated_SoC = simMinSoC.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = simMinSoCTime.ToISO8601(),
         current_average_gridpower = _house.CurrentAverageGridPower.ToString(CultureInfo.InvariantCulture) + " W",
+        reason = (nextChargeSlot?.State.ModeReason ?? ForceChargeReasons.None).ToString(),
+        charge_start_time = nextChargeSlot?.Time.ToISO8601() ?? "n/a",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
       #endregion
@@ -909,7 +912,7 @@ namespace NetDeamon.apps.PVControl
         defaultValue: "0",
         reRegister: reset);
 
-      _needToChargeFromGridTodayEntity = await RegisterSensor("binary_sensor.pv_control_need_to_charge_from_grid_today", "Need to charge from Grid today", "battery_charging", "mdi:transmission-tower-export",
+      _needToChargeFromGridTodayEntity = await RegisterSensor("binary_sensor.pv_control_need_to_charge_from_grid_today", "Need to charge from Grid today", "battery_charging", "mdi:transmission-tower-import",
         defaultValue: "OFF",
         reRegister: reset);
 
