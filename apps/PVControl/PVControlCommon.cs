@@ -34,11 +34,17 @@ namespace NetDeamon.apps.PVControl
     public int SoC = soC;
     public InverterState InverterState = inverterState;
   }
-  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true)
+  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true, bool exportAllowed = true)
   {
     public InverterModes Mode = mode;
     public ForceChargeReasons ModeReason = modeReason;
     public bool BatteryChargeEnable = batteryChargeEnable;
+    /// <summary>
+    /// Whether PV surplus may currently be exported to the grid. False when the export price is
+    /// negative — orthogonal to <see cref="Mode"/> so a cheap-import charge decision can still
+    /// run underneath it (see EnergySimulator.ComputeMode's negative-export-price handling).
+    /// </summary>
+    public bool ExportAllowed = exportAllowed;
   }
   public class PVControlCommon
   {

@@ -197,8 +197,18 @@ public static class EnergySimulator
   // ── Mode decision ────────────────────────────────────────────────────────────────────────
   // Pure-function equivalent of HouseEnergy.CalculateNewInverterMode.
   // All inputs are passed explicitly so this can run without any live HA state.
-  // The logic is evaluated top-to-bottom; the first matching condition wins:
-  //   negative import → negative export →
+  //
+  // Negative import price is a hard early-exit: grid is paying us to consume, nothing else
+  // competes with that.
+  //
+  // Negative export price is a MODIFIER (InverterState.ExportAllowed = false), not an early
+  // exit. It used to hard-return house_only, which silently prevented EnableCheapForceCharge
+  // and the NeedToCharge safety net from ever running during a negative-export window — even
+  // though neither of them needs to export anything. Since negative export prices and cheap
+  // import prices both come from the same cause (midday solar oversupply), this starved the
+  // cheap-charge feature on every sunny day, exactly when it mattered most. Exporting and
+  // grid-charging are orthogonal, so suppressing export no longer suppresses the rest of the
+  // chain below it:
   //   opportunistic discharge → user force-charge slot → need-to-charge → normal
 
   private static InverterState ComputeMode(
@@ -212,35 +222,44 @@ public static class EnergySimulator
     // ── Negative import price ─────────────────────────────────────────────────────────────
     // Grid is paying us to consume electricity → fill battery as fast as possible.
     // But if a cheaper (more negative) import window is still coming today, defer grid
-    // charging to that window. Stay in house_only with battery charging disabled so PV
-    // surplus is curtailed rather than exported (export price is also typically negative),
-    // preserving battery room for the cheapest grid energy.
+    // charging to that window. Stay normal with battery charging and export both disabled
+    // so PV surplus is curtailed rather than exported (export price is also typically
+    // negative), preserving battery room for the cheapest grid energy.
     // Once at or past the cheapest window: use force_charge_grid_only to fill the battery.
-    // If the battery is already ≥ 95 %: use house_only (not grid_only) to avoid exporting
-    // PV surplus at negative export prices.
+    // If the battery is already ≥ 95 %: stay normal with export disabled (not grid_only) to
+    // avoid exporting PV surplus at negative export prices.
     if (importPriceNow < 0)
     {
       bool cheaperImportComingToday = input.ImportPrices
         .Any(p => p.StartTime.Date == now.Date && p.StartTime > now && p.Price < importPriceNow);
       if (cheaperImportComingToday)
-        return new InverterState(InverterModes.house_only, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false);
+        return new InverterState(InverterModes.normal, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false, exportAllowed: false);
 
       int pvPowerW = pvWhSlot * 4; // convert Wh/slot → W
       var mode = (simulatedSoc <= 95 || pvPowerW < 100)
         ? InverterModes.force_charge_grid_only
-        : InverterModes.house_only; // avoid exporting PV at negative export prices
-      return new InverterState(mode, ForceChargeReasons.ImportPriceNegative);
+        : InverterModes.normal; // avoid exporting PV at negative export prices
+      return new InverterState(mode, ForceChargeReasons.ImportPriceNegative, exportAllowed: false);
     }
 
     // ── Negative export price ─────────────────────────────────────────────────────────────
-    // Grid charges us for feeding in → stop exporting, cover house from PV/battery only.
-    // If negative import prices are also coming later today, disable battery charging now
-    // so we have room to absorb the cheap/free grid energy then.
-    if (exportPriceNow < 0)
+    // Grid charges us for feeding in → suppress export only; the charge/discharge decision
+    // below still runs on its own merits (see comment above the function).
+    bool exportAllowed = exportPriceNow >= 0;
+
+    var decided = DecideChargeDischargeMode();
+    if (!exportAllowed)
+      decided.ExportAllowed = false;
+    // If negative import prices are coming later today, disable battery charging now so we
+    // have room to absorb the cheap/free grid energy then. Only has an effect when the mode
+    // above resolved to `normal` — every other mode's energy-flow function ignores this flag.
+    if (!exportAllowed && input.ImportPrices.NegativeImportUpcoming(now))
+      decided.BatteryChargeEnable = false;
+    return decided;
+
+    // ── Charge/discharge decision (independent of whether export is currently allowed) ────
+    InverterState DecideChargeDischargeMode()
     {
-      bool battChargeEnable = !input.ImportPrices.NegativeImportUpcoming(now);
-      return new InverterState(InverterModes.house_only, ForceChargeReasons.ExportPriceNegative, battChargeEnable);
-    }
 
     float exportPriceNextHour = input.ExportPrices.GetPrice(now.AddHours(1));
 
@@ -446,6 +465,7 @@ public static class EnergySimulator
     // ── Default ───────────────────────────────────────────────────────────────────────────
     // None of the special conditions apply → let the inverter manage PV/battery normally.
     return new InverterState(InverterModes.normal, ForceChargeReasons.None);
+    }
   }
 
   // ── Energy flow calculation ───────────────────────────────────────────────────────────────
@@ -483,36 +503,37 @@ public static class EnergySimulator
       InverterModes.grid_only
         => (0, 0, Math.Max(0, totalLoadWh - pvWh), Math.Max(0, pvWh - totalLoadWh)),
 
-      // PV → house only, no grid export; battery charges from PV surplus or discharges for deficit.
-      // Grid import is still allowed as a fallback if the battery is depleted.
-      InverterModes.house_only
-        => HouseOnly(pvWh, totalLoadWh, availEnergy, maxCapacity, minEnergy, maxChargeWh, state.BatteryChargeEnable),
-
       InverterModes.feedin_priority
         => FeedinPriority(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
 
       _ // normal, automatic, reset — all follow the standard PV-first flow
-        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, state.BatteryChargeEnable, state.ExportAllowed),
     };
   }
 
   /// <summary>
   /// Standard mode: PV covers house load first.
-  /// Any surplus charges the battery (up to max charge rate and capacity).
-  /// Any remaining surplus is exported to the grid.
+  /// Any surplus charges the battery (up to max charge rate and capacity), unless
+  /// <paramref name="batteryChargeEnable"/> is false — in which case the surplus is curtailed
+  /// instead, preserving battery room for a deferred cheap/negative-price grid-charge window.
+  /// Any remaining surplus is exported to the grid, unless <paramref name="exportAllowed"/> is
+  /// false (negative export price), in which case it is curtailed rather than exported.
   /// If PV is insufficient, the battery discharges to cover the deficit (never below
   /// <paramref name="minEnergy"/>, matching the inverter's own minimum SoC setting);
   /// any remaining deficit is imported from the grid.
   /// </summary>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) Normal(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy)
+    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy,
+    bool batteryChargeEnable = true, bool exportAllowed = true)
   {
     int net = pvWh - totalLoadWh;
     if (net >= 0)
     {
-      // PV surplus: charge battery up to the rate limit and available capacity, export the rest
-      int battCharge = Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy));
-      return (battCharge, 0, 0, net - battCharge);
+      // PV surplus: charge battery up to the rate limit and available capacity (or curtail if
+      // battery charging is disabled), export what's left over (or curtail if export is disallowed)
+      int battCharge = batteryChargeEnable ? Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy)) : 0;
+      int gridExportWh = exportAllowed ? net - battCharge : 0;
+      return (battCharge, 0, 0, gridExportWh);
     }
     // PV deficit: discharge battery down to the absolute minimum, up to the rate limit; grid covers the rest
     int deficit = -net;
@@ -568,32 +589,6 @@ public static class EnergySimulator
     int gridExportWh = Math.Max(0, battDischarge + pvWh - totalLoadWh);
     int gridImportWh = Math.Max(0, totalLoadWh - pvWh - battDischarge);
     return (0, battDischarge, gridImportWh, gridExportWh);
-  }
-
-  /// <summary>
-  /// House-only mode: no grid export. PV covers house load first; any PV surplus charges
-  /// the battery (up to capacity and the rate limit), unless <paramref name="batteryChargeEnable"/>
-  /// is false — in which case the surplus is curtailed instead, preserving battery room for a
-  /// deferred cheap/negative-price grid-charge window. If PV is insufficient the battery
-  /// discharges for the deficit (up to the rate limit); if the battery is depleted or the
-  /// deficit exceeds the rate limit, the grid covers the remainder as a fallback.
-  /// This mode is active when the export price is negative — we avoid feeding in but still
-  /// need to power the house and can use the battery normally.
-  /// </summary>
-  private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) HouseOnly(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int minEnergy, int maxChargeWh, bool batteryChargeEnable = true)
-  {
-    int net = pvWh - totalLoadWh;
-    if (net >= 0)
-    {
-      // PV surplus: charge battery up to the rate limit, no export — or curtail if battery charging is disabled
-      int battCharge = batteryChargeEnable ? Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy)) : 0;
-      return (battCharge, 0, 0, 0);
-    }
-    // PV deficit: discharge battery first (up to the rate limit), grid as fallback — never export
-    int deficit = -net;
-    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, availEnergy - minEnergy));
-    return (0, battDischarge, deficit - battDischarge, 0);
   }
 
   /// <summary>

@@ -306,11 +306,12 @@ public class SimulatorTests : TestBase
   }
 
   [Fact]
-  public void HouseOnly_PVSurplusExceedsChargeRate_ChargeIsCappedAndSurplusCurtailed()
+  public void NegativeExportPrice_PVSurplusExceedsChargeRate_ChargeIsCappedAndSurplusCurtailed()
   {
-    // Negative export price -> house_only (no grid export allowed). PV surplus of 2700 Wh/slot
-    // (3000 pv - 300 load) far exceeds the 575 Wh/slot rate limit, so charging must be capped
-    // and the excess simply curtailed (house_only never exports), not smuggled in over the limit.
+    // Negative export price -> normal mode with ExportAllowed=false (no grid export allowed).
+    // PV surplus of 2700 Wh/slot (3000 pv - 300 load) far exceeds the 575 Wh/slot rate limit, so
+    // charging must be capped and the excess simply curtailed (export disallowed), not smuggled
+    // in over the limit.
     var start = new DateTime(2025, 6, 15, 12, 0, 0);
     var date = start.Date;
     var horizonDate = date.AddDays(3);
@@ -355,7 +356,8 @@ public class SimulatorTests : TestBase
     var slots = EnergySimulator.Simulate(input);
     var firstSlot = slots[0];
 
-    Assert.Equal(InverterModes.house_only, firstSlot.State.Mode);
+    Assert.Equal(InverterModes.normal, firstSlot.State.Mode);
+    Assert.False(firstSlot.State.ExportAllowed);
     Assert.Equal(575, firstSlot.BatteryChargeWh);
     Assert.Equal(0, firstSlot.GridExportWh);
   }
@@ -366,10 +368,10 @@ public class SimulatorTests : TestBase
   public void NegativeImportPrice_WithCheaperWindowLaterToday_CurtailsPVSurplusInsteadOfCharging()
   {
     // 09:00 import price is negative but a cheaper (more negative) window is still coming
-    // at 14:00 today — ComputeMode defers grid charging to that window and disables battery
-    // charging in the meantime so PV surplus doesn't fill the battery first (HouseEnergy.cs
-    // ComputeMode / EnergySimulator.HouseOnly). PV surplus during 09:00 must be curtailed,
-    // not captured, and the slot must show zero flow in every direction.
+    // at 14:00 today — ComputeMode defers grid charging to that window and disables both
+    // battery charging and export in the meantime so PV surplus doesn't fill the battery or
+    // export first (EnergySimulator.ComputeMode / EnergySimulator.Normal). PV surplus during
+    // 09:00 must be curtailed, not captured, and the slot must show zero flow in every direction.
     var start = new DateTime(2025, 6, 15, 9, 0, 0);
     var date = start.Date;
     var horizonDate = date.AddDays(3);
@@ -417,12 +419,143 @@ public class SimulatorTests : TestBase
     var slots = EnergySimulator.Simulate(input);
     var firstSlot = slots[0];
 
-    Assert.Equal(InverterModes.house_only, firstSlot.State.Mode);
+    Assert.Equal(InverterModes.normal, firstSlot.State.Mode);
     Assert.False(firstSlot.State.BatteryChargeEnable);
+    Assert.False(firstSlot.State.ExportAllowed);
     Assert.Equal(0, firstSlot.BatteryChargeWh);
     Assert.Equal(0, firstSlot.BatteryDischargeWh);
     Assert.Equal(0, firstSlot.GridImportWh);
     Assert.Equal(0, firstSlot.GridExportWh);
+  }
+
+  [Fact]
+  public void NegativeExportPrice_DoesNotBlockCheapForceChargeUnderneathIt()
+  {
+    // Regression test for the reported bug: on a sunny day, negative export price (PV
+    // oversupply at midday) coincides with the day's cheapest import price, since both come
+    // from the same cause. The old code hard-returned house_only whenever export price was
+    // negative, silently preventing EnableCheapForceCharge from ever running during that
+    // window — so a switched-on "charge to target SoC at the cheapest price" never actually
+    // charged on the exact days it mattered most. Export must stay suppressed, but the cheap
+    // charge itself must still go through underneath it.
+    var start = new DateTime(2025, 6, 15, 12, 0, 0); // noon: the cheapest import hour below
+    var date = start.Date;
+    var horizonDate = date.AddDays(3);
+
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = 300;
+      pv[t] = 0;
+    }
+
+    var importPrices = new List<PriceTableEntry>();
+    var exportPrices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+    {
+      float importPrice = (h % 24) == 12 ? 0.05f : 0.20f; // noon is the day's cheapest import hour
+      float exportPrice = (h % 24) == 12 ? -0.05f : 0.10f; // ...and also negative export (PV oversupply)
+      importPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), importPrice));
+      exportPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), exportPrice));
+    }
+
+    var input = new SimulationInput
+    {
+      StartTime                  = start,
+      StartSocPercent            = 50,
+      BatteryCapacityWh          = 10_000,
+      AbsoluteMinSocPercent      = 12,
+      PreferredMinSocPercent     = 20,
+      EnforcePreferredSoc        = false,
+      MaxChargePowerAmps         = 10,
+      InverterEfficiency         = 0.9f,
+      ImportPrices               = importPrices,
+      ExportPrices               = exportPrices,
+      LoadPredictionWh           = load,
+      PVPredictionWh             = pv,
+      EnableCheapForceCharge     = true,
+      OpportunisticDischarge     = false,
+      ForceChargeMaxPrice        = 0.25f,
+      ForceChargeTargetSocPercent = 95,
+      CurrentMode                = new InverterState(InverterModes.normal),
+    };
+
+    var slots = EnergySimulator.Simulate(input);
+    var firstSlot = slots[0];
+
+    Assert.Equal(InverterModes.force_charge, firstSlot.State.Mode);
+    Assert.Equal(ForceChargeReasons.ForcedChargeAtMinimumPrice, firstSlot.State.ModeReason);
+    Assert.False(firstSlot.State.ExportAllowed);
+    Assert.True(firstSlot.BatteryChargeWh > 0);
+    Assert.Equal(0, firstSlot.GridExportWh);
+  }
+
+  [Fact]
+  public void NegativeExportPrice_DoesNotDeferNeedToChargeSafetyTopUpToLaterCheaperMoment()
+  {
+    // Companion regression test: the NeedToCharge safety-net search looks for the cheapest
+    // window from "now" onward. Previously, if the actual cheapest hour of the day happened to
+    // fall inside a negative-export window, the hard house_only return meant NeedToCharge could
+    // never act on it there — so by the time export allowed the chain to run again, "now" had
+    // moved past that cheap hour, and the safety top-up fired later, at a worse price, instead.
+    // Battery at 15% (just above the 12% floor), heavy load, no PV -> needs a grid charge.
+    // The cheapest hour (02:00) is also a negative-export hour; the charge must still land there.
+    var start = new DateTime(2025, 6, 15, 20, 0, 0); // 20:00, before the 02:00 cheap window
+    var date = start.Date;
+    var horizonDate = date.AddDays(3);
+
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < horizonDate; t = t.AddMinutes(15))
+    {
+      load[t] = 300;
+      pv[t] = 0;
+    }
+
+    var importPrices = new List<PriceTableEntry>();
+    var exportPrices = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+    {
+      float price = (h % 24) == 2 ? 5f
+                  : (h % 24) == 18 ? 35f
+                  : 20f;
+      importPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), price));
+      // Negative export exactly during the cheapest import hour, same as a real sunny-day overlap.
+      float exportPrice = (h % 24) == 2 ? -5f : 10f;
+      exportPrices.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), exportPrice));
+    }
+
+    var input = new SimulationInput
+    {
+      StartTime                  = start,
+      StartSocPercent            = 15,
+      BatteryCapacityWh          = 10_000,
+      AbsoluteMinSocPercent      = 12,
+      PreferredMinSocPercent     = 20,
+      EnforcePreferredSoc        = false,
+      MaxChargePowerAmps         = 10,
+      InverterEfficiency         = 0.9f,
+      ImportPrices               = importPrices,
+      ExportPrices               = exportPrices,
+      LoadPredictionWh           = load,
+      PVPredictionWh             = pv,
+      EnableCheapForceCharge     = false,
+      OpportunisticDischarge     = false,
+      ForceChargeMaxPrice        = 0.25f,
+      ForceChargeTargetSocPercent = 100,
+      CurrentMode                = new InverterState(InverterModes.normal),
+    };
+
+    var slots = EnergySimulator.Simulate(input);
+    var chargeSlots = slots.Where(s => s.State.Mode == InverterModes.force_charge).ToList();
+
+    Assert.NotEmpty(chargeSlots);
+    foreach (var s in chargeSlots)
+    {
+      Assert.Equal(2, s.Time.Hour); // still lands in the cheapest (negative-export) hour
+      Assert.False(s.State.ExportAllowed);
+    }
   }
 
   // ── overnight window fix tests ─────────────────────────────────────────────

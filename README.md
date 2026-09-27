@@ -35,8 +35,13 @@ PVControl itself only sets entity states — you use HA automations to act on th
 | `grid_only` | Grid powers house; battery discharge disabled (e.g. negative import price) |
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
-| `house_only` | Battery + PV power house only, no grid interaction |
 | `reset` | Transient reset state |
+
+Whether PV surplus may currently be exported is a separate, orthogonal decision — see
+`binary_sensor.pv_control_export_allowed` below. It's independent of `sensor.pv_control_mode`
+so a cheap grid-charge or safety-net top-up can still run even while export is suppressed
+(e.g. during a negative export price window) — the two used to be conflated under a single
+`house_only` mode value, which silently blocked grid-charging any time export was suppressed.
 
 #### Control entities
 
@@ -56,6 +61,7 @@ PVControl itself only sets entity states — you use HA automations to act on th
 |---|---|
 | `binary_sensor.pv_control_need_to_charge_from_grid_today` | Grid charging needed before next PV period |
 | `binary_sensor.pv_control_battery_charging_enabled` | Whether battery charging is currently enabled |
+| `binary_sensor.pv_control_export_allowed` | Whether PV surplus may currently be exported to the grid (off during negative export price) |
 | `sensor.pv_control_battery_status` | Battery status: `idle`, `charging`, `discharging`, `unknown` |
 | `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
 

@@ -1,0 +1,39 @@
+alias: PV Control - Export Settings
+description: ""
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_export_allowed
+    to: "off"
+    id: EXPORT_DISALLOWED
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_export_allowed
+    to: "on"
+    id: EXPORT_ALLOWED
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - EXPORT_DISALLOWED
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "10"
+            target:
+              entity_id: number.solax_export_control_user_limit
+      - conditions:
+          - condition: trigger
+            id:
+              - EXPORT_ALLOWED
+        sequence:
+          - action: number.set_value
+            metadata: {}
+            data:
+              value: "8000"
+            target:
+              entity_id: number.solax_export_control_user_limit
+mode: single

@@ -1,51 +1,87 @@
 alias: PV Control - Mode Settings
-description: ""
+description: ''
 triggers:
   - entity_id:
       - sensor.pv_control_mode
-    to: force_charge
+    to:
+      - force_charge
     id: FORCE_CHARGE
     trigger: state
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - entity_id:
       - sensor.pv_control_mode
-    to: normal
+    to:
+      - normal
     id: NORMAL
     trigger: state
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - trigger: state
     entity_id:
       - sensor.pv_control_mode
-    to: grid_only
+    to:
+      - grid_only
     id: GRID_ONLY
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - trigger: state
     entity_id:
       - sensor.pv_control_mode
-    to: force_discharge
+    to:
+      - force_discharge
     id: FORCE_DISCHARCGE
-  - trigger: state
-    entity_id:
-      - sensor.pv_control_mode
-    to: house_only
-    id: HOUSE_ONLY
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - trigger: state
     entity_id:
       - sensor.pv_control_mode
     id: FEEDIN
-    to: feedin_priority
+    to:
+      - feedin_priority
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - trigger: state
     entity_id:
       - sensor.pv_control_mode
-    to: reset
+    to:
+      - reset
     id: RESET
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
   - entity_id:
       - sensor.pv_control_mode
-    to: force_charge_grid_only
+    to:
+      - force_charge_grid_only
     id: FORCE_CHARGE_GRID_ONLY
     trigger: state
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 5
+  - trigger: state
+    entity_id:
+      - sensor.solax_modbus_power_control
+    id: POWER_CONTROL
+    from:
+      - Individual Setting - Target SOC Mode
 conditions: []
 actions:
   - if:
       - condition: template
-        value_template: "{{ trigger.from_state.state == \"grid_only\" }}"
+        value_template: '{{ trigger.from_state.state == "grid_only" }}'
     then:
       - action: button.press
         metadata: {}
@@ -57,19 +93,10 @@ actions:
           minutes: 0
           seconds: 45
           milliseconds: 0
+    enabled: false
   - if:
       - condition: template
-        value_template: "{{ trigger.from_state.state == \"house_only\" }}"
-    then:
-      - action: number.set_value
-        metadata: {}
-        data:
-          value: "8000"
-        target:
-          entity_id: number.solax_export_control_user_limit
-  - if:
-      - condition: template
-        value_template: "{{ trigger.from_state.state == \"force_charge_grid_only\" }}"
+        value_template: '{{ trigger.from_state.state == "force_charge_grid_only" }}'
     then:
       - action: select.select_option
         metadata: {}
@@ -88,7 +115,7 @@ actions:
           - action: number.set_value
             metadata: {}
             data:
-              value: "8000"
+              value: '8000'
             target:
               entity_id: number.solax_export_control_user_limit
           - action: select.select_option
@@ -108,6 +135,16 @@ actions:
             data: {}
             target:
               entity_id: button.solax_system_on
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
@@ -125,6 +162,16 @@ actions:
               option: Manual Mode
             target:
               entity_id: select.solax_charger_use_mode
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
@@ -137,6 +184,16 @@ actions:
             target:
               entity_id: select.solax_charger_use_mode
             enabled: true
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
@@ -154,33 +211,43 @@ actions:
               option: Manual Mode
             target:
               entity_id: select.solax_charger_use_mode
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
               - GRID_ONLY
         sequence:
-          - action: button.press
-            metadata: {}
-            data: {}
-            target:
-              entity_id: button.solax_system_off
-      - conditions:
-          - condition: trigger
-            id:
-              - HOUSE_ONLY
-        sequence:
           - action: select.select_option
             metadata: {}
             data:
-              option: Self Use Mode
+              option: Stop Charge and Discharge
             target:
-              entity_id: select.solax_charger_use_mode
-          - action: number.set_value
+              entity_id: select.solax_manual_mode_select
+          - action: select.select_option
             metadata: {}
             data:
-              value: "10"
+              option: Manual Mode
             target:
-              entity_id: number.solax_export_control_user_limit
+              entity_id: select.solax_charger_use_mode
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
@@ -192,6 +259,16 @@ actions:
               option: Feedin Priority
             target:
               entity_id: select.solax_charger_use_mode
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
       - conditions:
           - condition: trigger
             id:
@@ -200,7 +277,7 @@ actions:
           - action: number.set_value
             metadata: {}
             data:
-              value: "0"
+              value: '0'
             target:
               entity_id:
                 - number.solax_remotecontrol_timeout_direct
@@ -220,31 +297,67 @@ actions:
           - action: number.set_value
             metadata: {}
             data:
-              value: "100"
+              value: '100'
             target:
               entity_id: number.solax_remotecontrol_target_soc_9_direct
           - action: number.set_value
             metadata: {}
             data:
-              value: "0"
+              value: '0'
             target:
               entity_id:
                 - number.solax_remotecontrol_pv_power_limit_direct
           - action: number.set_value
             metadata: {}
             data:
-              value: "-10000"
+              value: '-10000'
             target:
               entity_id:
                 - number.solax_remotecontrol_push_mode_power_8_9_direct
           - action: select.select_option
             metadata: {}
             data:
-              option: Individual Setting – Target SOC Mode
+              option: Individual Setting - Target SOC Mode
             target:
               entity_id:
                 - select.solax_modbus_power_control_direct
                 - select.solax_remote_control_power_control_mode_direct
+          - action: ntfy.publish
+            metadata: {}
+            data:
+              title: PV Mode changed
+              message: |-
+                New mode: {{ states("sensor.pv_control_mode") }}
+                Battery: {{ states("sensor.solax_battery_capacity") }}
+                Current Load: {{ states("sensor.solax_house_load") }}
+            target:
+              entity_id: notify.power
+      - conditions:
+          - condition: trigger
+            id:
+              - POWER_CONTROL
+          - condition: state
+            entity_id: sensor.pv_control_mode
+            state:
+              - force_charge_grid_only
+        sequence:
+          - action: select.select_option
+            metadata: {}
+            data:
+              option: Disabled
+            target:
+              entity_id: select.solax_modbus_power_control_direct
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 0
+              milliseconds: 500
+          - action: select.select_option
+            metadata: {}
+            target:
+              entity_id: select.solax_modbus_power_control_direct
+            data:
+              option: Individual Setting - Target SOC Mode
 variables:
-  old_state: "{{ trigger.from_state.state }}"
+  old_state: '{{ trigger.from_state.state }}'
 mode: single

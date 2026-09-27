@@ -29,6 +29,7 @@ namespace NetDeamon.apps.PVControl
     #region Created Entities
     private Entity _modeEntity = null!;
     private Entity _battChargeEnabledEntity = null!;
+    private Entity _exportAllowedEntity = null!;
     private Entity _battery_RemainingTimeEntity = null!;
     private Entity _battery_RemainingEnergyEntity = null!;
     private Entity _needToChargeFromGridTodayEntity = null!;
@@ -377,6 +378,7 @@ namespace NetDeamon.apps.PVControl
       };
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
+      await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, inverterState.ExportAllowed ? "ON" : "OFF");
       #endregion
 
       #region Schedulable Loads
@@ -480,7 +482,8 @@ namespace NetDeamon.apps.PVControl
           current_entry_time = curPredSoc.Key.ToISO8601(),
           last_snapshot = _house.Snapshots.LastSnapshotUpdate.ToISO8601(),
           // Live simulation: SoC + mode + extra_load flag for every slot today and tomorrow.
-          // Slots before "now" have no simulation slot (back-filled SoC only) → mode "past", extra_load false.
+          // Slots before "now" have no simulation slot (back-filled SoC only) → mode "past",
+          // extra_load false, export_allowed true (no export-suppression to report on a past slot).
           data_actual = _house.Prediction_BatterySoC.TodayAndTomorrow.Select(s =>
           {
             var hasSlot = simSlotLookup.TryGetValue(s.Key, out var slot);
@@ -490,6 +493,7 @@ namespace NetDeamon.apps.PVControl
               soc = s.Value,
               mode = hasSlot ? slot!.State.Mode.ToString() : "past",
               extra_load = hasSlot && slot!.ExtraLoadWh > 0,
+              export_allowed = !hasSlot || slot!.State.ExportAllowed,
             };
           }),
         };
@@ -793,6 +797,10 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
       
       _battChargeEnabledEntity = await RegisterSensor("binary_sensor.pv_control_battery_charging_enabled", "Battery Charging Eabled", "power", "mdi:power-plug-battery-outline",
+        defaultValue: "ON",
+        reRegister: reset);
+
+      _exportAllowedEntity = await RegisterSensor("binary_sensor.pv_control_export_allowed", "Export Allowed", "power", "mdi:transmission-tower-export",
         defaultValue: "ON",
         reRegister: reset);
 
