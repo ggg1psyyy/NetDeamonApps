@@ -149,6 +149,14 @@ namespace NetDeamon.apps.PVControl
     /// FindLoadWindow — see LoadSchedulingDecision.PrioritySoCGateOk.
     /// </summary>
     private const int PrioritySoCHysteresisPct = 5;
+    /// <summary>
+    /// Minimum SoC % above the hard floor required before the PV-bypass exception in
+    /// PrioritySoCGateOk is even considered. Without this, the bypass could fire the instant SoC
+    /// ticked up to exactly the floor (since a typical PV reading often already exceeds a single
+    /// load's charge rate), restarting and draining straight back under the floor within
+    /// minutes — see PrioritySoCGateOk's doc comment.
+    /// </summary>
+    private const int PvBypassMinSocBufferPct = 3;
     /// <summary>Sum of average power (W) from all schedulable loads that are actively drawing above their minimum threshold.</summary>
     private int ActiveSchedulableLoadPowerW() => SchedulableLoads
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
@@ -441,9 +449,12 @@ namespace NetDeamon.apps.PVControl
       // so the search returns the longest session that still passes — e.g. for Optimal this is
       // "charge the EV as long as possible while the house battery still reaches ~100% via PV".
       //
-      // Steps 1+2 cap to today's PV window (EV only during daytime so the house battery is not
-      // drained overnight by a long session). Step 3 (PriorityPlus only) extends to next sunrise
-      // to allow cheap overnight grid charging.
+      // Every step's session end is capped by tomorrowMax (not todayMax — computed below only
+      // for the early "no window at all" bail-out): each mode's own predicate (WillReachMaxSocToday,
+      // IsOvernightMinSocOk, …) is what actually constrains how far a session may run, letting a
+      // session that already satisfies its mode's requirement extend into the evening/overnight
+      // — e.g. Optimal draining the battery after reaching 100% via PV, or Priority/PriorityPlus
+      // continuing to drain past sunset down to minSoC.
 
       // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
       // RunSim returns a full SimulationResult so predicates can use its derived properties
@@ -455,6 +466,18 @@ namespace NetDeamon.apps.PVControl
       }
       SimulationResult RunSim(DateTime end) => RunSimFrom(currentSlot, end);
 
+      // True when a session from `start` to `end` is long enough to avoid the min-window
+      // oscillation guard — either the load's natural duration is already shorter than
+      // MinWindowMinutes (it ends cleanly via "target reached" next cycle, so a marginal window
+      // flipping on/off isn't a concern), no minimum is configured, or the window itself is
+      // already at least that long. Shared by every "found a session" call site below —
+      // FindMax and each real-time gate's recovery-slot prediction — so the guard's definition
+      // can't drift between them.
+      bool MeetsMinWindow(DateTime start, DateTime end) =>
+        durationMinutes < load.Config.MinWindowMinutes ||
+        load.Config.MinWindowMinutes <= 0 ||
+        (end - start).TotalMinutes >= load.Config.MinWindowMinutes;
+
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
       // Predicate must be monotone: shorter session → easier to satisfy.
       // Returns null if no 15-min session satisfies it, or if the found window is shorter
@@ -462,16 +485,7 @@ namespace NetDeamon.apps.PVControl
       DateTime? FindMax(DateTime maxEnd, Func<SimulationResult, bool> predicate)
       {
         var end = FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
-        if (end is null) return null;
-        // Skip min-window guard when the natural charge duration is already shorter than
-        // MinWindowMinutes: the session will end cleanly via "target reached" next cycle,
-        // so oscillation is not a concern. Only apply the guard for longer natural sessions
-        // where a marginal window could flip on/off between cycles.
-        if (durationMinutes >= load.Config.MinWindowMinutes &&
-            load.Config.MinWindowMinutes > 0 &&
-            (end.Value - currentSlot).TotalMinutes < load.Config.MinWindowMinutes)
-          return null;
-        return end;
+        return end is not null && MeetsMinWindow(currentSlot, end.Value) ? end : null;
       }
 
       // Today's and tomorrow's window ends (capped to full session duration if shorter).
@@ -508,9 +522,7 @@ namespace NetDeamon.apps.PVControl
             var end = FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
               e => RunSimFrom(tomorrowPVStart.Value, e),
               sim => sim.WillReachMaxSocTomorrow && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
-            if (end is not null &&
-                (durationMinutes < load.Config.MinWindowMinutes || load.Config.MinWindowMinutes <= 0 ||
-                 (end.Value - tomorrowPVStart.Value).TotalMinutes >= load.Config.MinWindowMinutes))
+            if (end is not null && MeetsMinWindow(tomorrowPVStart.Value, end.Value))
             {
               SetResult(
                 [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = tomorrowPVStart.Value, EndTime = end.Value, PowerW = chargeRateW }],
@@ -568,9 +580,7 @@ namespace NetDeamon.apps.PVControl
                 sim => (recoveryIsToday ? sim.WillReachMaxSocToday : sim.WillReachMaxSocTomorrow)
                        && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
 
-              if (end is not null &&
-                  (durationMinutes < load.Config.MinWindowMinutes || load.Config.MinWindowMinutes <= 0 ||
-                   (end.Value - recoverySlot).TotalMinutes >= load.Config.MinWindowMinutes))
+              if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
               {
                 SetResult(
                   [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
@@ -619,11 +629,65 @@ namespace NetDeamon.apps.PVControl
         int currentSoC = Battery.BatterySoc;
         int netPvW = CurrentAveragePVPower - CurrentAverageHouseLoad;
 
-        if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct))
+        if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct, PvBypassMinSocBufferPct))
         {
-          string reason = wasActive
-            ? $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — stopping, battery depleted"
-            : $"{load.Mode}: SoC {currentSoC}% < restart floor {socFloor + PrioritySoCHysteresisPct}% (net PV {netPvW}W < {chargeRateW}W needed) — waiting for battery to recover or PV to cover the load";
+          // Three distinct reasons the gate can block a restart — report the one that's
+          // actually true, rather than always blaming "PV insufficient" regardless of cause.
+          // Always state the REAL restart thresholds (PV-covered buffer floor, full hysteresis
+          // floor), even while SoC is still below socFloor itself — crossing socFloor alone is
+          // never enough to restart, and a message that only mentions socFloor reads as if it were.
+          int restartFloor   = socFloor + PrioritySoCHysteresisPct;
+          int pvRestartFloor = socFloor + PvBypassMinSocBufferPct;
+          string reason;
+          if (currentSoC < socFloor)
+            reason = wasActive
+              ? $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — stopping, battery depleted"
+              : $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — waiting to recover above {socFloor}%, then {pvRestartFloor}%+ with PV or {restartFloor}%+ to restart";
+          else if (currentSoC < pvRestartFloor)
+            reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (need {pvRestartFloor}%+ before a PV-covered restart is even considered) — waiting for battery to recover";
+          else
+            reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (net PV {netPvW}W < {chargeRateW}W needed) — waiting for battery to recover or PV to cover the load";
+
+          // Even though we can't start now, scan the base trajectory for when SoC is predicted
+          // to recover past the (PV-independent) restart floor, then search for a valid window
+          // from that point so the dashboard can still show a predicted start/end/SoC — same
+          // recovery-slot pattern as the Optimal-mode gate above. Only while stopped: a session
+          // being force-stopped by a real SoC drop has nothing to predict.
+          if (!wasActive)
+          {
+            var recoverySlot = baseResult.Slots
+              .Where(s => s.Time > currentSlot && s.SoC >= restartFloor)
+              .Select(s => s.Time)
+              .FirstOrDefault();
+
+            if (recoverySlot != default)
+            {
+              bool recoveryIsToday = recoverySlot.Date == now.Date;
+              var pvEnd = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday : baseResult.LastRelevantPVEnergyTomorrow;
+              var recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+
+              if (recoveryMax > recoverySlot)
+              {
+                // Mirrors whichever of Step 2/Step 3 will actually govern once the gate opens,
+                // so the prediction matches the real decision instead of a simplified guess.
+                bool recoveryUsesStep3 = load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk();
+                Func<SimulationResult, bool> predicate = recoveryUsesStep3
+                  ? sim => sim.IsGridCheapVs(baseResult)
+                  : sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult);
+
+                var end = FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e), predicate);
+
+                if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
+                {
+                  SetResult(
+                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
+                    false, $"{reason} — expected start ~{recoverySlot:HH:mm}", end);
+                  return;
+                }
+              }
+            }
+          }
+
           SetResult([], false, reason, null);
           return;
         }
