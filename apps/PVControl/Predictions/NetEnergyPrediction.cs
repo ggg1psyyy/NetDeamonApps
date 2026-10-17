@@ -99,7 +99,13 @@ namespace NetDeamon.apps.PVControl.Predictions
         result[key] = (int)(result[key] * effectiveRatio);
       }
 
-      // Ramp the first 4 slots from the 5-min average down to the already-scaled values
+      // Ramp the first 4 slots from the 5-min average down to the already-scaled values.
+      // Skip slots the forecast says have zero PV potential at all (e.g. after sunset) — the
+      // live running average lingering above zero there (sensor noise, residual
+      // self-consumption reporting, slow decay) is not real PV and must never be blended in;
+      // doing so fabricates a false "net PV" slot that corrupts FirstRelevantPVEnergyToday/
+      // Tomorrow (and CurrentPVPeriod) for everything downstream that relies on them. A skipped
+      // slot still counts toward the 4 — it's already correct, there's nothing to ramp.
       int shortAvgPerSlot = shortAvgW / 4;
       int slotsToCorrect  = 4;
       int remaining       = slotsToCorrect;
@@ -108,7 +114,8 @@ namespace NetDeamon.apps.PVControl.Predictions
         if (remaining <= 0) break;
         if (key < now) continue;
         int scaled = result[key];
-        result[key] = scaled + (shortAvgPerSlot - scaled) * remaining / slotsToCorrect;
+        if (scaled > 0)
+          result[key] = scaled + (shortAvgPerSlot - scaled) * remaining / slotsToCorrect;
         remaining--;
       }
 
