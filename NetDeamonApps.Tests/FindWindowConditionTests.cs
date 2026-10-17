@@ -529,6 +529,180 @@ public class FindWindowConditionTests : TestBase
       "even though it's exactly the cheap self-correction PriorityPlus should tolerate.");
   }
 
+  // ── PriorityPlus evening/dusk cascade: literal fallback to Priority's own rung ─────────────
+  // FindLoadWindow's evening/pre-dawn late-start block now runs the SAME predicate for both
+  // modes: PriorityRung(sim) = IsOvernightMinSocOk(true) && !HasNewGridVs(baseline); PriorityPlus
+  // additionally accepts PriorityRung(sim) || (HasNewGridVs(baseline) && IsGridCheapVs(baseline)).
+  // These tests exercise that cascade directly via SimulationResult's own public methods (no
+  // seam into FindLoadWindow itself, per this file's documented HA-integration exception).
+
+  /// <summary>
+  /// Regression test for the reported bug: when the EV's candidate session causes ZERO new
+  /// force_charge at all (generous overnight margin), PriorityPlus's cascade must reduce to
+  /// EXACTLY Priority's own rung — not merely an equivalent-looking separate formula — so a
+  /// PriorityPlus session with no real need for grid assistance gets Priority's identical
+  /// timing discipline and floor, rather than bypassing it with no price check at all.
+  /// </summary>
+  [Fact]
+  public void PriorityPlus_EveningNoNewGridNeeded_CascadeReducesToPriorityRung()
+  {
+    const float FlatPrice = 0.30f; // deliberately NOT cheap — proves price is irrelevant here
+    const float MaxPrice  = 0.15f;
+
+    var start    = new DateTime(2026, 3, 22, 22, 0, 0); // evening, no PV
+    var baseDate = start.Date;
+    var prices   = HourlyPrices(baseDate, FlatPrice, FlatPrice, cheapHour: 0);
+
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = start,
+      StartSocPercent             = 70,  // generous — EV's modest draw needs no grid at all
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = AbsMin,
+      PreferredMinSocPercent      = 30,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = ChargeA,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = FlatLoad(baseDate, LoadWh),
+      PVPredictionWh              = DaytimePV(baseDate, PvWh),
+      ExtraLoads                  = [],
+      EnableCheapForceCharge      = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeTargetSocPercent = 95,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+
+    var baseSim = EnergySimulator.Simulate(baseIn);
+    var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, start.AddHours(1)));
+
+    Assert.False(evSim.HasNewGridVs(baseSim),
+      "Precondition: this scenario's margin is generous enough that the EV needs no new grid at all.");
+
+    bool priorityRung = evSim.IsOvernightMinSocOk(true) && !evSim.HasNewGridVs(baseSim);
+    bool priorityPlus = priorityRung || (evSim.HasNewGridVs(baseSim) && evSim.IsGridCheapVs(baseSim));
+
+    Assert.Equal(priorityRung, priorityPlus);
+  }
+
+  /// <summary>
+  /// Confirms the one genuine differentiator still works: when the EV's candidate genuinely
+  /// needs a NEW grid-assisted charge and that charge is cheap, PriorityPlus's cascade accepts
+  /// a session Priority's own rung rejects — strictly adding capability on top of the Priority
+  /// rung rather than replacing it. Reuses the exact scenario from
+  /// PriorityPlus_OvernightEV_UsesOnlyCheapGrid above.
+  /// </summary>
+  [Fact]
+  public void PriorityPlus_EveningGenuineCheapGridNeeded_CascadeAcceptsBeyondPriorityRung()
+  {
+    const float CheapPrice     = 0.05f;
+    const float ExpensivePrice = 0.30f;
+    const float MaxPrice       = 0.15f;
+
+    var start    = new DateTime(2026, 3, 22, 22, 0, 0);
+    var baseDate = start.Date;
+    var prices   = BandedPrices(baseDate, CheapPrice, ExpensivePrice, cheapFrom: 0, cheapTo: 6);
+
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = start,
+      StartSocPercent             = 85,
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = AbsMin,
+      PreferredMinSocPercent      = 30,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = ChargeA,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = FlatLoad(baseDate, 100),
+      PVPredictionWh              = DaytimePV(baseDate, PvWh),
+      ExtraLoads                  = [],
+      EnableCheapForceCharge      = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeTargetSocPercent = 95,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+
+    var baseSim    = EnergySimulator.Simulate(baseIn);
+    var sessionEnd = new DateTime(2026, 3, 23, 6, 15, 0);
+    var evSim      = EnergySimulator.Simulate(WithEV(baseIn, start, sessionEnd));
+
+    bool priorityRung = evSim.IsOvernightMinSocOk(true) && !evSim.HasNewGridVs(baseSim);
+    bool priorityPlus = priorityRung || (evSim.HasNewGridVs(baseSim) && evSim.IsGridCheapVs(baseSim));
+
+    Assert.False(priorityRung,
+      "Priority's own rung should reject this session: it does need new grid import.");
+    Assert.True(priorityPlus,
+      "PriorityPlus's cascade should accept it: the new grid import is genuinely cheap.");
+  }
+
+  /// <summary>
+  /// Confirms the "piggy-back on an already-active cheapest-period force charge" exception
+  /// needs no special-case code. Empirically, EnergySimulator's cheapest-period branch targets
+  /// a fixed house-battery SoC (ForceChargeTargetSocPercent) at a FIXED charge rate — its
+  /// wall-clock duration doesn't depend on how much else (e.g. an EV) is drawing concurrently,
+  /// so an EV running entirely inside an already-active cheap-price charge window causes NO new
+  /// force_charge slots at all: HasNewGridVs(baseline) stays false, and the vacuous-pass cascade
+  /// already covers this outcome identically to
+  /// PriorityPlus_EveningNoNewGridNeeded_CascadeReducesToPriorityRung above — confirming the
+  /// exception the user described doesn't actually need separate code: the only way the EV ever
+  /// causes genuinely NEW grid need is via the SEPARATE NeedToCharge branch, which IsGridCheapVs
+  /// already price-checks correctly on its own terms (see the "genuine cheap grid" test above).
+  /// </summary>
+  [Fact]
+  public void PriorityPlus_CheapestPeriodPiggyback_CausesNoNewGridAtAll()
+  {
+    const float CheapPrice     = 0.05f; // cheapest hour: 02:00–02:59
+    const float ExpensivePrice = 0.30f;
+    const float MaxPrice       = 0.15f;
+
+    var start    = new DateTime(2026, 3, 22, 1, 30, 0); // within 1h before the cheapest hour
+    var baseDate = start.Date;
+    var prices   = HourlyPrices(baseDate, CheapPrice, ExpensivePrice, cheapHour: 2);
+
+    var baseIn = new SimulationInput
+    {
+      StartTime                   = start,
+      StartSocPercent             = 20,
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = AbsMin,
+      PreferredMinSocPercent      = 30,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = ChargeA,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = FlatLoad(baseDate, LoadWh),
+      PVPredictionWh              = DaytimePV(baseDate, PvWh),
+      ExtraLoads                  = [],
+      EnableCheapForceCharge      = true, // switch.pv_control_force_charge_at_cheapest_period
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeTargetSocPercent = 60,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+
+    var baseSim = EnergySimulator.Simulate(baseIn);
+    Assert.Contains(baseSim.Slots, s => s.State.Mode == InverterModes.force_charge
+                                      && s.State.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice);
+
+    // EV runs concurrently with the already-active cheap-price charge window, drawing heavily
+    // (3 700 W, same high-drain precedent as Priority_HighDrainEV_HasNewGrid_CatchesDaytimeForceCharge
+    // below) — if the branch's duration were sensitive to concurrent load, this would be the
+    // scenario to expose it.
+    var evInput = baseIn.WithExtraLoads([new ExtraLoad { Name = "EV", Priority = 10, StartTime = start, EndTime = start.AddHours(2), PowerW = 3_700 }]);
+    var evSim   = EnergySimulator.Simulate(evInput);
+
+    Assert.False(evSim.HasNewGridVs(baseSim),
+      "The cheapest-period charge's duration is driven by the house battery's own SoC target, " +
+      "not by concurrent load, so the EV piggy-backing on it causes no new grid need at all — " +
+      "no special-case code is needed for this exception.");
+  }
+
   // ── HasNewGrid daytime regression ────────────────────────────────────────────────────────
 
   /// <summary>

@@ -537,11 +537,7 @@ namespace NetDeamon.apps.PVControl
         return;
       }
 
-      // ── Priority mode: schedule new sessions as late as possible before sunrise ─────────────
-      // Priority only — NOT PriorityPlus, whose Step 3 below deliberately starts/extends
-      // sessions overnight to use cheap grid power; applying this rule there would defeat that
-      // feature entirely.
-      //
+      // ── Priority / PriorityPlus: schedule new sessions as late as possible before sunrise ──
       // Priority CAN still drain the battery to minSoC overnight (that's unchanged) — but a new
       // session now starts as close to sunrise as still lets it fully complete, rather than as
       // soon as the gate allows. Nothing recharges the battery between sunset and sunrise, so
@@ -554,12 +550,32 @@ namespace NetDeamon.apps.PVControl
       // never saw coming: minimizing the TIME the real (not forecast) battery has a reduced
       // margin, not changing how low it ultimately gets.
       //
+      // PriorityPlus is governed by the SAME climb-the-ladder search as Priority here, not a
+      // separate path: every candidate is checked against Priority's own rule first
+      // (PriorityRung — battery to minSoC, no new grid), and PriorityPlus only gets to accept a
+      // candidate Priority's rule rejects if that candidate genuinely needs a NEW grid-assisted
+      // charge AND it's cheap — its one actual differentiator, applied on top of Priority's
+      // rule rather than bypassing it. Whenever the EV doesn't need (or can't cheaply get) new
+      // grid, PriorityPlus's cascade reduces to exactly PriorityRung — same floor, same timing
+      // discipline, not a look-alike approximation. (The Optimal rung — PV alone covers the
+      // draw — isn't checked explicitly: this block only runs outside PV hours, AfterPV or
+      // BeforePV, where the PV forecast is zero by definition, so that rung can never apply
+      // here regardless of input.)
+      //
       // An already-active session is NOT affected here — see the dusk-stop check after the
       // min-window latch below, which only cuts off a session once it's past its own
       // anti-oscillation latch, not one still settling in.
-      if (load.Mode == LoadSchedulingMode.Priority && !wasActive &&
+      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus && !wasActive &&
           baseResult.CurrentPVPeriod is PVPeriods.AfterPV or PVPeriods.BeforePV)
       {
+        bool isPriority = load.Mode == LoadSchedulingMode.Priority;
+
+        bool PriorityRung(SimulationResult sim) =>
+          sim.IsOvernightMinSocOk(true) && !sim.HasNewGridVs(baseResult);
+        bool Predicate(SimulationResult sim) => isPriority
+          ? PriorityRung(sim)
+          : PriorityRung(sim) || (sim.HasNewGridVs(baseResult) && sim.IsGridCheapVs(baseResult));
+
         // The relevant upcoming sunrise: today's own (if we're already in the pre-dawn hours
         // before it) or tomorrow's (if it's still evening and today's sunrise already passed).
         var nextSunrise = baseResult.CurrentPVPeriod == PVPeriods.BeforePV
@@ -588,8 +604,7 @@ namespace NetDeamon.apps.PVControl
           // shorter, partial charge — exactly "use up as much as possible" once the ideal case
           // isn't available.
           var start = FindLatestSessionStart(idealStart, nextSunrise.Value, load.Config.MinWindowMinutes,
-            s => RunSimFrom(s, nextSunrise.Value),
-            sim => sim.IsOvernightMinSocOk(true) && !sim.HasNewGridVs(baseResult));
+            s => RunSimFrom(s, nextSunrise.Value), Predicate);
 
           if (start is not null)
           {
@@ -605,7 +620,7 @@ namespace NetDeamon.apps.PVControl
                 SetResult(
                   [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW }],
                   true,
-                  $"Charging (Priority {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
+                  $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
                   end);
               }
               else
@@ -615,7 +630,7 @@ namespace NetDeamon.apps.PVControl
                 SetResult(
                   [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
                   false,
-                  $"Scheduled ~{start.Value:HH:mm} (Priority {load.Config.Name}: deferring to minimize overnight battery drawdown time)",
+                  $"Scheduled ~{start.Value:HH:mm} ({load.Mode} {load.Config.Name}: deferring to minimize overnight battery drawdown time)",
                   end);
               }
               return;
@@ -624,7 +639,7 @@ namespace NetDeamon.apps.PVControl
         }
 
         SetResult([], false,
-          $"Priority: outside PV hours ({baseResult.CurrentPVPeriod}) — deferring to minimize overnight battery drawdown time", null);
+          $"{load.Mode}: outside PV hours ({baseResult.CurrentPVPeriod}) — deferring to minimize overnight battery drawdown time", null);
         return;
       }
 
@@ -812,7 +827,7 @@ namespace NetDeamon.apps.PVControl
         }
       }
 
-      // ── Priority mode: stop a long-running active session at dusk ───────────────────────────
+      // ── Priority / PriorityPlus: stop a long-running active session at dusk ────────────────
       // Companion to the late-start scheduling block above, for a session that was already
       // running when the sun set. Only fires in the evening (AfterPV) — NOT in the pre-dawn
       // window (BeforePV), which is exactly where Priority is now supposed to run, draining
@@ -820,14 +835,30 @@ namespace NetDeamon.apps.PVControl
       // freshly started session finish its own anti-oscillation window (or there's no latch to
       // finish) — so a session still settling in is never cut off mid-latch, but a "normal"
       // long-running daytime charge that's still going at dusk is stopped here rather than
-      // continuing to drain the battery through the riskiest part of the night. Priority only —
-      // PriorityPlus keeps running past dusk via Step 3's cheap-overnight-charging feature.
-      if (load.Mode == LoadSchedulingMode.Priority && wasActive && baseResult.CurrentPVPeriod == PVPeriods.AfterPV)
+      // continuing to drain the battery through the riskiest part of the night.
+      //
+      // By default this stops a PriorityPlus session exactly like Priority — that's the
+      // fallback, not a special case. The only thing that ever suspends it is genuinely,
+      // currently drawing a NEW grid-assisted charge at a cheap price: its one differentiating
+      // capability, actually in use right now rather than assumed, re-checked every cycle by
+      // re-simulating the session as currently scheduled.
+      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus && wasActive &&
+          baseResult.CurrentPVPeriod == PVPeriods.AfterPV)
       {
-        SetResult([], false,
-          $"Priority: stopping at dusk to preserve overnight battery margin — resumes pre-dawn",
-          null);
-        return;
+        bool exemptAsGenuineCheapGrid = false;
+        if (load.Mode == LoadSchedulingMode.PriorityPlus)
+        {
+          var activeSim = RunSim(load.PredictedEnd ?? currentSlot);
+          exemptAsGenuineCheapGrid = activeSim.HasNewGridVs(baseResult) && activeSim.IsGridCheapVs(baseResult);
+        }
+
+        if (!exemptAsGenuineCheapGrid)
+        {
+          SetResult([], false,
+            $"{load.Mode}: stopping at dusk to preserve overnight battery margin — resumes pre-dawn",
+            null);
+          return;
+        }
       }
 
       if (load.Mode == LoadSchedulingMode.Optimal)
