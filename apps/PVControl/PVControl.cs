@@ -214,6 +214,13 @@ namespace NetDeamon.apps.PVControl
             PVCC_Logger.LogInformation("Load {load}: TargetLevelEntity is null (static target from config)", load.Config.Name);
           }
 
+          if (load.ReadyByEntity is not null)
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ReadyByEntity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.ReadyByEntity, state));
+          if (load.EnforceReadyByEntity is not null)
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnforceReadyByEntity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.EnforceReadyByEntity, state));
+
           // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
           // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
           // subscription pattern as other external sensors — recompute immediately on toggle
@@ -311,6 +318,22 @@ namespace NetDeamon.apps.PVControl
             PVCC_Logger.LogInformation("Load target level changed: {load} → {level}", load.Config.Name, tl);
             await PVCC_EntityManager.SetStateAsync(entity.EntityId, tl.ToString(CultureInfo.InvariantCulture));
           }
+        }
+        if (load.ReadyByEntity is not null && entity.EntityId == load.ReadyByEntity.EntityId)
+        {
+          // Echo a valid time in HA's HH:mm:ss format; an unparsable value keeps the old one.
+          if (Managers.SchedulableLoadRuntime.TryParseReadyBy(newState, out var t))
+          {
+            var echoed = t.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            PVCC_Logger.LogInformation("Load ready-by changed: {load} → {time}", load.Config.Name, echoed);
+            await PVCC_EntityManager.SetStateAsync(entity.EntityId, echoed);
+          }
+        }
+        if (load.EnforceReadyByEntity is not null && entity.EntityId == load.EnforceReadyByEntity.EntityId)
+        {
+          bool on = newState.Equals("on", StringComparison.OrdinalIgnoreCase);
+          PVCC_Logger.LogInformation("Load enforce ready-by changed: {load} → {on}", load.Config.Name, on);
+          await PVCC_EntityManager.SetStateAsync(entity.EntityId, on ? "ON" : "OFF");
         }
       }
 #if !DEBUG
@@ -416,6 +439,7 @@ namespace NetDeamon.apps.PVControl
           charge_start_predicted = load.ExtraLoads.Count > 0 ? load.ExtraLoads[0].StartTime.ToISO8601() : "n/a",
           charge_end_predicted = chargeEndPredicted?.ToISO8601() ?? "n/a",
           charge_end_predicted_soc = chargeEndPredictedSoc?.ToString("F0") ?? "n/a",
+          ready_by = load.ReadyByTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? "off",
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           charge_timeline = chargeTimeline,
         };
@@ -1053,6 +1077,20 @@ namespace NetDeamon.apps.PVControl
             },
             defaultValue: load.Config.TargetLevelDefault.ToString(CultureInfo.InvariantCulture),
             reRegister: reset);
+
+        load.ReadyByEntity = await RegisterSensor(
+          $"time.pv_control_{load.Slug}_ready_by",
+          $"{load.Config.Name} - Ready By",
+          null, "mdi:clock-end",
+          defaultValue: "07:00:00",
+          reRegister: reset);
+
+        load.EnforceReadyByEntity = await RegisterSensor(
+          $"switch.pv_control_{load.Slug}_enforce_ready_by",
+          $"{load.Config.Name} - Enforce Ready By",
+          "switch", "mdi:clock-check",
+          defaultValue: "OFF",
+          reRegister: reset);
 
         load.ChargeNowEntity = await RegisterSensor(
           $"binary_sensor.pv_control_{load.Slug}_charge_now",

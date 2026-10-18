@@ -402,7 +402,7 @@ namespace NetDeamon.apps.PVControl
         load.SessionStartMode = load.Mode;
         load.SessionStartSettings = new SessionStartSettings(
           baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
-          baseInput.ForceChargeMaxPrice, load.TargetLevel);
+          baseInput.ForceChargeMaxPrice, load.TargetLevel, load.ReadyByTime);
       }
       else if (!load.ChargeNow)
       {
@@ -525,6 +525,10 @@ namespace NetDeamon.apps.PVControl
       // left to evaluate for a price-based decision.
       var priceHorizonEnd = baseInput.ImportPrices.Select(p => p.EndTime).DefaultIfEmpty(currentSlot).Max();
 
+      // Optional "ready by" deadline — only PriorityPlus's price scan uses it (it may then exceed
+      // the price threshold to finish in time); Optimal/Priority keep their own rules.
+      DateTime? readyBy = load.ReadyByTime is { } rb ? SchedulableLoadRuntime.NextOccurrence(rb, now) : null;
+
       // ── Numbered-mode ladder, climbed from the bottom ───────────────────────────────────────
       // Optimal/Priority/PriorityPlus (LoadSchedulingMode = 10/20/30) are each a complete,
       // self-contained ruleset. Starting from the selected mode's own ruleset, the function
@@ -568,7 +572,7 @@ namespace NetDeamon.apps.PVControl
       {
         var currentSettings = new SessionStartSettings(
           baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
-          baseInput.ForceChargeMaxPrice, load.TargetLevel);
+          baseInput.ForceChargeMaxPrice, load.TargetLevel, load.ReadyByTime);
 
         if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0
             && load.SessionStartMode == load.Mode
@@ -894,21 +898,31 @@ namespace NetDeamon.apps.PVControl
 
       // ── PriorityPlus's bonus ruleset ─────────────────────────────────────────────────────────
       // Tried only once Priority's complete ruleset above has already concluded it can't charge
-      // this cycle. Day or night doesn't matter here, only price — see FindEarliestPriceAwareStart.
+      // this cycle. Day or night doesn't matter here, only price — see FindBestPriceAwareStart.
       void RunPriorityPlusBonusRuleset()
       {
-        var start = SessionPlanner.FindEarliestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult);
-        if (start is null) return;
+        // A running session is never stopped just to wait for a cheaper start later.
+        var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult,
+          readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction);
+        if (planned is not { } p) return;
 
-        var end = start.Value.AddMinutes(durationMinutes);
-        if (!MeetsMinWindow(start.Value, end)) return;
+        var end = p.Start.AddMinutes(durationMinutes);
+        if (!MeetsMinWindow(p.Start, end)) return;
 
+        string why = p.Choice switch
+        {
+          StartChoice.Cheaper          => $"cheapest window, {p.SavingPercent:F0}% cheaper than the earliest",
+          StartChoice.DeadlineCheapest => $"ready by {readyBy:HH:mm} — cheapest start that finishes in time, above price threshold",
+          StartChoice.DeadlineNow      => $"ready by {readyBy:HH:mm} — can't finish in time, charging now",
+          _                            => "earliest cheap grid-assisted window",
+        };
+        bool startNow = p.Start <= currentSlot;
         SetResult(
-          [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
-          start.Value <= currentSlot,
-          start.Value <= currentSlot
-            ? $"Charging (PriorityPlus {load.Config.Name}: price-justified grid assist, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"
-            : $"Scheduled ~{start.Value:HH:mm} (PriorityPlus {load.Config.Name}: earliest cheap grid-assisted window)",
+          [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = p.Start, EndTime = end, PowerW = chargeRateW }],
+          startNow,
+          startNow
+            ? $"Charging (PriorityPlus {load.Config.Name}: {why}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"
+            : $"Scheduled ~{p.Start:HH:mm} (PriorityPlus {load.Config.Name}: {why})",
           end);
       }
 
@@ -955,7 +969,7 @@ namespace NetDeamon.apps.PVControl
       // window after midnight). Only PriorityPlus can price-plan ahead: Optimal/Priority decide
       // on PV and battery state as it is at the time. Never fed into the control simulation.
       if (load.Mode == LoadSchedulingMode.PriorityPlus)
-        load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd);
+        load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd, readyBy);
     }
 
     /// <summary>

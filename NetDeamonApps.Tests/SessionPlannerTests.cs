@@ -22,7 +22,7 @@ public class SessionPlannerTests : TestBase
   static readonly DateTime CheapFrom  = new(2026, 10, 19, 0, 0, 0);
   static readonly DateTime CheapTo    = new(2026, 10, 19, 4, 0, 0);
 
-  static SimulationInput Input(int socPercent, Func<DateTime, float> price)
+  static SimulationInput Input(int socPercent, Func<DateTime, float> price, float maxPrice = MaxPrice)
   {
     var date   = Start.Date;
     var prices = new List<PriceTableEntry>();
@@ -52,7 +52,7 @@ public class SessionPlannerTests : TestBase
       ExtraLoads                  = [],
       EnableCheapForceCharge      = false,
       OpportunisticDischarge      = false,
-      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeMaxPrice         = maxPrice,
       ForceChargeTargetSocPercent = 95,
       CurrentMode                 = new InverterState(InverterModes.normal),
     };
@@ -135,5 +135,129 @@ public class SessionPlannerTests : TestBase
     var planned = SessionPlanner.PlanFollowUpSessions(input, [first], 18_000, FirstEnd.AddHours(1));
 
     Assert.Empty(planned);
+  }
+
+  // ── FindBestPriceAwareStart: cheapest instead of earliest start, optional deadline ─────────
+
+  // Battery already at its floor, so every EV Wh comes straight from the grid at that slot's
+  // price: the cost difference between starts is just the price difference.
+  static readonly DateTime EveningFrom = new(2026, 10, 18, 18, 0, 0);
+  const int TwoHours = 120;
+
+  static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice)
+  {
+    var input = Input(12, price, maxPrice);
+    var baseline = EnergySimulator.Simulate(input);
+    return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), TwoHours,
+      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline);
+  }
+
+  [Fact]
+  public void LaterStartClearlyCheaper_WaitsForIt()
+  {
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.20f : 0.30f);
+
+    Assert.NotNull(p);
+    Assert.Equal(StartChoice.Cheaper, p.Value.Choice);
+    Assert.InRange(p.Value.Start, CheapFrom, CheapTo.AddMinutes(-TwoHours));
+    Assert.True(p.Value.SavingPercent >= SessionPlanner.DefaultMinSavingFraction * 100);
+  }
+
+  [Fact]
+  public void LaterStartLessThanMinSavingCheaper_StartsEarliest()
+  {
+    // 0.3 % cheaper — under the 1 % minimum saving.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.299f : 0.30f);
+
+    Assert.NotNull(p);
+    Assert.Equal(StartChoice.Earliest, p.Value.Choice);
+    Assert.Equal(EveningFrom, p.Value.Start);
+  }
+
+  [Fact]
+  public void Deadline_ExcludesCheaperStartThatWouldFinishTooLate()
+  {
+    var deadline = new DateTime(2026, 10, 19, 1, 0, 0);
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.20f : 0.30f, deadline);
+
+    Assert.NotNull(p);
+    Assert.True(p.Value.Start.AddMinutes(TwoHours) <= deadline, $"Start {p.Value.Start:HH:mm} finishes after the deadline.");
+  }
+
+  [Fact]
+  public void Deadline_NoStartUnderThreshold_TakesCheapestThatFinishesInTime()
+  {
+    var deadline = new DateTime(2026, 10, 19, 6, 0, 0);
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.20f : 0.30f, deadline, maxPrice: 0.10f);
+
+    Assert.NotNull(p);
+    Assert.Equal(StartChoice.DeadlineCheapest, p.Value.Choice);
+    Assert.InRange(p.Value.Start, CheapFrom, CheapTo.AddMinutes(-TwoHours));
+  }
+
+  [Fact]
+  public void NoDeadline_NoGridStartUnderThreshold_WaitsForPvNextMorning()
+  {
+    // Every night start needs grid over 0.10; at 06:00 PV (600 Wh/slot) covers house + EV.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.20f : 0.30f, maxPrice: 0.10f);
+
+    Assert.NotNull(p);
+    Assert.Equal(new DateTime(2026, 10, 19, 6, 0, 0), p.Value.Start);
+  }
+
+  [Fact]
+  public void NoDeadline_NoStartPassesBeforeHorizon_NoStart()
+  {
+    var input    = Input(12, _ => 0.30f, maxPrice: 0.10f);
+    var baseline = EnergySimulator.Simulate(input);
+
+    Assert.Null(SessionPlanner.FindBestPriceAwareStart(EveningFrom, EveningFrom.AddHours(3), TwoHours,
+      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline));
+  }
+
+  [Fact]
+  public void Deadline_TooCloseToFinish_StartsNow()
+  {
+    var p = Best(_ => 0.30f, deadline: EveningFrom.AddHours(1));
+
+    Assert.NotNull(p);
+    Assert.Equal(StartChoice.DeadlineNow, p.Value.Choice);
+    Assert.Equal(EveningFrom, p.Value.Start);
+  }
+
+  [Fact]
+  public void NetGridCost_EvAtFloor_IsItsGridEnergyTimesPrice()
+  {
+    var input    = Input(12, _ => 0.30f);
+    var baseline = EnergySimulator.Simulate(input);
+    var withEv   = EnergySimulator.Simulate(input.WithExtraLoads([Ev(EveningFrom, EveningFrom.AddMinutes(TwoHours))]));
+
+    float evKwh = EvW * TwoHours / 60f / 1000f;
+    Assert.InRange(withEv.NetGridCostVs(baseline), evKwh * 0.30f * 0.95f, evKwh * 0.30f * 1.05f);
+  }
+
+  [Theory]
+  [InlineData("06:30", true, 6, 30)]
+  [InlineData("6:05", true, 6, 5)]
+  [InlineData(" 23:59 ", true, 23, 59)]
+  [InlineData("07:00:00", true, 7, 0)]
+  [InlineData("6:45:00", true, 6, 45)]
+  [InlineData("off", false, 0, 0)]
+  [InlineData("24:00", false, 0, 0)]
+  [InlineData("", false, 0, 0)]
+  [InlineData(null, false, 0, 0)]
+  public void ReadyBy_Parse(string? text, bool ok, int h, int m)
+  {
+    Assert.Equal(ok, NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.TryParseReadyBy(text, out var t));
+    if (ok) Assert.Equal(new TimeOnly(h, m), t);
+  }
+
+  [Fact]
+  public void ReadyBy_NextOccurrence_TodayIfStillAhead_ElseTomorrow()
+  {
+    var now = new DateTime(2026, 10, 18, 17, 0, 0);
+    Assert.Equal(new DateTime(2026, 10, 18, 22, 0, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(22, 0), now));
+    Assert.Equal(new DateTime(2026, 10, 19, 6, 30, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(6, 30), now));
+    Assert.Equal(new DateTime(2026, 10, 19, 17, 0, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(17, 0), now));
   }
 }

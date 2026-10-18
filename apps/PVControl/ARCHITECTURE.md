@@ -196,16 +196,24 @@ binary search, requiring `IsOvernightMinSocOk() && !HasNewGridVs(baseline)` — 
 import, ever, under Priority's own rule. The SoC floor (live gate and overnight check) follows
 `EnforcePreferredSoC` like every mode: preferred minimum when on, absolute minimum when off.
 
-**PriorityPlus's bonus ruleset** (`RunPriorityPlusBonusRuleset`/`SessionPlanner.FindEarliestPriceAwareStart`):
+**PriorityPlus's bonus ruleset** (`RunPriorityPlusBonusRuleset`/`SessionPlanner.FindBestPriceAwareStart`):
 tried only once Priority's ruleset above has already concluded it can't charge this cycle. Day
-or night doesn't matter here — only price. It scans forward from "now" in 15-minute steps,
-re-simulating the EV at each advancing candidate start, for the earliest one where the candidate
-either needs no new grid at all (vs. baseline — same comparison Priority's rule uses) or needs
-new grid at a price at/under the configured threshold. Advancing matters because delaying the
-EV's own simulated start changes what the simulator's `NeedToCharge` logic computes for it (a
-different deadline, possibly a different, cheaper slot) — checking once at "now" isn't enough.
-Bounded by the published import-price horizon (today + tomorrow once published); once prices run
-out there's nothing left to evaluate, and the scan gives up.
+or night doesn't matter here — only price. It simulates the EV at every 15-minute start from
+"now". A start passes when it needs no new grid (vs. baseline) or new grid only at/under the
+price threshold. Of the passing starts the earliest wins, unless a later one is cheaper overall
+by at least 1 % (`DefaultMinSavingFraction` — keeps it from waiting on forecast noise). "Cheaper overall" is `NetGridCostVs`: extra import
+cost minus export earnings over the whole simulation, plus battery energy missing at the end
+valued at the mean import price — so PV energy the EV uses counts at the export price it would
+otherwise have earned. A running session is never stopped to wait for a cheaper start.
+Without a deadline, starts are bounded by the published price horizon and sessions must end
+`ConsequenceMarginHours` (12 h) before the simulation end (their grid effects must be visible).
+
+**Ready-by deadline** (`time.pv_control_<load>_ready_by` + `switch.pv_control_<load>_enforce_ready_by`;
+MQTT time entities need HA ≥ 2026.5; PriorityPlus only; off unless the switch is on):
+only starts that finish by the next occurrence of that time are considered, and the deadline
+beats the price threshold — if none passes, the cheapest start that still finishes in time is
+taken (`DeadlineCheapest`), and if even now is too late, it starts now (`DeadlineNow`). A change
+bypasses the min-on latch like the other settings in `SessionStartSettings`.
 
 **Planned follow-up sessions** (`SessionPlanner.PlanFollowUpSessions`, PriorityPlus only): after the
 climb, if the current/next session doesn't reach the target level, the same price scan plans the

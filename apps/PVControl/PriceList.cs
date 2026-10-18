@@ -73,8 +73,25 @@ namespace NetDeamon.apps.PVControl
     // ── Point-in-time queries ────────────────────────────────────────────────────────────────
 
     /// <summary>Price at the given time (0 if no matching entry).</summary>
-    public float GetPrice(DateTime time) =>
-      _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time).Price;
+    public float GetPrice(DateTime time)
+    {
+      // The simulator calls this several times per slot for thousands of slots per planning
+      // cycle; index once by quarter-hour (first entry wins, like the scan), scan only on a miss.
+      _priceByQuarter ??= BuildQuarterIndex();
+      return _priceByQuarter.TryGetValue(time.RoundToNearestQuarterHour(), out var price)
+        ? price
+        : _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time).Price;
+    }
+
+    private Dictionary<DateTime, float>? _priceByQuarter;
+    private Dictionary<DateTime, float> BuildQuarterIndex()
+    {
+      var index = new Dictionary<DateTime, float>();
+      foreach (var p in NormalizeToQuarterHourly())
+        if (p.EndTime - p.StartTime == TimeSpan.FromMinutes(15) && p.StartTime == p.StartTime.RoundToNearestQuarterHour())
+          index.TryAdd(p.StartTime, p.Price);
+      return index;
+    }
 
     /// <summary>True if any entry today after <paramref name="now"/> has a negative price.</summary>
     public bool NegativeImportUpcoming(DateTime now) =>

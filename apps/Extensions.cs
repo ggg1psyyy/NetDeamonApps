@@ -404,32 +404,33 @@ namespace NetDeamon.apps
       }
       return list1.OrderBy(o => o.Key).ToDictionary();
     }
+    // The three helpers below run inside the simulator's per-slot loop (thousands of times per
+    // planning cycle), so they're single passes without allocation. "First" = first in the
+    // dictionary's enumeration order among entries with start <= key <= end (default = unbounded).
+    private static bool InRange(DateTime key, DateTime start, DateTime end) =>
+      (start == default || key >= start) && (end == default || key <= end);
+
     public static KeyValuePair<DateTime, int> FirstMinOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
     {
-      var tempList = list;
-      if (start != default)
-        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
-      if (end != default)
-        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
-      return tempList.Where(l => l.Value == tempList.Min(t => t.Value)).FirstOrDefault();
+      KeyValuePair<DateTime, int> best = default;
+      bool found = false;
+      foreach (var kv in list)
+        if (InRange(kv.Key, start, end) && (!found || kv.Value < best.Value)) { best = kv; found = true; }
+      return best;
     }
     public static KeyValuePair<DateTime, int> FirstMaxOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
     {
-      var tempList = list;
-      if (start != default)
-        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
-      if (end != default)
-        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
-      return tempList.Where(l => l.Value == tempList.Max(t => t.Value)).FirstOrDefault();
+      KeyValuePair<DateTime, int> best = default;
+      bool found = false;
+      foreach (var kv in list)
+        if (InRange(kv.Key, start, end) && (!found || kv.Value > best.Value)) { best = kv; found = true; }
+      return best;
     }
     public static KeyValuePair<DateTime, int> FirstUnderOrDefault(this Dictionary<DateTime, int> list, int underValue, DateTime start = default, DateTime end = default)
     {
-      var tempList = list;
-      if (start != default)
-        tempList = tempList.Where(l => l.Key >= start).ToDictionary();
-      if (end != default)
-        tempList = tempList.Where(l => l.Key <= end).ToDictionary();
-      return tempList.FirstOrDefault(l => l.Value <= underValue);
+      foreach (var kv in list)
+        if (InRange(kv.Key, start, end) && kv.Value <= underValue) return kv;
+      return default;
     }
     public static KeyValuePair<DateTime, int> GetEntryAtTime(this Dictionary<DateTime, int> list, DateTime time)
     {

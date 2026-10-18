@@ -170,6 +170,42 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
     => NewGridSlotsVs(baseline).All(t => _input.ImportPrices.Any(p =>
         p.StartTime <= t && p.EndTime > t && p.Price <= _input.ForceChargeMaxPrice));
 
+  /// <summary>
+  /// Extra grid cost (€) of this simulation vs <paramref name="baseline"/>: import cost minus
+  /// export earnings over the whole horizon, plus the battery energy this run leaves missing at
+  /// the end valued at the mean import price — it would have to be bought back (otherwise a plan
+  /// that just ends with an emptier battery would look cheaper). Lost export counts: battery
+  /// energy a load uses tonight is refilled by PV tomorrow that would otherwise be exported.
+  /// Slots without a published price use the mean of the published ones — 0 would make import
+  /// after the price horizon look free.
+  /// </summary>
+  public float NetGridCostVs(SimulationResult baseline)
+  {
+    float missingEndKwh = (baseline.Slots[^1].SoC - Slots[^1].SoC) * _input.BatteryCapacityWh / 100f / 1000f;
+    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * MeanPrice(_input.ImportPrices);
+  }
+
+  private float? _ownGridCost;
+  private float OwnGridCost => _ownGridCost ??= ComputeOwnGridCost();
+
+  private float ComputeOwnGridCost()
+  {
+    static Dictionary<DateTime, float> ByQuarter(PriceList quarterly)
+    {
+      var d = new Dictionary<DateTime, float>();
+      foreach (var p in quarterly) d.TryAdd(p.StartTime, p.Price);
+      return d;
+    }
+    var import = ByQuarter(_input.QuarterHourlyImportPrices);
+    var export = ByQuarter(_input.ExportPrices.NormalizeToQuarterHourly());
+    float meanImport = MeanPrice(_input.ImportPrices), meanExport = MeanPrice(_input.ExportPrices);
+    return Slots.Sum(s =>
+      s.GridImportWh / 1000f * import.GetValueOrDefault(s.Time, meanImport)
+      - s.GridExportWh / 1000f * export.GetValueOrDefault(s.Time, meanExport));
+  }
+
+  private static float MeanPrice(PriceList prices) => prices.Count > 0 ? prices.Average(p => p.Price) : 0f;
+
   // ── Helpers ────────────────────────────────────────────────────────────────────────────
   private static DateTime? PvEdge(
     Dictionary<DateTime, int> pv,

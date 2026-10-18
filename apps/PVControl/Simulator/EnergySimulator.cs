@@ -62,7 +62,7 @@ public static class EnergySimulator
       // Energy values for this slot (Wh per 15-min period)
       int pvWh = input.PVPredictionWh.GetValueOrDefault(slotTime, 0);
       int loadWh = input.LoadPredictionWh.GetValueOrDefault(slotTime, 0);
-      int extraLoadWh = input.ExtraLoads.Sum(e => e.GetWhForSlot(slotTime));
+      int extraLoadWh = input.ExtraLoadWh(slotTime);
       int totalLoadWh = loadWh + extraLoadWh;
 
       // --- Step 1: base look-ahead SoC (no charging) for this slot onward ---
@@ -157,7 +157,7 @@ public static class EnergySimulator
     {
       int pv = input.PVPredictionWh.GetValueOrDefault(t, 0);
       int load = input.LoadPredictionWh.GetValueOrDefault(t, 0);
-      int extra = input.ExtraLoads.Sum(e => e.GetWhForSlot(t));
+      int extra = input.ExtraLoadWh(t);
       // Store SoC at the START of the slot (before applying energy) so the base look-ahead
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
       // % can go negative here when clampAtZero is false — that's intentional, see call site.
@@ -425,7 +425,7 @@ public static class EnergySimulator
 
       // Counting entries as quarters requires quarter-hourly entries; live prices already are
       // (PriceManager normalizes them), but SimulationInput also accepts hourly lists.
-      var upcoming = input.ImportPrices.NormalizeToQuarterHourly().Where(p => p.EndTime > now).ToList();
+      var upcoming = input.QuarterHourlyImportPrices.Where(p => p.EndTime > now).ToList();
       var window = need.LatestChargeTime <= pvTakeover
         // Battery will hit minimum before today's PV recovery → must charge before solar arrives.
         ? upcoming.Where(p => p.StartTime < pvTakeover).ToList()
@@ -435,22 +435,38 @@ public static class EnergySimulator
       if (window.Count == 0)
         window = upcoming.Where(p => p.StartTime <= need.LatestChargeTime).ToList(); // safety fallback
 
-      int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
-      int maxChargeWh = Math.Max(1, input.MaxChargePowerAmps * ChargeVoltage / 4);
-      int neededWh = Math.Max(0, targetSoc - simulatedSoc) * input.BatteryCapacityWh / 100;
-      int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
-
       // Always charge in the single cheapest quarter (re-picked every slot, so the charge runs
       // forward from it while it stays the cheapest). On top of that, charge in the N cheapest
-      // quarters that are under ForceChargeMaxPrice — but only those: an over-threshold
-      // quarter ahead of the cheapest one isn't worth it, since holding the floor with
-      // grid_only buys the load at that same price anyway without filling the battery before
-      // the cheap quarter. Price ties go to the earlier quarter. Exact boundary comparison:
-      // simulation slots are always on quarter-hour boundaries.
-      bool IsNow(PriceTableEntry p) => now >= p.StartTime && now < p.EndTime;
-      var cheapest = window.OrderBy(p => p.Price).ThenBy(p => p.StartTime).ToList();
-      bool inWindow = (cheapest.Count > 0 && IsNow(cheapest[0]))
-        || cheapest.Where(p => p.Price <= input.ForceChargeMaxPrice).Take(quartersNeeded).Any(IsNow);
+      // quarters that are under ForceChargeMaxPrice, N = quarters needed for the deficit — but
+      // only those: an over-threshold quarter ahead of the cheapest one isn't worth it, since
+      // holding the floor with grid_only buys the load at that same price anyway without
+      // filling the battery before the cheap quarter. Price ties go to the earlier quarter.
+      // Exact boundary comparison: simulation slots are always on quarter-hour boundaries.
+      // Runs every slot of every simulation, so it ranks `now` in one pass instead of sorting.
+      bool inWindow = false;
+      int nowIndex = window.FindIndex(p => now >= p.StartTime && now < p.EndTime);
+      if (nowIndex >= 0)
+      {
+        var nowEntry = window[nowIndex];
+        bool CheaperThanNow(PriceTableEntry p, int i) => p.Price < nowEntry.Price || (p.Price == nowEntry.Price && i < nowIndex);
+        int cheaperCount = 0, cheaperUnderMax = 0;
+        for (int i = 0; i < window.Count; i++)
+          if (CheaperThanNow(window[i], i))
+          {
+            cheaperCount++;
+            if (window[i].Price <= input.ForceChargeMaxPrice) cheaperUnderMax++;
+          }
+
+        inWindow = cheaperCount == 0;
+        if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
+        {
+          int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
+          int maxChargeWh = Math.Max(1, input.MaxChargePowerAmps * ChargeVoltage / 4);
+          int neededWh = Math.Max(0, targetSoc - simulatedSoc) * input.BatteryCapacityWh / 100;
+          int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
+          inWindow = cheaperUnderMax < quartersNeeded;
+        }
+      }
       // Don't start over 96 % (too slow); allow up to 98 % once already charging
       bool socOk = currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
 

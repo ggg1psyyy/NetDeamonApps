@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl.Simulator;
 using NetDaemon.HassModel.Entities;
@@ -17,7 +18,7 @@ namespace NetDeamon.apps.PVControl.Managers
   /// </summary>
   public readonly record struct SessionStartSettings(
     int PreferredMinSocPercent, int AbsoluteMinSocPercent, bool EnforcePreferredSoc,
-    float ForceChargeMaxPrice, float TargetLevel);
+    float ForceChargeMaxPrice, float TargetLevel, TimeOnly? ReadyBy);
 
   /// <summary>
   /// Runtime state of a schedulable extra load (EV charger, warm-water heat pump, etc.).
@@ -74,6 +75,29 @@ namespace NetDeamon.apps.PVControl.Managers
         if (TargetLevelEntity is not null && TargetLevelEntity.TryGetStateValue(out float v)) return v;
         return Config.TargetLevelDefault;
       }
+    }
+
+    /// <summary>"Ready by" time-of-day entity (HA MQTT time). Always auto-created in HA.</summary>
+    public Entity? ReadyByEntity { get; set; }
+
+    /// <summary>Switch that turns the ready-by deadline on. Always auto-created in HA.</summary>
+    public Entity? EnforceReadyByEntity { get; set; }
+
+    /// <summary>Ready-by time of day, or null when not enforced / not a valid time.</summary>
+    public TimeOnly? ReadyByTime =>
+      ReadyByEntity is not null && EnforceReadyByEntity is not null
+      && EnforceReadyByEntity.TryGetStateValue(out bool enforced) && enforced
+      && TryParseReadyBy(ReadyByEntity.State, out var t) ? t : null;
+
+    /// <summary>Parses "H:mm", "HH:mm", "H:mm:ss" or "HH:mm:ss" (HA's time format).</summary>
+    public static bool TryParseReadyBy(string? text, out TimeOnly time) =>
+      TimeOnly.TryParseExact(text?.Trim(), ["H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
+
+    /// <summary>The next moment after <paramref name="now"/> the clock shows <paramref name="time"/>.</summary>
+    public static DateTime NextOccurrence(TimeOnly time, DateTime now)
+    {
+      var today = now.Date + time.ToTimeSpan();
+      return today > now ? today : today.AddDays(1);
     }
 
     /// <summary>Current level read from the HA sensor entity (SoC %, temperature °C, …).</summary>

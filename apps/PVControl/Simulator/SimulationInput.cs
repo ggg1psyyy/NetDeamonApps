@@ -64,6 +64,24 @@ public class SimulationInput
   /// </summary>
   public required PriceList ImportPrices { get; init; }
 
+  private Dictionary<DateTime, int>? _extraLoadWhBySlot;
+  /// <summary>Total ExtraLoads energy (Wh) in the 15-min slot starting at <paramref name="slotStart"/>, computed once per input.</summary>
+  internal int ExtraLoadWh(DateTime slotStart) =>
+    (_extraLoadWhBySlot ??= BuildExtraLoadWhBySlot()).GetValueOrDefault(slotStart);
+
+  private Dictionary<DateTime, int> BuildExtraLoadWhBySlot()
+  {
+    var bySlot = new Dictionary<DateTime, int>();
+    foreach (var e in ExtraLoads)
+      for (var t = e.StartTime.RoundToNearestQuarterHour(); t < e.EndTime; t = t.AddMinutes(15))
+        bySlot[t] = bySlot.GetValueOrDefault(t) + e.GetWhForSlot(t);
+    return bySlot;
+  }
+
+  private PriceList? _quarterHourlyImportPrices;
+  /// <summary>ImportPrices as quarter-hour entries, computed once per input (the simulator needs them every slot).</summary>
+  internal PriceList QuarterHourlyImportPrices => _quarterHourlyImportPrices ??= ImportPrices.NormalizeToQuarterHourly();
+
   /// <summary>
   /// Hourly export/feed-in price table, in ct/kWh.
   /// Either the resolved import netto prices (scaled), an independent variable price series,
