@@ -1,6 +1,6 @@
 # NetDeamonApps
 
-NetDaemon4 home automation apps for Home Assistant, written in C# (.NET 9.0).
+NetDaemon4 home automation apps for Home Assistant, written in C# (.NET 10.0).
 
 > Developed with assistance from [Claude Code](https://claude.ai/code) (Anthropic) — used throughout for architecture decisions, bug diagnosis, code generation, and test authoring.
 
@@ -11,16 +11,19 @@ NetDaemon4 home automation apps for Home Assistant, written in C# (.NET 9.0).
 ### PVControl
 Optimizes battery usage and grid import costs using dynamic EPEX Spot pricing, PV forecasts (OpenMeteo), and historical load data.
 
-The app runs a forward simulation every 15 minutes to predict battery SoC over the next 48 hours and decides the optimal inverter mode. All decisions are derived from this simulation — no separate heuristics.
+Every 15 seconds the app runs a forward simulation in 15-minute slots (now → end of tomorrow) to predict battery SoC and decide the inverter mode. All decisions are derived from this simulation — no separate heuristics.
 
 **How it works:**
 - Forecasts house load from historical SQLite data (weighted average)
-- Fetches PV forecast from OpenMeteo HA entities
+- Fetches PV forecast from OpenMeteo HA entities, corrected by the live PV running average
 - Runs a slot-by-slot simulation (`EnergySimulator`) to find when the battery will drop below the minimum SoC
-- If grid charging is needed, schedules it at the cheapest available price window before PV takes over
+- If grid charging is needed, charges just enough to clear the coming trough, in the cheapest quarter-hour plus the cheapest quarters under the max force-charge price — so a larger need moves earlier into a cheap band instead of spilling into expensive slots after it
 - Optionally discharges to the grid opportunistically during high-price periods
+- Schedules extra loads such as an EV charger (see [Schedulable loads](#schedulable-loads))
 
 PVControl itself only sets entity states — you use HA automations to act on them.
+
+Design details live in [`apps/PVControl/ARCHITECTURE.md`](apps/PVControl/ARCHITECTURE.md).
 
 #### Main entity for automations
 
@@ -31,8 +34,8 @@ PVControl itself only sets entity states — you use HA automations to act on th
 | `automatic` | Default/transitional state |
 | `normal` | Normal self-consumption operation |
 | `force_charge` | Charge battery from grid — scheduled cheap window |
-| `force_charge_grid_only` | Grid-charging with battery also powering house |
-| `grid_only` | Grid powers house; battery discharge disabled (e.g. negative import price) |
+| `force_charge_grid_only` | Negative import price: PV disconnected, grid charges the battery and powers the house |
+| `grid_only` | Grid powers the house, battery idle — holds the battery at its minimum until the scheduled charge window |
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
 | `reset` | Transient reset state |
@@ -52,7 +55,7 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | `switch.pv_control_force_charge_at_cheapest_period` | Always charge at cheapest daily window, even if not strictly needed |
 | `switch.pv_control_enable_opportunistic_export` | Enable opportunistic discharge to grid during high-price periods |
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%) |
-| `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge |
+| `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge; also the "cheap grid" threshold for PriorityPlus loads |
 | `number.pv_control_forcecharge_target_soc` | Target SoC (%) when force-charging at cheapest period |
 
 #### Status entities
@@ -69,10 +72,10 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 
 | Entity | Description |
 |---|---|
-| `sensor.pv_control_current_import_price_brutto` | Current gross import price (ct/kWh) incl. taxes, network, markup |
-| `sensor.pv_control_current_export_price_brutto` | Current gross export/feed-in price (ct/kWh) |
-| `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (ct/kWh) |
-| `sensor.pv_control_best_export_price_today` | Highest export price slot today (ct/kWh) |
+| `sensor.pv_control_current_import_price_brutto` | Current gross import price (€/kWh) incl. taxes, network, markup; `data` attribute holds the full price list |
+| `sensor.pv_control_current_export_price_brutto` | Current gross export/feed-in price (€/kWh); `data` attribute holds the full price list |
+| `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (€/kWh) |
+| `sensor.pv_control_best_export_price_today` | Highest export price slot today (€/kWh) |
 
 #### Cost tracking entities
 
@@ -90,7 +93,7 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | Entity | Description |
 |---|---|
 | `sensor.pv_control_battery_remainingenergy` | Estimated remaining usable battery energy (Wh) |
-| `sensor.pv_control_battery_remainingtime` | Estimated time until battery depleted at current discharge rate |
+| `sensor.pv_control_battery_remainingtime` | Estimated minutes until the battery is full or depleted at the current rate |
 | `sensor.pv_control_info_predicted_soc` | Full 48-h SoC timeline (JSON attribute, used for Plotly chart) |
 | `sensor.pv_control_info_soc_snapshot` | Point-in-time SoC snapshot used for dashboard display |
 | `sensor.pv_control_info_max_soc_today` | Predicted peak SoC today (%) |
@@ -110,11 +113,59 @@ For each load defined in YAML (e.g. `"EV Charger"` → slug `ev_charger`):
 
 | Entity | Description |
 |---|---|
-| `select.pv_control_<slug>_mode` | Scheduling mode: `Off` / `Optimal` / `Priority` / `PriorityPlus` / `Emergency` |
-| `number.pv_control_<slug>_target_level` | Target level (%, °C, …) to charge/heat to |
-| `binary_sensor.pv_control_<slug>_charge_now` | Whether to run this load right now |
-| `sensor.pv_control_<slug>_total_energy` | Cumulative energy consumed by this load (kWh) |
-| `sensor.pv_control_<slug>_total_cost` | Cumulative cost for this load (€) |
+| `select.pv_control_<slug>_mode` | Scheduling mode: `Off` / `Emergency` / `Optimal` / `Priority` / `PriorityPlus` (only if `Mode` isn't set in YAML) |
+| `number.pv_control_<slug>_target_level` | Target level (%, °C, …) to charge/heat to (only if `TargetLevel` isn't set in YAML) |
+| `time.pv_control_<slug>_ready_by` | "Ready by" time of day (needs HA ≥ 2026.5 for MQTT time entities) |
+| `switch.pv_control_<slug>_enforce_ready_by` | Enables the ready-by deadline (off by default) |
+| `number.pv_control_<slug>_energy_per_level` | Energy per level unit (kWh/% …) at the meter, charger losses included — learned, editable |
+| `number.pv_control_<slug>_charge_power` | Typical power while running (W) — learned, editable |
+| `binary_sensor.pv_control_<slug>_charge_now` | Whether to run this load right now — the entity your automation acts on |
+| `sensor.pv_control_<slug>_total_energy` | Cumulative energy consumed by this load (kWh; needs `ActualEnergyEntity`) |
+| `sensor.pv_control_<slug>_total_cost` | Cumulative cost for this load (€; needs `ActualEnergyEntity`) |
+
+Attributes of `charge_now`: `reason`, `mode`, `target_level`, `current_level`, `power_avg_w`, `net_pv_w`, `charge_start_predicted`, `charge_end_predicted`, `charge_end_predicted_soc`, `planned_sessions` (current/next session plus planned follow-ups), `charge_timeline`, `ready_by`, `energy_per_level_kwh`, `learned_power_w`, `last_plan`, `last_plan_reason`.
+
+#### Schedulable loads
+
+Extra loads (EV charger now, heat pump later) are scheduled by simulating them as an extra load in the house simulation and checking the result.
+
+**Modes** form a ladder — each mode runs its own ruleset plus all lower ones, bottom up, and the first one that allows charging wins:
+
+| Mode | Behaviour |
+|---|---|
+| `Off` | Never runs |
+| `Emergency` | Always runs now, no simulation |
+| `Optimal` (10) | Only on PV surplus: the house battery must still reach ~100 % today, hold its overnight minimum, and no grid is needed |
+| `Priority` (20) | May draw the house battery down to its minimum, but never causes grid use. Evening/night sessions start as late as possible before sunrise; a running session stops at dusk |
+| `PriorityPlus` (30) | Like Priority, plus grid use when it's cheap (day or night) |
+
+The house battery minimum follows `switch.pv_control_enforce_preferred_soc` in every mode (preferred minimum when on, absolute minimum when off). Grid use is compared by energy: any 15-min slot where the load adds grid import counts, at that slot's price — including the grid covering the house while the battery is held at its minimum.
+
+**PriorityPlus price rule:** every 15-min start is simulated; a start passes when the load adds no grid import, or only at or below `number.pv_control_max_price_for_forcecharge`. Of the passing starts, the earliest wins unless a later one is at least 1 % cheaper overall (extra import cost minus lost export earnings — battery energy the load uses tonight is refilled by tomorrow's PV that would otherwise be exported). A planned later start sticks while it stays cheaper than starting now, so forecast noise can't flip it; a running session is never stopped to wait for a cheaper start. Follow-up sessions up to the target are planned as a preview (`planned_sessions`).
+
+**Ready-by deadline** (PriorityPlus only, when enforced): only starts that finish by the next occurrence of the ready-by time count, and the deadline beats the price threshold — if no start passes, the cheapest one that still finishes in time is taken; if even now is too late, it starts now.
+
+**Latches** against on/off cycling: once started, a session runs at least `MinWindowMinutes`; once stopped, it restarts no earlier than `MinOffMinutes` later (stops themselves are never delayed). Both are bypassed by a mode change or a change of the settings the decision depends on (minimum SoC, enforce switch, price threshold, target, ready-by); the off-latch also by an availability change.
+
+**Replanning:** the house simulation and inverter mode update every 15 s, but a load's schedule search (the expensive part) only runs every `ReplanIntervalMinutes` or on a trigger — any setting change, availability change, new prices, a new quarter-hour, house battery SoC or the load's level changing, the load starting/stopping, the house load staying > 500 W and > 30 % off its forecast for 5 min, or a latch ending.
+
+**Learning:** while the load draws power, `energy_per_level` is learned from the energy meter between whole level steps (at least 3 levels within one session, weighted against the stored value as if it had been measured over 20 levels), and `charge_power` follows the measured power (10-min average, only after 2 min of continuous draw). Both survive restarts and can be set by hand, e.g. after installing a new wallbox.
+
+**YAML configuration** (`PVControl.yaml` → `SchedulableLoads`):
+
+| Key | Meaning |
+|---|---|
+| `Name`, `Priority` | Display name (→ entity slug) and priority (higher is planned first) |
+| `Mode`, `TargetLevel` | Fixed mode / target; omit to get the HA select / number entity |
+| `CurrentLevelEntity` | Sensor with the current level (EV SoC %, water temperature, …) |
+| `ActualPowerEntity`, `ActualEnergyEntity` | Measured power (W) and energy counter (kWh) of the load — used for learning and cost tracking |
+| `MinActivePowerW` | Power above which the load counts as running |
+| `AvailabilityEntity` | Optional: only plan while this is on (e.g. car at home) |
+| `HistoryDbColumn` | DataLogger column with this load's history, subtracted from the house load forecast |
+| `EnergyPerLevelUnitKwh`, `AvgPowerW` | Starting values for the learned energy per level and charge power |
+| `MinWindowMinutes`, `MinOffMinutes` | Minimum on-time (also the shortest window worth starting) and minimum off-time |
+| `ReplanIntervalMinutes` | Max minutes between schedule searches (default 5) |
+| `Icon`, `ChargeNowDeviceClass`, `LevelUnit`, `TargetLevelMin/Max/Step/Default` | Display settings of the auto-created entities |
 
 ---
 
@@ -153,13 +204,21 @@ dotnet test NetDeamonApps.Tests/
 | `PredictionContainerTests` | 192-slot 15-min window validation (`DataOK`) |
 | `MidnightRolloverTests` | Load data staleness detection after midnight |
 | `SimulatorTests` | End-to-end `EnergySimulator.Simulate()` with injectable `SimulationInput` |
-| `LoadSchedulingDecisionTests` | Schmitt-trigger start/keep semantics for schedulable load decisions |
-| `RunningAvgCorrectionTests` | PV running-average correction: day-scale ratio + 4-slot near-term ramp |
+| `FindWindowConditionTests` | Simulation conditions behind the load scheduling rules (PV surplus, overnight minimum, new/cheap grid, grid charge sized into the cheap band) |
+| `SessionPlannerTests` | PriorityPlus price scan: cheapest vs earliest start, minimum saving, sticky plan, ready-by deadline, follow-up sessions, net grid cost |
+| `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
+| `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
+| `LevelEnergyLearnerTests` | Learning energy per level and charge power |
+| `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
+| `PriceListTests` | Hourly/quarter-hourly price normalization and hourly billing averages |
+| `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
+| `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
+| `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 
 ---
 
 ## Development notes
 
-- All dynamic HA entities (sensors, selects, numbers) are registered via MQTT (`IMqttEntityManager`), not static YAML
+- All dynamic HA entities (sensors, selects, numbers, switches, times) are registered via MQTT (`IMqttEntityManager`), not static YAML
 - App-specific configuration (entity IDs, thresholds) lives in each app's `.yaml` file
 - `PVControlCommon` is a static singleton that holds shared dependencies; initialized once in the constructor

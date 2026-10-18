@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 NetDaemon4 home automation apps written in C# (.NET 10.0) for Home Assistant. Three apps:
-- **PVControl** — Solar/battery optimization with dynamic EPEX Spot pricing, load forecasting, and heatpump scheduling
+- **PVControl** — Solar/battery optimization with dynamic EPEX Spot pricing, load forecasting, and scheduling of extra loads (EV charger; heat pump planned)
 - **DataLogger** — Logs energy sensor history to SQLite for ML training
 - **MidiControl** — BCF2000 MIDI controller integration (side project, low priority)
 
@@ -29,7 +29,13 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 `NetDeamonApps.Tests` (xUnit) covers pure-logic components that don't need HA:
 - **`PredictionContainerTests`** — validates the 192-slot 15-min window check (`DataOK`)
 - **`MidnightRolloverTests`** — demonstrates the midnight load-staleness bug and its fix (`TodayAndTomorrow.First()` vs `Today.First()`)
-- **`SimulatorTests`** — end-to-end `PVSimulator.Simulate()` tests using injectable `SimulationInput` (no HA needed)
+- **`SimulatorTests`** — end-to-end `EnergySimulator.Simulate()` tests using injectable `SimulationInput` (no HA needed)
+- **`FindWindowConditionTests`** — simulation conditions behind the load scheduling rules (`FindLoadWindow` itself is private and reads live HA state, so its predicates are tested here)
+- **`SessionPlannerTests`** — PriorityPlus price scan (cheapest/earliest start, min saving, sticky plan, ready-by deadline, follow-ups, net grid cost)
+- **`LoadSchedulingDecisionTests`** — Priority/PriorityPlus live SoC gate with restart hysteresis
+- **`ReplanPolicyTests`** — when a load's schedule search reruns, house-load deviation trigger, min-off latch
+- **`LevelEnergyLearnerTests`** — learning energy per level unit and charge power
+- **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion
 
 `TestBase` initialises `PVControlCommon.PVCC_Logger` via reflection (private setter) so PVControl code can log without throwing.
 
@@ -46,16 +52,18 @@ Each app consists of:
 
 ### PVControl Architecture
 - **`PVControlCommon.cs`** — Static singleton holding shared dependencies (`IHaContext`, `IMqttEntityManager`, `ILogger`, `IAppConfig<PVConfig>`, scheduler). Initialize once in constructor.
-- **`HouseEnergy.cs`** — Core energy model: running averages, four prediction instances, cost tracking, charging decisions
-- **`PVControl.cs`** — Registers 30+ MQTT entities in HA, subscribes to sensor state changes, runs logic every 15 minutes via cron
+- **`HouseEnergy.cs`** — Core energy model: running averages, four prediction instances, cost tracking, `RunSimulation`, and `FindLoadWindow` (schedulable load decisions: numbered mode ladder Optimal 10 → Priority 20 → PriorityPlus 30)
+- **`PVControl.cs`** — Registers the MQTT entities in HA, subscribes to sensor and command changes, runs the cycle every 15 seconds via cron (load schedule searches only when due, see `ReplanPolicy`)
+- **`Simulator/`** — `EnergySimulator` (pure 15-min slot simulation, now → end of tomorrow), `SimulationInput`/`SimulationResult` (incl. `HasNewGridVs`/`IsGridCheapVs`/`NetGridCostVs`), `SessionPlanner` (PriorityPlus price scan and follow-up sessions), `LoadSchedulingDecision`
 - **`Predictions/`** — Abstract `Prediction` base with `PredictionContainer` (validates 15-min interval data over 48h). Concrete: load (historical SQLite), PV (OpenMeteo API entities), NetEnergy (PV−Load), BatterySoC (simulation)
 - **`Db/`** — LinqToDB ORM over SQLite for cost and history tables
-- **`Managers/`** — `ILoadManager` interface for schedulable loads; `HeatpumpManager` handles warm-water timing
+- **`Managers/`** — `SchedulableLoadConfig` (YAML) / `SchedulableLoadRuntime` (live state) per extra load, `ReplanPolicy`, `LevelEnergyLearner`/`ChargePowerLearner`
+- **`ARCHITECTURE.md`** — detailed design notes for PVControl; keep it updated with behaviour changes
 
 ### Key Patterns
-- **MQTT Entity Registration**: All dynamic HA sensors/selects/numbers are created via `IMqttEntityManager`, not static YAML — see `PVControlCommon.RegisterSensor()`
+- **MQTT Entity Registration**: All dynamic HA sensors/selects/numbers/switches/times are created via `IMqttEntityManager`, not static YAML — see `PVControlCommon.RegisterSensor()`
 - **Reactive Extensions**: State subscriptions use Rx.LINQ with throttling; cron jobs via `INetDaemonScheduler`
-- **Extensions.cs**: Central utility library — `GetEntityHistoryAsync()`, `GetUnitMultiplicator()`, enums for `InverterModes`, `BatteryStatuses`, `RunHeavyLoadsStatus`, `ForceChargeReasons`
+- **Extensions.cs**: Central utility library — `GetEntityHistoryAsync()`, `GetUnitMultiplicator()`, `TryGetStateValue()`, enums for `InverterModes`, `BatteryStatuses`, `ForceChargeReasons`, `LoadSchedulingMode`
 
 ### Configuration
 `appsettings.json` holds HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.
