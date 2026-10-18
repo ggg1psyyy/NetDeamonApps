@@ -56,4 +56,38 @@ namespace NetDeamon.apps.PVControl.Managers
     public static float Blend(float stored, float measuredKwh, float levelDelta) =>
       (stored * PriorWeightLevels + measuredKwh) / (PriorWeightLevels + levelDelta);
   }
+
+  /// <summary>
+  /// Learns a load's typical power while it actually runs: only instantaneous readings above the
+  /// active threshold count, and only after it has drawn continuously for <see cref="WarmUp"/>
+  /// (skips ramp-up and short stops). Exponential moving average with time constant
+  /// <see cref="TauSeconds"/>, so it doesn't depend on how often the sensor reports. Kept as a
+  /// double: rounding each 4-second step to whole watts would freeze it ~75 W short.
+  /// </summary>
+  public sealed class ChargePowerLearner
+  {
+    public static readonly TimeSpan WarmUp = TimeSpan.FromMinutes(2);
+    public const double TauSeconds = 600;
+
+    private DateTime? _drawingSince;
+    private DateTime? _last;
+
+    /// <summary>Returns the updated typical power, or null when this reading doesn't count.</summary>
+    public double? Observe(DateTime now, double measuredW, int minActiveW, double stored)
+    {
+      if (measuredW <= minActiveW)
+      {
+        _drawingSince = null;
+        _last = null;
+        return null;
+      }
+      _drawingSince ??= now;
+      if (now - _drawingSince.Value < WarmUp) return null;
+
+      var last = _last;
+      _last = now;
+      if (last is null) return null;
+      return stored + (measuredW - stored) * (1 - Math.Exp(-(now - last.Value).TotalSeconds / TauSeconds));
+    }
+  }
 }

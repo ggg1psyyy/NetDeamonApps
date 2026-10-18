@@ -162,25 +162,22 @@ namespace NetDeamon.apps.PVControl
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
       .Sum(l => l.PowerAverage!.GetAverage());
 
-    /// <summary>Updates the load's learned typical power while it draws; persisted when it moves ≥ 10 W.</summary>
-    private static async Task LearnPowerAsync(SchedulableLoadRuntime load)
+    /// <summary>
+    /// Updates the load's learned typical power from an instantaneous reading (see
+    /// ChargePowerLearner); persisted when the rounded value moves by 10 W. Also ends the
+    /// energy-per-level measurement once the load has stopped.
+    /// </summary>
+    private static async Task LearnPowerAsync(SchedulableLoadRuntime load, float measuredW)
     {
-      var now = DateTime.Now;
       if (!load.IsDrawingPower)
-      {
-        load.LastPowerLearnTime = null;
         load.EnergyLearner.Reset();
+
+      if (load.PowerLearner.Observe(DateTime.Now, measuredW, load.Config.MinActivePowerW, load.LearnedPower) is not { } learned)
         return;
-      }
-      if (load.LastPowerLearnTime is { } last)
-      {
-        int learned = SchedulableLoadRuntime.LearnPower(load.LearnedPowerW, load.PowerAverage!.GetAverage(), (now - last).TotalSeconds);
-        bool persist = Math.Abs(learned / 10 - load.LearnedPowerW / 10) > 0;
-        load.LearnedPowerW = learned;
-        if (persist && load.ChargePowerEntity is not null)
-          await PVCC_EntityManager.SetStateAsync(load.ChargePowerEntity.EntityId, learned.ToString(CultureInfo.InvariantCulture));
-      }
-      load.LastPowerLearnTime = now;
+      int before = load.LearnedPowerW;
+      load.LearnedPower = learned;
+      if (load.LearnedPowerW / 10 != before / 10 && load.ChargePowerEntity is not null)
+        await PVCC_EntityManager.SetStateAsync(load.ChargePowerEntity.EntityId, load.LearnedPowerW.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>Updates the load's learned energy per level unit from the energy counter and level sensor.</summary>
@@ -241,8 +238,10 @@ namespace NetDeamon.apps.PVControl
         && entity.EntityId == l.Config.ActualPowerEntity!.EntityId))
       {
         if (schedLoad.Config.ActualPowerEntity!.TryGetStateValue(out float p))
+        {
           schedLoad.PowerAverage!.AddValue((int)Math.Round(p));
-        await LearnPowerAsync(schedLoad);
+          await LearnPowerAsync(schedLoad, p);
+        }
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualEnergyEntity is not null
         && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId))

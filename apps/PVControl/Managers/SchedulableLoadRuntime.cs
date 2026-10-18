@@ -125,19 +125,11 @@ namespace NetDeamon.apps.PVControl.Managers
     public float EnergyPerLevelKwh { get; set; }
 
     /// <summary>Typical measured power while running (W). Starts at Config.AvgPowerW; learned while running.</summary>
-    public int LearnedPowerW { get; set; }
+    public double LearnedPower { get; set; }
+    public int LearnedPowerW => (int)Math.Round(LearnedPower);
 
     public LevelEnergyLearner EnergyLearner { get; } = new();
-
-    /// <summary>When LearnedPowerW was last updated from a measurement (for its time-based average).</summary>
-    public DateTime? LastPowerLearnTime { get; set; }
-
-    /// <summary>
-    /// Exponential moving average with time constant <paramref name="tauSeconds"/>: independent of
-    /// how often the power sensor reports.
-    /// </summary>
-    public static int LearnPower(int stored, int measured, double secondsSinceLast, double tauSeconds = 600) =>
-      (int)Math.Round(stored + (measured - stored) * (1 - Math.Exp(-Math.Max(0, secondsSinceLast) / tauSeconds)));
+    public ChargePowerLearner PowerLearner { get; } = new();
 
     /// <summary>
     /// Effective power draw in W: running average of actual power if above MinActivePowerW,
@@ -229,7 +221,7 @@ namespace NetDeamon.apps.PVControl.Managers
     {
       Config = config;
       EnergyPerLevelKwh = config.EnergyPerLevelUnitKwh;
-      LearnedPowerW = config.AvgPowerW;
+      LearnedPower = config.AvgPowerW;
     }
 
     /// <summary>HA entity-ID slug: lowercase Name with spaces replaced by underscores.</summary>

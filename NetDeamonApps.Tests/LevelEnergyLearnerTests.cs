@@ -1,4 +1,7 @@
 using NetDeamon.apps.PVControl.Managers;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace NetDeamonApps.Tests;
@@ -76,12 +79,49 @@ public class LevelEnergyLearnerTests
     Assert.Null(l.Observe(23, 3f, 0.6f)); // new run: this is only its first observation
   }
 
-  [Theory]
-  [InlineData(1800, 2100, 0, 1800)]     // no time passed → unchanged
-  [InlineData(1800, 2100, 600, 1990)]   // one time constant → ~63 % of the way
-  [InlineData(1800, 2100, 6000, 2100)]  // long gap → measured value
-  public void LearnPower_TimeBasedAverage(int stored, int measured, double seconds, int expected)
+  // ── ChargePowerLearner ─────────────────────────────────────────────────────────────────
+
+  static readonly DateTime T0 = new(2026, 10, 18, 18, 0, 0);
+
+  /// <summary>Feeds readings every <paramref name="stepSeconds"/> like the CT clamp and returns the learned value.</summary>
+  static double Run(ChargePowerLearner l, double stored, IEnumerable<double> readings, DateTime start, int stepSeconds = 4)
   {
-    Assert.InRange(SchedulableLoadRuntime.LearnPower(stored, measured, seconds), expected - 1, expected + 1);
+    var t = start;
+    foreach (var w in readings)
+    {
+      if (l.Observe(t, w, 500, stored) is { } v) stored = v;
+      t = t.AddSeconds(stepSeconds);
+    }
+    return stored;
+  }
+
+  [Fact]
+  public void Power_ConvergesToMeasured_DespiteTinySteps()
+  {
+    // 1 h of 1845 W readings every 4 s: each step moves < 1 W. The old int-rounded average froze
+    // ~75 W short (live: stuck at ~1820 while the CT showed ~1845).
+    var learned = Run(new ChargePowerLearner(), 1800, Enumerable.Repeat(1845.0, 900), T0);
+    Assert.InRange(learned, 1840, 1845);
+  }
+
+  [Fact]
+  public void Power_IgnoresWarmUpAndStops()
+  {
+    var l = new ChargePowerLearner();
+    // Ramp-up readings in the first 2 minutes and a stop (0 W) don't count.
+    var readings = new[] { 79.0, 1514, 1662, 1720 }
+      .Concat(Enumerable.Repeat(1850.0, 10))   // still within warm-up (14 readings · 4 s < 2 min)
+      .Concat(new[] { 0.0, 0.0 });              // stop
+    Assert.Equal(1800, Run(l, 1800, readings, T0));
+  }
+
+  [Fact]
+  public void Power_AfterStop_NeedsWarmUpAgain()
+  {
+    var l = new ChargePowerLearner();
+    var learned = Run(l, 1800, Enumerable.Repeat(1850.0, 60), T0);           // 4 min: learns a bit
+    Assert.True(learned > 1800);
+    var afterStop = Run(l, learned, new[] { 0.0 }.Concat(Enumerable.Repeat(900.0, 20)), T0.AddMinutes(5)); // 80 s after restart
+    Assert.Equal(learned, afterStop);
   }
 }

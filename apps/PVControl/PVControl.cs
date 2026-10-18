@@ -346,7 +346,7 @@ namespace NetDeamon.apps.PVControl
         if (load.ChargePowerEntity is not null && entity.EntityId == load.ChargePowerEntity.EntityId
             && float.TryParse(newState, NumberStyles.Any, CultureInfo.InvariantCulture, out float power) && power > 0)
         {
-          load.LearnedPowerW = (int)Math.Round(power);
+          load.LearnedPower = Math.Round(power);
           await PVCC_EntityManager.SetStateAsync(entity.EntityId, load.LearnedPowerW.ToString(CultureInfo.InvariantCulture));
         }
         if (load.EnforceReadyByEntity is not null && entity.EntityId == load.EnforceReadyByEntity.EntityId)
@@ -1173,7 +1173,7 @@ namespace NetDeamon.apps.PVControl
           defaultValue: load.Config.AvgPowerW.ToString(CultureInfo.InvariantCulture),
           reRegister: reset);
         if (load.ChargePowerEntity.TryGetStateValue(out int savedPower, numericalGetBaseValue: false) && savedPower > 0)
-          load.LearnedPowerW = savedPower;
+          load.LearnedPower = savedPower;
       }
 
       return true;
