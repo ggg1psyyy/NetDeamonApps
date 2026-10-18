@@ -94,7 +94,8 @@ namespace PVControl
     private readonly DataLoggerConfig _config;
     private readonly IScheduler _scheduler;
     private CancellationToken _cancelToken;
-    private readonly List<String> _resetDailyEntities;
+    // A catch-up run can outlast the 15-min cron; overlapping runs inserted every hour twice.
+    private readonly SemaphoreSlim _runLock = new(1, 1);
 
     public DataLogger(IHomeAssistantApiManager apiManager, ILogger<DataLogger> logger, IAppConfig<DataLoggerConfig> config, IScheduler scheduler)
     {
@@ -102,20 +103,9 @@ namespace PVControl
       _logger = logger;
       _config = config.Value;
       _scheduler = scheduler;
-      _resetDailyEntities = [];
       if (String.IsNullOrWhiteSpace(_config.DBLocation))
         _config.DBLocation = "apps/DataLogger/energy_history.db";
       _connectionString += _config.DBLocation;
-      if (_config.PVYieldEntity != null) _resetDailyEntities.Add(_config.PVYieldEntity.EntityId);
-      if (_config.ImportEnergyEntity != null) _resetDailyEntities.Add(_config.ImportEnergyEntity.EntityId);
-      if (_config.ExportEnergyEntity != null) _resetDailyEntities.Add(_config.ExportEnergyEntity.EntityId);
-      if (_config.HouseEnergyEntity != null) _resetDailyEntities.Add(_config.HouseEnergyEntity.EntityId);
-      if (_config.BatteryChargeEntity != null) _resetDailyEntities.Add(_config.BatteryChargeEntity.EntityId);
-      if (_config.BatteryDischargeEntity != null) _resetDailyEntities.Add(_config.BatteryDischargeEntity.EntityId);
-      if (_config.CarChargeEntity != null) _resetDailyEntities.Add(_config.CarChargeEntity.EntityId);
-      if (_config.CarDischargeEntity != null) _resetDailyEntities.Add(_config.CarDischargeEntity.EntityId);
-      if (_config.HeatPumpEnergyEntity != null) _resetDailyEntities.Add(_config.HeatPumpEnergyEntity.EntityId);
-      if (_config.WarmwaterEnergyEntity != null) _resetDailyEntities.Add(_config.WarmwaterEnergyEntity.EntityId);
     }
 
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
@@ -187,6 +177,17 @@ namespace PVControl
     /// <returns></returns>
     private async Task ScheduleRun()
     {
+      if (!await _runLock.WaitAsync(0))
+      {
+        _logger.LogDebug("DataLogger: previous run still busy, skipping this tick");
+        return;
+      }
+      try { await ScheduleRunCore(); }
+      finally { _runLock.Release(); }
+    }
+
+    private async Task ScheduleRunCore()
+    {
       _logger.LogTrace("Entered ScheduleRun");
       DateTime now = DateTime.Now;
       DateTime lastRunDaily = await GetLastLogTimeStamp("daily");
@@ -250,7 +251,7 @@ namespace PVControl
         {
           if (queryResult.Read())
           {
-            timeStamp = queryResult.GetDateTime(0);
+            timeStamp = ParseDbTimestamp(queryResult.GetString(0));
           }
         }
         await con.CloseAsync();
@@ -258,6 +259,53 @@ namespace PVControl
 
       return timeStamp;
     }
+    /// <summary>
+    /// Reads a stored timestamp ("2026-06-27T12:59:59+02:00") as local time. Don't use
+    /// SqliteDataReader.GetDateTime for this: since Microsoft.Data.Sqlite 10 it returns UTC for
+    /// offset strings, and all period arithmetic here (whole local hours/days) then ran on the
+    /// UTC clock — hourly windows ended up in the future (all NULL), daily ones shifted by the
+    /// UTC offset.
+    /// </summary>
+    public static DateTime ParseDbTimestamp(string text) =>
+      DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime;
+
+    /// <summary>
+    /// Energy counted by a meter over a series of readings: the sum of its increases. A drop
+    /// below 90 % of the last counted reading is a reset (daily counters at midnight, whenever it
+    /// happens) and the new reading counts from 0 — unless the meter is back near its level
+    /// within the next <see cref="GlitchLookahead"/> readings: then it was a glitch (e.g. a
+    /// template sum briefly reading 0 while one source is unavailable) and is skipped. Smaller
+    /// drops are noise and skipped too. Works for daily-reset and running-total counters alike.
+    /// (It replaced "last − first, after skipping to the first exact 0", which wrote 0 for every
+    /// day of running totals like the heat pump and carport meters, and for daily counters whose
+    /// reset never showed an exact 0. HA's own statistics count such glitches as resets — e.g.
+    /// 125 kWh of heat pump energy on 2026-10-12 instead of ~5.)
+    /// </summary>
+    public static float CounterIncrease(IReadOnlyList<float> readings)
+    {
+      if (readings.Count == 0) return 0;
+      float total = 0;
+      float reference = readings[0]; // last reading that counted — skipped readings never become the base
+      for (int i = 1; i < readings.Count; i++)
+      {
+        float current = readings[i];
+        if (current >= reference) { total += current - reference; reference = current; }
+        else if (current < reference * 0.9f && !ReturnsTo(readings, i + 1, reference * 0.9f))
+        { total += current; reference = current; }
+      }
+      return total;
+    }
+
+    /// <summary>Readings after a big drop checked for a return to the old level (glitch, not reset).</summary>
+    public const int GlitchLookahead = 5;
+
+    private static bool ReturnsTo(IReadOnlyList<float> readings, int from, float level)
+    {
+      for (int i = from; i < Math.Min(readings.Count, from + GlitchLookahead); i++)
+        if (readings[i] >= level) return true;
+      return false;
+    }
+
     private async Task InsertHourly(DateTime endPeriod)
     {
       await PopulateDB(endPeriod, false);
@@ -296,29 +344,29 @@ namespace PVControl
       {
         await con.OpenAsync();
         List<Task<Tuple<string, float?>>> averageTasks = [];
-        AddFloatTask(averageTasks, _config.TemperatureOutsideEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.TemperatureInsideEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.AtmoPressureEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.TemperatureWarmwaterEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.CloudCoverEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.HumidityEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.BatterySoCEntity, FloatTask.average, historyStart, historyEnd);
+        AddFloatTask(averageTasks, _config.TemperatureOutsideEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.TemperatureInsideEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.AtmoPressureEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.TemperatureWarmwaterEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.CloudCoverEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.HumidityEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.BatterySoCEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
         // Price entities may update every 15 min while this window can span an hour (or a full
         // day) — average rather than "last", so a logged row always represents the true mean
         // price over its window regardless of the source sensor's native update granularity.
-        AddFloatTask(averageTasks, _config.PriceEnergyExportEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.PriceEnergyImportEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.PVYieldEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.HouseEnergyEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.ImportEnergyEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.ExportEnergyEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.BatteryChargeEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.BatteryDischargeEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.CarSoCEntity, FloatTask.average, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.CarChargeEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.CarDischargeEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.HeatPumpEnergyEntity, FloatTask.diff, historyStart, historyEnd);
-        AddFloatTask(averageTasks, _config.WarmwaterEnergyEntity, FloatTask.diff, historyStart, historyEnd);
+        AddFloatTask(averageTasks, _config.PriceEnergyExportEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.PriceEnergyImportEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.PVYieldEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.HouseEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ImportEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ExportEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.BatteryChargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.BatteryDischargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.CarSoCEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.CarChargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.CarDischargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.HeatPumpEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.WarmwaterEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         await Task.WhenAll(averageTasks);
         float? tempOutside = GetFloatTaskResult(averageTasks, _config.TemperatureOutsideEntity);
         float? tempInside = GetFloatTaskResult(averageTasks, _config.TemperatureInsideEntity);
@@ -346,7 +394,7 @@ namespace PVControl
         var insertCommand = con.CreateCommand();
         insertCommand.CommandText = String.Format(
           @"
-          INSERT INTO {0} 
+          INSERT OR IGNORE INTO {0} 
           (timestamp, temperatureoutside, temperatureinside, atmopressure, temperaturewarmwater, cloudcover, humidity, batterysoc, priceenergyimport, priceenergyexport, pvyield, houseenergy, importenergy, exportenergy, batterycharge, batterydischarge, carsoc, carcharge, cardischarge, heatpumpenergy, warmwaterenergy) 
           Values ('{1}',{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19}, {20}, {21});
           ",
@@ -378,16 +426,16 @@ namespace PVControl
       }
       _logger.LogTrace("Finished storing values");
     }
-    private async void AddFloatTask(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
+    // Configured entities are always queried, whatever their state right now: a sensor that's
+    // briefly unavailable at logging time still has history for the period.
+    private static void AddFloatTask(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity, FloatTask op, DateTime historyStart, DateTime historyEnd, Func<Entity, FloatTask, DateTime, DateTime, Task<Tuple<string, float?>>> query)
     {
-      if (entity?.State is not null)
-      {
-        averageTasks.Add(Task.Run(() => GetFloatStateHistory(entity, op, historyStart, historyEnd)));
-      }
+      if (entity is not null)
+        averageTasks.Add(Task.Run(() => query(entity, op, historyStart, historyEnd)));
     }
     private float? GetFloatTaskResult(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity)
     {
-      if (entity?.State is not null)
+      if (entity is not null)
       {
         try
         {
@@ -407,77 +455,42 @@ namespace PVControl
     }
     private async Task <Tuple<string,float?>> GetFloatStateHistory(Entity entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
     {
-      if (float.TryParse(entity.State, NumberStyles.Any, CultureInfo.InvariantCulture, out float _))
+      try
       {
-        try
+        var history = await _apiManager.GetEntityHistoryAsync(entity, historyStart, _cancelToken, endDateTime: historyEnd);
+        if (!history.Item1)
         {
-          var history = await _apiManager.GetEntityHistoryAsync(entity, historyStart, _cancelToken, endDateTime: historyEnd);
-          var floatRegex = RegexNumeric();
-          float stateValueFloat = 0;
-          if (history.Item1 && history.Item2.Count > 0)
-          {
-            List<float> list = history.Item2.Where(w => floatRegex.IsMatch(w.State)).Select(s => float.Parse(s.State, NumberStyles.Any, CultureInfo.InvariantCulture)).ToList();
-            // some daily sensors don't reset exactly at 00:00, so we have to remove all values != 0 from the beginning of the list
-            int listCount = list.Count;
-            if (_resetDailyEntities.Contains(entity.EntityId) && historyStart.Hour == 0 && historyStart.Minute == 0)
-            {
-              list = list.SkipWhile(x => x != 0).ToList();
-            }
-            if (list.Count < listCount)
-            {
-              _logger.LogDebug("History of Entity \"{entity}\" had to remove {count} entries where reset seems to be failing", entity.EntityId, listCount - list.Count);
-              if (list.Count == 0)
-              {
-                _logger.LogDebug("History is now empty, so we asume it's simply 0");
-                return new Tuple<string, float?>(entity.EntityId, 0f);
-              }
-            }
-            //if (list.Count == 0)
-            //{
-            //  _logger.LogError(String.Format("History of Entity \"{0}\" didn't contain any entries", entity.EntityId));
-            //  return new Tuple<string, float?>(entity.EntityId, null);
-            //}
-            switch (op)
-            {
-              case FloatTask.average:
-                stateValueFloat = list.Count > 0 ? list.Average() : 0;
-                break;
-              case FloatTask.sum:
-                stateValueFloat = list.Count > 0 ? list.Sum() : 0;
-                break;
-              case FloatTask.min:
-                stateValueFloat = list.Count > 0 ? list.Min() : 0;
-                break;
-              case FloatTask.max:
-                stateValueFloat = list.Count > 0 ? list.Max() : 0;
-                break;
-              case FloatTask.diff:
-                stateValueFloat = list.Count > 0 ? list.Last() - list.First() : 0;
-                break;
-              case FloatTask.first:
-                stateValueFloat = list.Count > 0 ? list.First() : 0;
-                break;
-              case FloatTask.last:
-                stateValueFloat = list.Count > 0 ? list.Last() : 0;
-                break;
-            }
-
-            return new Tuple<string, float?>(entity.EntityId, stateValueFloat);
-          }
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError("Error getting floatstatehistory ({entity}) \n {message}", entity.EntityId, ex.Message);
+          _logger.LogWarning("History request failed for {entity} ({start} – {end})", entity.EntityId, historyStart.ToISO8601(), historyEnd.ToISO8601());
           return new Tuple<string, float?>(entity.EntityId, null);
         }
+        var floatRegex = RegexNumeric();
+        List<float> list = history.Item2.Where(w => floatRegex.IsMatch(w.State)).Select(s => float.Parse(s.State, NumberStyles.Any, CultureInfo.InvariantCulture)).ToList();
+        // No numeric reading in the period: unknown, not 0 (0 °C / 0 % would be wrong data).
+        if (list.Count == 0)
+          return new Tuple<string, float?>(entity.EntityId, null);
+
+        float value = op switch
+        {
+          FloatTask.average => list.Average(),
+          FloatTask.sum     => list.Sum(),
+          FloatTask.min     => list.Min(),
+          FloatTask.max     => list.Max(),
+          FloatTask.diff    => CounterIncrease(list),
+          FloatTask.first   => list.First(),
+          _                 => list.Last(),
+        };
+        return new Tuple<string, float?>(entity.EntityId, value);
       }
-      return new Tuple<string, float?>(entity.EntityId, null); 
+      catch (Exception ex)
+      {
+        _logger.LogError("Error getting floatstatehistory ({entity}) \n {message}", entity.EntityId, ex.Message);
+        return new Tuple<string, float?>(entity.EntityId, null);
+      }
     }
     private async Task InitializeDB()
     {
       using SqliteConnection con = new(_connectionString);
       await con.OpenAsync();
-      int currentDBVersion = 4;
       int actualDBVersion = await GetDBVersion(con);
       if (actualDBVersion <= 0)
       {
@@ -490,10 +503,28 @@ namespace PVControl
           (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
         ";
         _ = await createTableCommand.ExecuteNonQueryAsync();
-        await SetDbVersion(con, currentDBVersion);
+        await SetDbVersion(con, 4);
+        actualDBVersion = 4;
+      }
+      if (actualDBVersion < 5)
+      {
+        // v5: one row per timestamp. Overlapping runs had inserted ~480 hourly and 20 daily
+        // duplicates (counted twice by the load forecast). Keep the first row of each.
+        var migrate = con.CreateCommand();
+        migrate.CommandText = DedupeAndIndexSql;
+        int removed = await migrate.ExecuteNonQueryAsync();
+        _logger.LogInformation("DataLogger DB migrated to v5: duplicates removed, unique timestamp index added ({rows} rows changed)", removed);
+        await SetDbVersion(con, 5);
       }
       await con.CloseAsync();
     }
+
+    /// <summary>Removes duplicate timestamps (keeping the first row) and adds unique indexes.</summary>
+    public const string DedupeAndIndexSql = @"
+      DELETE FROM hourly WHERE rowid NOT IN (SELECT MIN(rowid) FROM hourly GROUP BY timestamp);
+      DELETE FROM daily  WHERE rowid NOT IN (SELECT MIN(rowid) FROM daily  GROUP BY timestamp);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_hourly_timestamp ON hourly(timestamp);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_timestamp  ON daily(timestamp);";
     private static async Task SetDbVersion(SqliteConnection con, int version)
     {
       var pragmaCommand = con.CreateCommand();

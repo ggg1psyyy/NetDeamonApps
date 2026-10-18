@@ -22,8 +22,10 @@ PVControl.DataLoggerConfig:
   PriceEnergyExportFixed: false
   # PriceEnergyExportFixedEntity: sensor.some_fixed_feedin_tariff
   # PriceEnergyExportFixedValue: 0.05
+  # PVControl's own feed-in price (€/kWh). Until 2026-06 this column held the OeMAG monthly
+  # market price in ct/kWh (sensor.oemag_marktpreis, no longer available in HA).
   PriceEnergyExportEntities:
-    - sensor.oemag_marktpreis
+    - sensor.pv_control_current_export_price_brutto
   HouseEnergyEntity: sensor.house_energy_consumption_day
   ImportEnergyEntity: sensor.solax_today_s_import_energy
   ExportEnergyEntity: sensor.solax_today_s_export_energy

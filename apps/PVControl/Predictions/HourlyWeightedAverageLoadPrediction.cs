@@ -33,38 +33,49 @@ namespace NetDeamon.apps.PVControl.Predictions
 
     protected override Dictionary<DateTime, int> PopulateData()
     {
+      DateTime today = DateTime.Now.Date;
+      var hourly = HourlyWeightedAverages(LoadHistory(), today, _weightScaling);
+
       Dictionary<DateTime, int> data = [];
-      DateTime now = DateTime.Now.Date;
-      for (var time = now; time < now.AddDays(2).Date; time = time.AddMinutes(15))
-      {
-        data.Add(time, GetHourlyHouseEnergyUsageHistory(time.Hour, now) / 4);
-      }
+      for (var time = today; time < today.AddDays(2); time = time.AddMinutes(15))
+        data.Add(time, hourly[time.Hour] / 4);
       return data;
     }
 
-    private int GetHourlyHouseEnergyUsageHistory(int hour, DateTime now)
+    /// <summary>All logged hours with house energy, as (timestamp, value after exclusions).</summary>
+    private List<(DateTime Timestamp, int Value)> LoadHistory()
     {
       using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(string.Format("Data Source={0}", _dbLocation)));
-
-      // Fetch the columns we need; subtraction is done in memory so that the exclusion list
-      // can be dynamic without complex SQL expression trees.
-      var rows = db.Hourlies
-        .Where(h => h.Timestamp.Hour == hour && h.Houseenergy != null)
+      // Subtraction is done in memory so the exclusion list can be dynamic. The hour is NOT
+      // filtered in SQL: LinqToDB turns Timestamp.Hour into strftime('%H', …), which SQLite
+      // evaluates in UTC — that shifted every forecast hour by the UTC offset (1–2 h).
+      return db.Hourlies
+        .Where(h => h.Houseenergy != null)
         .Select(h => new { h.Timestamp, h.Houseenergy, h.Carcharge, h.Warmwaterenergy, h.Heatpumpenergy })
+        .AsEnumerable()
+        .Select(r => (r.Timestamp, ComputeValue(r.Houseenergy, r.Carcharge, r.Warmwaterenergy, r.Heatpumpenergy)))
         .ToList();
+    }
 
-      var weights = rows.Select(r => new
+    /// <summary>
+    /// Weighted average energy per local hour of day (index 0–23, Wh). A row stamped hh:59:59
+    /// covers hour hh. Older days weigh less: exp(−age in days / weightScaling). Hours without
+    /// history get 0.
+    /// </summary>
+    public static int[] HourlyWeightedAverages(IEnumerable<(DateTime Timestamp, int Value)> rows, DateTime today, float weightScaling)
+    {
+      var sums = new double[24];
+      var weights = new double[24];
+      foreach (var (timestamp, value) in rows)
       {
-        Value = ComputeValue(r.Houseenergy, r.Carcharge, r.Warmwaterenergy, r.Heatpumpenergy),
-        Weight = (float)Math.Exp(-Math.Abs((r.Timestamp - now).Days) / _weightScaling),
-      }).ToList();
-
-      float weightedSum = weights.Sum(w => w.Value * w.Weight);
-      float sumOfWeights = weights.Sum(w => w.Weight);
-      if (sumOfWeights == 0)
-        return 0;
-      float weightedAverage = weightedSum / sumOfWeights;
-      return (int)Math.Round(weightedAverage, 0);
+        var local = timestamp.Kind == DateTimeKind.Utc ? timestamp.ToLocalTime() : timestamp;
+        double w = Math.Exp(-Math.Abs((local - today).Days) / weightScaling);
+        sums[local.Hour] += value * w;
+        weights[local.Hour] += w;
+      }
+      return Enumerable.Range(0, 24)
+        .Select(h => weights[h] > 0 ? (int)Math.Round(sums[h] / weights[h]) : 0)
+        .ToArray();
     }
 
     private int ComputeValue(int? houseenergy, int? carcharge, int? warmwaterenergy, int? heatpumpenergy)
