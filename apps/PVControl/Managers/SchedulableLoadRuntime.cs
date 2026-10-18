@@ -8,6 +8,18 @@ using static NetDeamon.apps.PVControl.PVControlCommon;
 namespace NetDeamon.apps.PVControl.Managers
 {
   /// <summary>
+  /// Snapshot of the live, user-tunable settings that actually feed a scheduling decision,
+  /// taken when a session starts. Compared against their CURRENT values each cycle by
+  /// FindLoadWindow's minimum on-time latch (value-equality via record struct) so that a manual
+  /// change to any of them — not just a mode switch — bypasses the latch and takes effect on
+  /// the very next cycle, instead of silently waiting out up to MinWindowMinutes on a decision
+  /// made under settings that no longer apply.
+  /// </summary>
+  public readonly record struct SessionStartSettings(
+    int PreferredMinSocPercent, int AbsoluteMinSocPercent, bool EnforcePreferredSoc,
+    float ForceChargeMaxPrice, float TargetLevel);
+
+  /// <summary>
   /// Runtime state of a schedulable extra load (EV charger, warm-water heat pump, etc.).
   /// Wraps <see cref="SchedulableLoadConfig"/> with live HA entity state, a power
   /// running-average, and the result of the last simulation window search.
@@ -137,6 +149,16 @@ namespace NetDeamon.apps.PVControl.Managers
     /// already active, not which mode produced that session. Null when not active.
     /// </summary>
     public LoadSchedulingMode? SessionStartMode { get; internal set; }
+
+    /// <summary>
+    /// Snapshot of the live settings that fed the decision when the current session started
+    /// (see <see cref="SessionStartSettings"/>). Used by FindLoadWindow to ALSO bypass the
+    /// minimum on-time latch when the user changes one of them mid-session — a manual setting
+    /// change should take effect on the next cycle, not silently wait out up to
+    /// MinWindowMinutes of a decision made under settings that no longer apply, same principle
+    /// as the mode-switch bypass above. Null when not active.
+    /// </summary>
+    public SessionStartSettings? SessionStartSettings { get; internal set; }
 
     /// <summary>ExtraLoad windows found by the last FindLoadWindow call.</summary>
     public List<ExtraLoad> ExtraLoads { get; internal set; } = [];

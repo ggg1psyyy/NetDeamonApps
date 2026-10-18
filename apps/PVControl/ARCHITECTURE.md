@@ -145,57 +145,65 @@ Wraps the config with live state:
 | Mode | Behaviour |
 |---|---|
 | `Off` | Never schedule |
-| `Optimal` | PV only — never battery, never grid |
-| `Priority` | Optimal + may draw the battery down to its configured minimum |
-| `PriorityPlus` | Priority + may draw cheap grid import, but only on top of (not instead of) Priority's own rule — see below |
+| `Optimal` (= 10) | PV only — never battery, never grid |
+| `Priority` (= 20) | Optimal + may draw the battery down to its configured minimum |
+| `PriorityPlus` (= 30) | Priority + one additional bonus ruleset for cheap grid import — see below |
 | `Emergency` | Run immediately, ignore battery/PV conditions |
+
+Optimal/Priority/PriorityPlus are deliberately numbered with gaps (10/20/30), not sequential —
+room for a future mode to slot in between without renumbering anything else. `Off`/`Emergency`
+are unrelated, independent gates and don't need to fit this scheme.
 
 ### FindLoadWindow logic
 
 Off/target-reached/Emergency are unconditional short-circuits (skip / skip / ChargeNow=true, no
-simulation check). Optimal only ever runs during today's PV window, scheduling tomorrow's
-instead when outside it — unaffected by anything below.
+simulation check).
 
-Priority and PriorityPlus share one ladder, climbed from the bottom rung up — every evaluation
-checks the most restrictive rung first, climbing to the next one only if the one below refused:
+Optimal, Priority, and PriorityPlus are each a **complete, self-contained ruleset** — not
+separate functions with bonus clauses blended in. They climb a numbered ladder, from the bottom:
 
 ```
-Optimal rung      PV alone covers the draw.
-  ↓ (if refused)
-Priority rung     PriorityRung(sim) = IsOvernightMinSocOk(true) && !HasNewGridVs(baseline)
-                  — may also draw the battery down to its configured minimum.
-  ↓ (if refused)
-PriorityPlus rung PriorityRung(sim) || (HasNewGridVs(baseline) && IsGridCheapVs(baseline))
-                  — may also draw a NEW grid-assisted charge, but only when the EV itself
-                  causes that need AND it's at/under the configured price threshold; reached
-                  only for PriorityPlus, and only once the Priority rung has already refused.
+if (mode >= Optimal)      run Optimal's complete ruleset; if ChargeNow, done.
+if (mode >= Priority)     run Priority's complete ruleset; if ChargeNow, done.
+if (mode >= PriorityPlus) run PriorityPlus's one bonus ruleset; if ChargeNow, done.
+if (nothing above ever called SetResult) fall back to the generic "No valid window".
 ```
 
-PriorityPlus's predicate literally calls Priority's own rung function first, every time — not
-an approximation that merely looks equivalent — so whenever the EV doesn't need (or can't
-cheaply get) new grid, PriorityPlus gets Priority's exact floor and timing discipline, never a
-separate, looser path.
+Each ruleset runs in full and produces a result (`ChargeNow` true or false, with or without a
+deferred prediction) exactly as if it were the only rung that mattered. `ChargeNow == true` stops
+the climb immediately. Otherwise every tier the mode is entitled to try still runs to completion
+— a tier's own "no" (even just a deferred prediction, e.g. "expected start ~06:30") is never
+silently discarded in favour of the next tier's attempt, and the generic fallback at the very
+end only fires if literally nothing above it ever called `SetResult` — tracked by a single
+`decided` flag set inside `SetResult` itself, checked once at the end, rather than by comparing
+`mode` against each tier's own number a second time.
 
-**Outside PV hours** (`CurrentPVPeriod` is `AfterPV` or `BeforePV`), this ladder governs
-real-time scheduling directly: a NEW session searches for the latest start before the next
-sunrise that still satisfies it (minimizing how long the battery sits drawn down overnight,
-since nothing recharges it before sunrise), and an already-ACTIVE session is stopped at dusk
-once past its own anti-oscillation latch — unless, for PriorityPlus, it's genuinely drawing a
-new, cheap grid charge right now (re-checked every cycle, not assumed). The Optimal rung is
-never checked explicitly in this path: PV is zero by definition outside PV hours, so "PV alone
-covers it" can never apply there regardless of input.
+Optimal's ruleset doesn't decide anything *about*
+Optimal mode — it just answers "would PV alone cover this," which is equally meaningful
+regardless of which outer mode invoked it, so Priority and PriorityPlus genuinely run it first,
+unmodified (only its old `if (mode == Optimal)` wrapper is gone, replaced by the climb itself).
+Priority's ruleset is shared verbatim by PriorityPlus too — same floor, same late-start/dusk-stop
+timing discipline, same binary-search session length — PriorityPlus never sees a looser version
+of it.
 
-**During PV hours**, a new session's length is found via `FindMax`'s binary search: Step 2
-(`PriorityRung`, shared by both modes) runs first; PriorityPlus skips it in favour of Step 3
-(`IsGridCheapVs(baseline)` alone) whenever the baseline survives overnight unassisted — proven
-safe because `!HasNewGridVs(T) ⟹ IsGridCheapVs(T)` for any candidate `T`, so Step 3 can never
-return a shorter session than Step 2 would have. **Known gap:** Step 3's predicate never calls
-`PriorityRung`/`IsOvernightMinSocOk` on the candidate itself, unlike the evening/pre-dawn path
-above — unexercised so far (daytime margins are typically generous) but the same class of issue
-the evening-path fix addressed; flagged, not yet fixed, since folding Step 2/3 into the same
-`FindMax` call needs its own check that `HasNewGridVs`/`IsGridCheapVs` stay monotone in the
-END-search direction (they're known NOT to be monotone in the START-search direction the
-evening path uses, which is why that path is a linear scan, not a binary search).
+**Priority's ruleset** (used identically by both Priority and PriorityPlus): outside PV hours
+(`CurrentPVPeriod` is `AfterPV` or `BeforePV`), a NEW session searches for the latest start
+before the next sunrise that stays safe (minimizing how long the battery sits drawn down
+overnight, since nothing recharges it before sunrise), and an already-active session is stopped
+at dusk once past its own anti-oscillation latch. During PV hours, session length is found via
+binary search, requiring `IsOvernightMinSocOk(true) && !HasNewGridVs(baseline)` — no new grid
+import, ever, under Priority's own rule.
+
+**PriorityPlus's bonus ruleset** (`RunPriorityPlusBonusRuleset`/`FindEarliestPriceAwareStart`):
+tried only once Priority's ruleset above has already concluded it can't charge this cycle. Day
+or night doesn't matter here — only price. It scans forward from "now" in 15-minute steps,
+re-simulating the EV at each advancing candidate start, for the earliest one where the candidate
+either needs no new grid at all (vs. baseline — same comparison Priority's rule uses) or needs
+new grid at a price at/under the configured threshold. Advancing matters because delaying the
+EV's own simulated start changes what the simulator's `NeedToCharge` logic computes for it (a
+different deadline, possibly a different, cheaper slot) — checking once at "now" isn't enough.
+Bounded by the published import-price horizon (today + tomorrow once published); once prices run
+out there's nothing left to evaluate, and the scan gives up.
 
 `HasNewGridVs`/`IsGridCheapVs` compare against the full simulated timeline, not just the
 overnight window — a slot either side of sunset counts as "new" if it wasn't in baseline.

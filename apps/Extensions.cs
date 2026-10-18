@@ -65,13 +65,19 @@ namespace NetDeamon.apps
     InPVPeriod,
     AfterPV,
   }
+  // Optimal/Priority/PriorityPlus form a numbered ladder, climbed from the bottom in
+  // HouseEnergy.FindLoadWindow: each mode's ruleset runs in full, and if it doesn't allow
+  // charging, the next-higher-numbered ruleset gets a turn. The gaps between 10/20/30 are
+  // deliberate room for a future mode to slot in between without renumbering anything else.
+  // Off/Emergency are unrelated, independent gates (handled before the ladder even starts),
+  // so their own values don't need to fit the numbering scheme.
   public enum LoadSchedulingMode
   {
-    Off,
-    Optimal,
-    Priority,
-    PriorityPlus,
-    Emergency,
+    Off = 0,
+    Emergency = 1,
+    Optimal = 10,
+    Priority = 20,
+    PriorityPlus = 30,
   }
   public struct SensorData
   {

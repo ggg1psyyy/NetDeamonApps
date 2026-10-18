@@ -394,17 +394,28 @@ namespace NetDeamon.apps.PVControl
       var currentSlot = now.RoundToNearestQuarterHour();
       bool wasActive = load.ChargeNow;
 
+      // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
+      // ladder's generic "No valid window" catch-all at the very end: once set, a ruleset's own
+      // (possibly deferred, possibly more specific) result stands as final, and the generic
+      // catch-all is skipped rather than overwriting it.
+      bool decided = false;
+
       void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
       {
+        decided = true;
         if (chargeNow && !wasActive)
         {
           load.SessionStartTime = now;          // session just started
           load.SessionStartMode = load.Mode;
+          load.SessionStartSettings = new SessionStartSettings(
+            baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
+            baseInput.ForceChargeMaxPrice, load.TargetLevel);
         }
         else if (!chargeNow)
         {
           load.SessionStartTime = null;         // session ended
           load.SessionStartMode = null;
+          load.SessionStartSettings = null;
         }
         load.ExtraLoads = extraLoads;
         load.ChargeNow = chargeNow;
@@ -498,166 +509,119 @@ namespace NetDeamon.apps.PVControl
       if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
       { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
 
-      // Step 1: Optimal — house reaches ~100% even WITH EV running; overnight OK; no new grid.
-      // Optimal mode only. Session extends to tomorrowMax so the load can drain the battery
-      // overnight after it reaches 100 % via PV — matching the mode definition:
-      //   "after reaching 100% AND after PV stops, Optimal may run until house SoC hits minSoC."
-      // Priority/PriorityPlus skip this step and use Step 2 (no 100% requirement).
+      // The published import-price horizon (today + tomorrow once published) — bounds
+      // PriorityPlus's bonus ruleset's forward scan below: once prices run out there's nothing
+      // left to evaluate for a price-based decision.
+      var priceHorizonEnd = baseInput.ImportPrices.Select(p => p.EndTime).DefaultIfEmpty(currentSlot).Max();
+
+      // ── Numbered-mode ladder, climbed from the bottom ───────────────────────────────────────
+      // Optimal/Priority/PriorityPlus (LoadSchedulingMode = 10/20/30) are each a complete,
+      // self-contained ruleset. Starting from the selected mode's own ruleset, the function
+      // runs Optimal's ruleset first (every mode is >= Optimal); if it returns ChargeNow=true,
+      // done — nothing else matters. If it returns false, and the selected mode is higher than
+      // Optimal, Priority's complete ruleset gets its turn, same logic. If that also returns
+      // false and the mode is PriorityPlus, PriorityPlus's one additional (bonus) ruleset gets
+      // the final say. The gaps in the mode numbering are deliberate room for a future ruleset
+      // to slot in without touching this structure.
       //
-      // Optimal is solar-surplus mode: only active during the PV window (InPVPeriod).
-      // Outside PV hours the simulation sits at the edge of overnight-SoC thresholds and
-      // oscillates every 15 s as tiny SoC changes flip the binary-search result.
-      // Use Priority/PriorityPlus for intentional off-peak / battery-drain charging.
-      // Exception: when outside today's PV window, search for a window in tomorrow's PV period
-      // so the scheduled run is visible (chargeNow=false, ExtraLoad carries the future window).
-      if (load.Mode == LoadSchedulingMode.Optimal && baseResult.CurrentPVPeriod != PVPeriods.InPVPeriod)
+      // Optimal's ruleset doesn't decide anything "about Optimal mode" — it just answers "would
+      // PV alone cover this," which is equally meaningful regardless of which outer mode
+      // selected it, so it needs no change to run for Priority/PriorityPlus too: only its outer
+      // mode-equality check (now provided by the climb below) is gone, its internal SoC-
+      // threshold logic is untouched.
+      //
+      // Each ruleset function returns true once it has produced a result via SetResult
+      // (whether that result is ChargeNow=true or a definite/deferred "no"), and false if it
+      // genuinely decided nothing at all. The latter can only happen for whichever ruleset ends
+      // up being the mode's own ceiling (nothing above it to climb to), and matches today's
+      // existing fallthrough behaviour exactly: it reaches the same generic "No valid window"
+      // fallback at the very bottom that every mode already shares.
+
+      // Shared by both rulesets below — fires regardless of which one's own blocks led here,
+      // exactly where it always has. The simulation re-runs every 15 s and at borderline SoC
+      // levels a predicate can flip on/off every cycle; once a session starts, keep it active
+      // for MinWindowMinutes before letting the simulation stop it. Hard-stop safety checks
+      // inside each ruleset (SoC gates, Optimal's stop floor) always run BEFORE this and take
+      // immediate effect regardless of the latch — the latch is for simulation transients, not
+      // hardware state.
+      //
+      // Bypassed when load.Mode no longer matches SessionStartMode, OR when any of the live
+      // settings that fed the original decision (SessionStartSettings — min SoC floors,
+      // EnforcePreferredSoc, the force-charge price threshold, the target level) have since
+      // changed: the latch exists to smooth over marginal predicate flips WITHIN one decision
+      // made under one set of conditions, not to keep echoing a PREVIOUS decision after the
+      // user deliberately changes mode OR any of the settings that decision was based on — any
+      // such manual change should take effect on the next cycle, not silently wait out up to
+      // MinWindowMinutes of a decision that no longer reflects the current configuration.
+      bool TryMinWindowLatch()
       {
-        var tomorrowPVStart = baseResult.FirstRelevantPVEnergyTomorrow;
-        var tomorrowPVEnd   = baseResult.LastRelevantPVEnergyTomorrow;
-        if (tomorrowPVStart.HasValue && tomorrowPVEnd.HasValue)
+        var currentSettings = new SessionStartSettings(
+          baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
+          baseInput.ForceChargeMaxPrice, load.TargetLevel);
+
+        if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0
+            && load.SessionStartMode == load.Mode
+            && load.SessionStartSettings == currentSettings)
         {
-          var tomorrowOptMax = Min(tomorrowPVStart.Value.AddMinutes(durationMinutes), tomorrowPVEnd.Value);
-          if (tomorrowOptMax > tomorrowPVStart.Value)
+          var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
+          if (elapsedMin < load.Config.MinWindowMinutes)
           {
-            var end = FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
-              e => RunSimFrom(tomorrowPVStart.Value, e),
-              sim => sim.WillReachMaxSocTomorrow && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
-            if (end is not null && MeetsMinWindow(tomorrowPVStart.Value, end.Value))
-            {
-              SetResult(
-                [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = tomorrowPVStart.Value, EndTime = end.Value, PowerW = chargeRateW }],
-                false,
-                $"Scheduled tomorrow (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
-                end);
-              return;
-            }
+            var latchedLoads = load.ExtraLoads.Count > 0
+              ? load.ExtraLoads.Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW }).ToList()
+              : load.ExtraLoads;
+            SetResult(latchedLoads, true,
+              $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
+              load.PredictedEnd);
+            return true;
           }
         }
-        SetResult([], false, $"Optimal: outside PV window ({baseResult.CurrentPVPeriod})", null);
-        return;
+        return false;
       }
 
-      // ── Priority / PriorityPlus: schedule new sessions as late as possible before sunrise ──
-      // Priority CAN still drain the battery to minSoC overnight (that's unchanged) — but a new
-      // session now starts as close to sunrise as still lets it fully complete, rather than as
-      // soon as the gate allows. Nothing recharges the battery between sunset and sunrise, so
-      // the battery's lowest point of the whole night is the same regardless of WHEN within
-      // that window the EV runs (same total Wh consumed by sunrise either way) — the real
-      // difference is how LONG the battery sits at that reduced level with little headroom left.
-      // A session that starts at dusk leaves it exposed for the rest of the night; a session
-      // timed to finish right as the sun comes up leaves it exposed for only its own duration.
-      // That's the actual protection against an unpredicted load spike the simulation's forecast
-      // never saw coming: minimizing the TIME the real (not forecast) battery has a reduced
-      // margin, not changing how low it ultimately gets.
+      // ── Optimal's ruleset ────────────────────────────────────────────────────────────────────
+      // House reaches ~100% even WITH EV running; overnight OK; no new grid. Solar-surplus mode:
+      // only active during the PV window (InPVPeriod) — outside PV hours the simulation sits at
+      // the edge of overnight-SoC thresholds and oscillates every 15 s as tiny SoC changes flip
+      // the binary-search result, so outside today's PV window this instead searches for a
+      // window in tomorrow's PV period so the scheduled run is still visible on the dashboard
+      // (chargeNow=false, ExtraLoad carries the future window).
       //
-      // PriorityPlus is governed by the SAME climb-the-ladder search as Priority here, not a
-      // separate path: every candidate is checked against Priority's own rule first
-      // (PriorityRung — battery to minSoC, no new grid), and PriorityPlus only gets to accept a
-      // candidate Priority's rule rejects if that candidate genuinely needs a NEW grid-assisted
-      // charge AND it's cheap — its one actual differentiator, applied on top of Priority's
-      // rule rather than bypassing it. Whenever the EV doesn't need (or can't cheaply get) new
-      // grid, PriorityPlus's cascade reduces to exactly PriorityRung — same floor, same timing
-      // discipline, not a look-alike approximation. (The Optimal rung — PV alone covers the
-      // draw — isn't checked explicitly: this block only runs outside PV hours, AfterPV or
-      // BeforePV, where the PV forecast is zero by definition, so that rung can never apply
-      // here regardless of input.)
-      //
-      // An already-active session is NOT affected here — see the dusk-stop check after the
-      // min-window latch below, which only cuts off a session once it's past its own
-      // anti-oscillation latch, not one still settling in.
-      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus && !wasActive &&
-          baseResult.CurrentPVPeriod is PVPeriods.AfterPV or PVPeriods.BeforePV)
-      {
-        bool isPriority = load.Mode == LoadSchedulingMode.Priority;
-
-        bool PriorityRung(SimulationResult sim) =>
-          sim.IsOvernightMinSocOk(true) && !sim.HasNewGridVs(baseResult);
-        bool Predicate(SimulationResult sim) => isPriority
-          ? PriorityRung(sim)
-          : PriorityRung(sim) || (sim.HasNewGridVs(baseResult) && sim.IsGridCheapVs(baseResult));
-
-        // The relevant upcoming sunrise: today's own (if we're already in the pre-dawn hours
-        // before it) or tomorrow's (if it's still evening and today's sunrise already passed).
-        var nextSunrise = baseResult.CurrentPVPeriod == PVPeriods.BeforePV
-          ? baseResult.FirstRelevantPVEnergyToday
-          : baseResult.FirstRelevantPVEnergyTomorrow;
-
-        if (nextSunrise.HasValue && nextSunrise.Value > currentSlot)
-        {
-          // The ideal target: as late as possible while still leaving enough time to fully
-          // complete the session — never earlier than now.
-          var idealStart = Max(currentSlot, nextSunrise.Value.AddMinutes(-durationMinutes));
-
-          // Does the ideal placement actually stay safe? Simulating the EV continuously from
-          // idealStart through sunrise is the WORST case for that start point (longest possible
-          // draw) — a shorter session from the same start can only be safer, so if this passes,
-          // the full natural duration from idealStart is guaranteed safe too, below.
-          //
-          // If it does NOT pass — e.g. tonight's live case: the house's own unassisted overnight
-          // trajectory already bottoms out just above the floor right before sunrise, so even a
-          // single 15-minute EV slice added anywhere pushes the whole rest of the night's
-          // (permanently lowered, nothing recharges it before sunrise) trajectory under the
-          // floor — searching for a SHORTER session from this same idealStart cannot help, since
-          // the problem isn't duration, it's that idealStart itself is already too early for the
-          // thin remaining margin. The only lever that helps is starting LATER (shrinking how
-          // much of the risky part of the night the EV's draw overlaps), even at the cost of a
-          // shorter, partial charge — exactly "use up as much as possible" once the ideal case
-          // isn't available.
-          var start = FindLatestSessionStart(idealStart, nextSunrise.Value, load.Config.MinWindowMinutes,
-            s => RunSimFrom(s, nextSunrise.Value), Predicate);
-
-          if (start is not null)
-          {
-            // Safe for the full remaining window from `start` through sunrise, so a shorter
-            // session (stopping once the EV's own energy need is met) is safe too.
-            var end = Min(start.Value.AddMinutes(durationMinutes), nextSunrise.Value);
-
-            if (MeetsMinWindow(start.Value, end))
-            {
-              if (start.Value <= currentSlot)
-              {
-                // Last call — waiting any longer risks not finishing before sunrise. Start now.
-                SetResult(
-                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW }],
-                  true,
-                  $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
-                  end);
-              }
-              else
-              {
-                // Still time to spare — defer the start to minimize how long the battery sits
-                // drawn down overnight.
-                SetResult(
-                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
-                  false,
-                  $"Scheduled ~{start.Value:HH:mm} ({load.Mode} {load.Config.Name}: deferring to minimize overnight battery drawdown time)",
-                  end);
-              }
-              return;
-            }
-          }
-        }
-
-        SetResult([], false,
-          $"{load.Mode}: outside PV hours ({baseResult.CurrentPVPeriod}) — deferring to minimize overnight battery drawdown time", null);
-        return;
-      }
-
-      // ── Optimal mode: real-time battery SoC gate ────────────────────────────────────────────
-      // Placed before the min-window latch so a real SoC drop always takes immediate effect
-      // (latch is for simulation transients, not hardware state).
-      //
-      // Start gate: Optimal never activates when current SoC < PreferredMinimalSoC, regardless
-      //   of EnforcePreferredSoC. Prevents morning charging that would draw from an already-low
+      // Start gate: never activates when current SoC < PreferredMinimalSoC, regardless of
+      //   EnforcePreferredSoC. Prevents morning charging that would draw from an already-low
       //   battery before PV has had a chance to recharge it.
-      //
       // Stop gate (hysteresis): once active, continue only while
-      //   SoC ≥ max(preferred − 10 %, absolute + 5 %)
-      //   The −10 % band prevents on/off cycling near the start threshold.
-      //   The absolute+5 floor keeps the stop threshold safely above the hardware minimum
-      //   even when preferred is configured close to absolute.
-      if (load.Mode == LoadSchedulingMode.Optimal)
+      //   SoC ≥ max(preferred − 10 %, absolute + 5 %) — the −10 % band prevents on/off cycling
+      //   near the start threshold; the absolute+5 floor keeps the stop threshold safely above
+      //   the hardware minimum even when preferred is configured close to absolute.
+      void RunOptimalRuleset()
       {
+        if (baseResult.CurrentPVPeriod != PVPeriods.InPVPeriod)
+        {
+          var tomorrowPVStart = baseResult.FirstRelevantPVEnergyTomorrow;
+          var tomorrowPVEnd   = baseResult.LastRelevantPVEnergyTomorrow;
+          if (tomorrowPVStart.HasValue && tomorrowPVEnd.HasValue)
+          {
+            var tomorrowOptMax = Min(tomorrowPVStart.Value.AddMinutes(durationMinutes), tomorrowPVEnd.Value);
+            if (tomorrowOptMax > tomorrowPVStart.Value)
+            {
+              var end = FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
+                e => RunSimFrom(tomorrowPVStart.Value, e),
+                sim => sim.WillReachMaxSocTomorrow && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
+              if (end is not null && MeetsMinWindow(tomorrowPVStart.Value, end.Value))
+              {
+                SetResult(
+                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = tomorrowPVStart.Value, EndTime = end.Value, PowerW = chargeRateW }],
+                  false,
+                  $"Scheduled tomorrow (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
+                  end);
+                return;
+              }
+            }
+          }
+          SetResult([], false, $"Optimal: outside PV window ({baseResult.CurrentPVPeriod})", null);
+          return;
+        }
+
         int preferred  = Battery.PreferredMinimalSoC;
         int stopFloor  = Math.Max(preferred - 10, Battery.AbsoluteMinimalSoC + 5);
         int currentSoC = Battery.BatterySoc;
@@ -707,224 +671,276 @@ namespace NetDeamon.apps.PVControl
             $"Optimal: SoC {currentSoC}% dropped below stop floor {stopFloor}% (preferred {preferred}% − 10%)", null);
           return;
         }
+
+        if (TryMinWindowLatch()) return;
+
+        var mainEnd = FindMax(tomorrowMax, sim =>
+          sim.WillReachMaxSocToday && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
+        if (mainEnd is not null)
+        {
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = mainEnd.Value, PowerW = chargeRateW }],
+            true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", mainEnd);
+        }
       }
 
-      // ── Priority / PriorityPlus mode: real-time battery SoC gate ────────────────────────────
-      // Placed before the min-window latch so a real SoC drop always takes immediate effect.
-      //
-      // Priority always enforces PreferredMinSoC as the floor (regardless of EnforcePreferredSoC).
-      // PriorityPlus uses PreferredMinSoC when EnforcePreferredSoC is on, AbsoluteMinSoC when off.
-      //
-      // Without this gate, the simulation's IsOvernightMinSocOk looks at the NEXT overnight
-      // window (sunset today → sunrise tomorrow). In the pre-dawn hours that window is 18h
-      // away — the battery will have fully recharged by then, so the check always passes even
-      // while the current overnight drain pushes SoC below the required floor.
-      // This gate provides a direct live-SoC check that the simulation cannot substitute for.
-      //
-      // Restarting uses a Schmitt trigger (LoadSchedulingDecision.PrioritySoCGateOk) rather than
-      // the bare floor: without hysteresis, a session that just stopped at the floor restarts on
-      // the next tiny SoC uptick and immediately drains back under the floor again. PV surplus
-      // that already covers the charge rate bypasses the wait since it won't draw the battery
-      // down further.
-      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus)
+      // ── Priority's ruleset (shared verbatim by PriorityPlus, via the climb below) ──────────
+      // May draw the battery down to its configured minimum — Optimal's ruleset above already
+      // established PV alone doesn't cover this. isPriority distinguishes Priority from
+      // PriorityPlus WITHIN this one shared ruleset (e.g. which SoC floor applies); it does NOT
+      // gate whether this ruleset runs at all — the climb below already decided that.
+      void RunPriorityRuleset()
       {
         bool isPriority = load.Mode == LoadSchedulingMode.Priority;
-        int socFloor = isPriority || Battery.EnforcePreferredSoC
-          ? Battery.PreferredMinimalSoC
-          : Battery.AbsoluteMinimalSoC;
-        int currentSoC = Battery.BatterySoc;
-        int netPvW = CurrentAveragePVPower - CurrentAverageHouseLoad;
 
-        if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct, PvBypassMinSocBufferPct))
+        // Schedule new sessions as late as possible before sunrise. Nothing recharges the
+        // battery between sunset and sunrise, so the battery's lowest point of the whole night
+        // is the same regardless of WHEN within that window the EV runs (same total Wh consumed
+        // by sunrise either way) — the real difference is how LONG the battery sits at that
+        // reduced level with little headroom left. A session that starts at dusk leaves it
+        // exposed for the rest of the night; one timed to finish right as the sun comes up
+        // leaves it exposed for only its own duration — minimizing the TIME an unpredicted load
+        // spike the simulation's forecast never saw coming has to find a depleted battery.
+        //
+        // An already-active session is NOT affected here — see the dusk-stop check below, which
+        // only cuts off a session once it's past its own anti-oscillation latch, not one still
+        // settling in.
+        if (!wasActive && baseResult.CurrentPVPeriod is PVPeriods.AfterPV or PVPeriods.BeforePV)
         {
-          // Three distinct reasons the gate can block a restart — report the one that's
-          // actually true, rather than always blaming "PV insufficient" regardless of cause.
-          // Always state the REAL restart thresholds (PV-covered buffer floor, full hysteresis
-          // floor), even while SoC is still below socFloor itself — crossing socFloor alone is
-          // never enough to restart, and a message that only mentions socFloor reads as if it were.
-          int restartFloor   = socFloor + PrioritySoCHysteresisPct;
-          int pvRestartFloor = socFloor + PvBypassMinSocBufferPct;
-          string reason;
-          if (currentSoC < socFloor)
-            reason = wasActive
-              ? $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — stopping, battery depleted"
-              : $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — waiting to recover above {socFloor}%, then {pvRestartFloor}%+ with PV or {restartFloor}%+ to restart";
-          else if (currentSoC < pvRestartFloor)
-            reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (need {pvRestartFloor}%+ before a PV-covered restart is even considered) — waiting for battery to recover";
-          else
-            reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (net PV {netPvW}W < {chargeRateW}W needed) — waiting for battery to recover or PV to cover the load";
+          // The relevant upcoming sunrise: today's own (if we're already in the pre-dawn hours
+          // before it) or tomorrow's (if it's still evening and today's sunrise already passed).
+          var nextSunrise = baseResult.CurrentPVPeriod == PVPeriods.BeforePV
+            ? baseResult.FirstRelevantPVEnergyToday
+            : baseResult.FirstRelevantPVEnergyTomorrow;
 
-          // Even though we can't start now, scan the base trajectory for when SoC is predicted
-          // to recover past the (PV-independent) restart floor, then search for a valid window
-          // from that point so the dashboard can still show a predicted start/end/SoC — same
-          // recovery-slot pattern as the Optimal-mode gate above. Only while stopped: a session
-          // being force-stopped by a real SoC drop has nothing to predict.
-          if (!wasActive)
+          if (nextSunrise.HasValue && nextSunrise.Value > currentSlot)
           {
-            var recoverySlot = baseResult.Slots
-              .Where(s => s.Time > currentSlot && s.SoC >= restartFloor)
-              .Select(s => s.Time)
-              .FirstOrDefault();
+            // The ideal target: as late as possible while still leaving enough time to fully
+            // complete the session — never earlier than now.
+            var idealStart = Max(currentSlot, nextSunrise.Value.AddMinutes(-durationMinutes));
 
-            if (recoverySlot != default)
+            // Does the ideal placement actually stay safe? Simulating the EV continuously from
+            // idealStart through sunrise is the WORST case for that start point (longest
+            // possible draw) — a shorter session from the same start can only be safer, so if
+            // this passes, the full natural duration from idealStart is guaranteed safe too.
+            //
+            // If it does NOT pass — e.g. the house's own unassisted overnight trajectory already
+            // bottoms out just above the floor right before sunrise, so even a single 15-minute
+            // EV slice added anywhere pushes the whole rest of the night's (permanently lowered,
+            // nothing recharges it before sunrise) trajectory under the floor — searching for a
+            // SHORTER session from this same idealStart cannot help, since the problem isn't
+            // duration, it's that idealStart itself is already too early for the thin remaining
+            // margin. The only lever that helps is starting LATER, even at the cost of a
+            // shorter, partial charge — exactly "use up as much as possible" once the ideal case
+            // isn't available.
+            var start = FindLatestSessionStart(idealStart, nextSunrise.Value, load.Config.MinWindowMinutes,
+              s => RunSimFrom(s, nextSunrise.Value),
+              sim => sim.IsOvernightMinSocOk(true) && !sim.HasNewGridVs(baseResult));
+
+            if (start is not null)
             {
-              bool recoveryIsToday = recoverySlot.Date == now.Date;
-              var pvEnd = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday : baseResult.LastRelevantPVEnergyTomorrow;
-              var recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+              // Safe for the full remaining window from `start` through sunrise, so a shorter
+              // session (stopping once the EV's own energy need is met) is safe too.
+              var end = Min(start.Value.AddMinutes(durationMinutes), nextSunrise.Value);
 
-              if (recoveryMax > recoverySlot)
+              if (MeetsMinWindow(start.Value, end))
               {
-                // Mirrors whichever of Step 2/Step 3 will actually govern once the gate opens,
-                // so the prediction matches the real decision instead of a simplified guess.
-                bool recoveryUsesStep3 = load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk();
-                Func<SimulationResult, bool> predicate = recoveryUsesStep3
-                  ? sim => sim.IsGridCheapVs(baseResult)
-                  : sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult);
-
-                var end = FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e), predicate);
-
-                if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
+                if (start.Value <= currentSlot)
                 {
+                  // Last call — waiting any longer risks not finishing before sunrise. Start now.
                   SetResult(
-                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
-                    false, $"{reason} — expected start ~{recoverySlot:HH:mm}", end);
-                  return;
+                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW }],
+                    true,
+                    $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
+                    end);
                 }
+                else
+                {
+                  // Still time to spare — defer the start to minimize how long the battery sits
+                  // drawn down overnight.
+                  SetResult(
+                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
+                    false,
+                    $"Scheduled ~{start.Value:HH:mm} ({load.Mode} {load.Config.Name}: deferring to minimize overnight battery drawdown time)",
+                    end);
+                }
+                return;
               }
             }
           }
 
-          SetResult([], false, reason, null);
+          SetResult([], false,
+            $"{load.Mode}: outside PV hours ({baseResult.CurrentPVPeriod}) — deferring to minimize overnight battery drawdown time", null);
           return;
         }
-      }
 
-      // ── Minimum on-time latch ────────────────────────────────────────────────────────────────
-      // The simulation re-runs every 15 s and at borderline SoC levels the predicate can flip
-      // on/off every cycle. Once a session starts, keep it active for MinWindowMinutes before
-      // allowing the simulation to stop it — same threshold already used to prevent marginal starts.
-      // Hard-stop conditions above (Off, target reached, Emergency, Optimal-outside-PV, Optimal-SoC,
-      // Priority-SoC) always take immediate effect regardless of the latch.
-      //
-      // Bypassed when load.Mode no longer matches SessionStartMode: the latch exists to smooth
-      // over marginal predicate flips WITHIN one mode's own decision, not to keep echoing the
-      // PREVIOUS mode's schedule after the user deliberately switches modes — a manual mode
-      // change should take effect on the next cycle, not silently wait out up to MinWindowMinutes
-      // of stale ExtraLoads/PredictedEnd from before the switch.
-      if (wasActive && load.SessionStartTime.HasValue && load.Config.MinWindowMinutes > 0
-          && load.SessionStartMode == load.Mode)
-      {
-        var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
-        if (elapsedMin < load.Config.MinWindowMinutes)
+        // Real-time battery SoC gate. Priority always enforces PreferredMinSoC as the floor
+        // (regardless of EnforcePreferredSoC); PriorityPlus uses PreferredMinSoC when
+        // EnforcePreferredSoC is on, AbsoluteMinSoC when off.
+        //
+        // Without this gate, the simulation's IsOvernightMinSocOk looks at the NEXT overnight
+        // window (sunset today → sunrise tomorrow). In the pre-dawn hours that window is 18h
+        // away — the battery will have fully recharged by then, so the check always passes even
+        // while the current overnight drain pushes SoC below the required floor. This gate
+        // provides a direct live-SoC check the simulation cannot substitute for.
+        //
+        // Restarting uses a Schmitt trigger (LoadSchedulingDecision.PrioritySoCGateOk) rather
+        // than the bare floor: without hysteresis, a session that just stopped at the floor
+        // restarts on the next tiny SoC uptick and immediately drains back under the floor
+        // again. PV surplus that already covers the charge rate bypasses the wait since it
+        // won't draw the battery down further.
         {
-          var latchedLoads = load.ExtraLoads.Count > 0
-            ? load.ExtraLoads.Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW }).ToList()
-            : load.ExtraLoads;
-          SetResult(latchedLoads, true,
-            $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
-            load.PredictedEnd);
-          return;
-        }
-      }
+          int socFloor = isPriority || Battery.EnforcePreferredSoC
+            ? Battery.PreferredMinimalSoC
+            : Battery.AbsoluteMinimalSoC;
+          int currentSoC = Battery.BatterySoc;
+          int netPvW = CurrentAveragePVPower - CurrentAverageHouseLoad;
 
-      // ── Priority / PriorityPlus: stop a long-running active session at dusk ────────────────
-      // Companion to the late-start scheduling block above, for a session that was already
-      // running when the sun set. Only fires in the evening (AfterPV) — NOT in the pre-dawn
-      // window (BeforePV), which is exactly where Priority is now supposed to run, draining
-      // the battery right up to sunrise. Only reached once the min-window latch above has let a
-      // freshly started session finish its own anti-oscillation window (or there's no latch to
-      // finish) — so a session still settling in is never cut off mid-latch, but a "normal"
-      // long-running daytime charge that's still going at dusk is stopped here rather than
-      // continuing to drain the battery through the riskiest part of the night.
-      //
-      // By default this stops a PriorityPlus session exactly like Priority — that's the
-      // fallback, not a special case. The only thing that ever suspends it is genuinely,
-      // currently drawing a NEW grid-assisted charge at a cheap price: its one differentiating
-      // capability, actually in use right now rather than assumed, re-checked every cycle by
-      // re-simulating the session as currently scheduled.
-      if (load.Mode is LoadSchedulingMode.Priority or LoadSchedulingMode.PriorityPlus && wasActive &&
-          baseResult.CurrentPVPeriod == PVPeriods.AfterPV)
-      {
-        bool exemptAsGenuineCheapGrid = false;
-        if (load.Mode == LoadSchedulingMode.PriorityPlus)
-        {
-          var activeSim = RunSim(load.PredictedEnd ?? currentSlot);
-          exemptAsGenuineCheapGrid = activeSim.HasNewGridVs(baseResult) && activeSim.IsGridCheapVs(baseResult);
+          if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct, PvBypassMinSocBufferPct))
+          {
+            // Three distinct reasons the gate can block a restart — report the one that's
+            // actually true, rather than always blaming "PV insufficient" regardless of cause.
+            // Always state the REAL restart thresholds (PV-covered buffer floor, full hysteresis
+            // floor), even while SoC is still below socFloor itself — crossing socFloor alone is
+            // never enough to restart, and a message that only mentions socFloor reads as if it were.
+            int restartFloor   = socFloor + PrioritySoCHysteresisPct;
+            int pvRestartFloor = socFloor + PvBypassMinSocBufferPct;
+            string reason;
+            if (currentSoC < socFloor)
+              reason = wasActive
+                ? $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — stopping, battery depleted"
+                : $"{load.Mode}: SoC {currentSoC}% < floor {socFloor}% — waiting to recover above {socFloor}%, then {pvRestartFloor}%+ with PV or {restartFloor}%+ to restart";
+            else if (currentSoC < pvRestartFloor)
+              reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (need {pvRestartFloor}%+ before a PV-covered restart is even considered) — waiting for battery to recover";
+            else
+              reason = $"{load.Mode}: SoC {currentSoC}% < restart floor {restartFloor}% (net PV {netPvW}W < {chargeRateW}W needed) — waiting for battery to recover or PV to cover the load";
+
+            // Even though we can't start now, scan the base trajectory for when SoC is predicted
+            // to recover past the (PV-independent) restart floor, then search for a valid window
+            // from that point so the dashboard can still show a predicted start/end/SoC — same
+            // recovery-slot pattern as Optimal's ruleset. Only while stopped: a session being
+            // force-stopped by a real SoC drop has nothing to predict.
+            if (!wasActive)
+            {
+              var recoverySlot = baseResult.Slots
+                .Where(s => s.Time > currentSlot && s.SoC >= restartFloor)
+                .Select(s => s.Time)
+                .FirstOrDefault();
+
+              if (recoverySlot != default)
+              {
+                bool recoveryIsToday = recoverySlot.Date == now.Date;
+                var pvEnd = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday : baseResult.LastRelevantPVEnergyTomorrow;
+                var recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+
+                if (recoveryMax > recoverySlot)
+                {
+                  var end = FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e),
+                    sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult));
+
+                  if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
+                  {
+                    SetResult(
+                      [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
+                      false, $"{reason} — expected start ~{recoverySlot:HH:mm}", end);
+                    return;
+                  }
+                }
+              }
+            }
+
+            SetResult([], false, reason, null);
+            return;
+          }
         }
 
-        if (!exemptAsGenuineCheapGrid)
+        if (TryMinWindowLatch()) return;
+
+        // Stop a long-running active session at dusk. Companion to the late-start scheduling
+        // above, for a session that was already running when the sun set. Only fires in the
+        // evening (AfterPV) — NOT pre-dawn (BeforePV), exactly where draining right up to
+        // sunrise is the point. Only reached once the min-window latch above has let a freshly
+        // started session finish its own anti-oscillation window — a session still settling in
+        // is never cut off mid-latch, but a "normal" long-running daytime charge that's still
+        // going at dusk is stopped here rather than continuing through the riskiest part of the
+        // night.
+        if (wasActive && baseResult.CurrentPVPeriod == PVPeriods.AfterPV)
         {
           SetResult([], false,
             $"{load.Mode}: stopping at dusk to preserve overnight battery margin — resumes pre-dawn",
             null);
           return;
         }
-      }
 
-      if (load.Mode == LoadSchedulingMode.Optimal)
-      {
-        var end = FindMax(tomorrowMax, sim =>
-          sim.WillReachMaxSocToday && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
-        if (end is not null)
+        // Overnight OK, no new grid; house does NOT need to reach 100%. Uses tomorrowMax so a
+        // continuous session can extend past sunset, draining the battery down to minSoC — but
+        // the two blocks above mean this is now mainly reached during the day (continuing a
+        // session that started in daylight) or in the pre-dawn hours (the late-start block
+        // above already started it there, as late as possible before sunrise, and this just
+        // continues finding its end). Priority always enforces PreferredMinSoC (regardless of
+        // EnforcePreferredSoC); PriorityPlus may go to AbsoluteMinSoC when EnforcePreferredSoC
+        // is off.
+        var stepEnd = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult));
+        if (stepEnd is not null)
         {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
-            true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", end);
-          return;
+          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = stepEnd.Value, PowerW = chargeRateW }],
+            true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", stepEnd);
         }
       }
 
-      // Step 2: Priority — overnight OK, no new grid; house does NOT need to reach 100%.
-      // Priority and PriorityPlus. Uses tomorrowMax so a continuous session can extend past
-      // sunset, draining the battery down to minSoC — but for Priority, the two blocks above
-      // mean this step is now mainly reached during the day (continuing a session that started
-      // in daylight) or in the pre-dawn hours (the late-start block above already started it
-      // there, as late as possible before sunrise, and this step just continues finding its
-      // end). A fresh Priority session no longer starts in the evening, and an already-active
-      // one is stopped at dusk once past its own latch — so Priority's overnight draining is
-      // now concentrated into the pre-dawn stretch right before sunrise rather than spread
-      // across the whole night. PriorityPlus is unaffected — Step 3 below still runs it
-      // overnight (evening included) at cheap grid prices, which is its whole point.
-      // Priority always enforces PreferredMinSoC (regardless of EnforcePreferredSoC setting);
-      // PriorityPlus may go to AbsoluteMinSoC when EnforcePreferredSoC is off.
-      //
-      // PriorityPlus skips this step whenever Step 3 is available (base case survives overnight
-      // unassisted): !HasNewGridVs(T) implies IsGridCheapVs(T) for any T (IsGridCheapVs is
-      // vacuously true when no new grid was introduced at all), so any session Step 2 would
-      // accept, Step 3 accepts too — Step 3's search can never land on a shorter answer than
-      // Step 2's here. Running Step 2 to completion first — as before — risked exactly the bug
-      // this fixes: a short Step 2 result returning before Step 3, the step that actually
-      // differentiates PriorityPlus (tolerating cheap self-correcting grid charging), ever got
-      // to search further. PriorityPlus only falls back to this step when Step 3's own
-      // precondition fails, below.
-      bool priorityPlusUsesStep3 = load.Mode == LoadSchedulingMode.PriorityPlus && baseResult.IsOvernightMinSocOk();
-      if (load.Mode == LoadSchedulingMode.Priority ||
-          (load.Mode == LoadSchedulingMode.PriorityPlus && !priorityPlusUsesStep3))
+      // ── PriorityPlus's bonus ruleset ─────────────────────────────────────────────────────────
+      // Tried only once Priority's complete ruleset above has already concluded it can't charge
+      // this cycle. Day or night doesn't matter here, only price — see FindEarliestPriceAwareStart.
+      void RunPriorityPlusBonusRuleset()
       {
-        bool priorityEnforcePreferred = load.Mode == LoadSchedulingMode.Priority;
-        var end = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk(priorityEnforcePreferred) && !sim.HasNewGridVs(baseResult));
-        if (end is not null)
-        {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
-            true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", end);
-          return;
-        }
+        var start = FindEarliestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult);
+        if (start is null) return;
+
+        var end = start.Value.AddMinutes(durationMinutes);
+        if (!MeetsMinWindow(start.Value, end)) return;
+
+        SetResult(
+          [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
+          start.Value <= currentSlot,
+          start.Value <= currentSlot
+            ? $"Charging (PriorityPlus {load.Config.Name}: price-justified grid assist, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"
+            : $"Scheduled ~{start.Value:HH:mm} (PriorityPlus {load.Config.Name}: earliest cheap grid-assisted window)",
+          end);
       }
 
-      // Step 3: PriorityPlus — base-case overnight OK; any new grid import only at cheap prices.
-      // The EV session extends into the overnight window; what matters is that the battery would
-      // survive the night without the EV (base case), and the EV runs on cheap grid power.
-      if (priorityPlusUsesStep3)
+      // `load.ChargeNow` otherwise still holds its STALE value from the previous cycle here —
+      // e.g. left over as true from Emergency mode, or from before a manual mode switch — until
+      // some ruleset below explicitly calls SetResult. Reset it so a ruleset that falls through
+      // without deciding anything (common — e.g. Optimal's conditions just don't match) is never
+      // misread by the "if (load.ChargeNow) return;" checks below as having just decided to
+      // charge, which would stop the climb on a leftover value instead of an actual decision.
+      load.ChargeNow = false;
+
+      // The climb. For the currently selected mode, each tier at or below its number gets a
+      // turn in ascending order. ChargeNow == true stops immediately — nothing higher matters
+      // once something allows charging. Otherwise each tier runs to completion regardless of
+      // whether it "won"; the final `if (!decided)` below only fires the generic fallback if
+      // NO tier (including the mode's own ceiling) ever called SetResult at all — a tier's own
+      // "no" (even just a deferred prediction) always stands once reached.
+      if ((int)load.Mode >= (int)LoadSchedulingMode.Optimal)
       {
-        var end = FindMax(tomorrowMax, sim => sim.IsGridCheapVs(baseResult));
-        if (end is not null)
-        {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end.Value, PowerW = chargeRateW }],
-            true, $"Charging (PriorityPlus {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", end);
-          return;
-        }
+        RunOptimalRuleset();
+        if (load.ChargeNow) return;
       }
 
-      SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
+      if ((int)load.Mode >= (int)LoadSchedulingMode.Priority)
+      {
+        RunPriorityRuleset();
+        if (load.ChargeNow) return;
+      }
+
+      if ((int)load.Mode >= (int)LoadSchedulingMode.PriorityPlus)
+      {
+        RunPriorityPlusBonusRuleset();
+        if (load.ChargeNow) return;
+      }
+
+      if (!decided)
+        SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
     }
 
     /// <summary>
@@ -990,6 +1006,31 @@ namespace NetDeamon.apps.PVControl
         var candidateStart = fixedEnd.AddMinutes(-step * 15);
         if (predicate(runSimFrom(candidateStart)))
           return candidateStart;
+      }
+      return null;
+    }
+
+    /// <summary>
+    /// PriorityPlus's one additional ruleset, tried only after Priority's own complete ruleset
+    /// has already concluded it can't charge this cycle. Scans FORWARD from minStart in 15-min
+    /// steps — day or night, no PV-period gating, only price matters — for the EARLIEST
+    /// candidate where charging the EV either needs no new grid at all (vs. baseline — the same
+    /// comparison Priority's own rule already uses) or needs new grid at a price at/under the
+    /// configured threshold. Delaying the candidate changes what the simulator's NeedToCharge
+    /// logic computes for it (a different deadline, possibly a different, cheaper slot), which
+    /// is why advancing and re-simulating is necessary rather than checking once. Bounded by
+    /// horizonEnd (the price list's own published horizon) — once published prices run out,
+    /// there's nothing left to evaluate, so the scan gives up and returns null.
+    /// </summary>
+    private static DateTime? FindEarliestPriceAwareStart(
+      DateTime minStart, DateTime horizonEnd, int durationMinutes,
+      Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline)
+    {
+      for (var candidate = minStart; candidate <= horizonEnd; candidate = candidate.AddMinutes(15))
+      {
+        var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
+        if (!sim.HasNewGridVs(baseline) || sim.IsGridCheapVs(baseline))
+          return candidate;
       }
       return null;
     }

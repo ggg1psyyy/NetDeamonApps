@@ -76,7 +76,7 @@ public static class EnergySimulator
       var needToCharge = ComputeNeedToCharge(currentSoc, baseFutureSoC, currentMode, input, slotTime);
 
       // --- Step 3: pick inverter mode ---
-      var newMode = ComputeMode(currentMode, needToCharge, input, slotTime, currentSoc,
+      var newMode = ComputeMode(currentMode, needToCharge, input, slotTime, endSlot, currentSoc,
         baseFutureSoC, pvWh, totalLoadWh);
       currentMode = newMode;
 
@@ -88,38 +88,7 @@ public static class EnergySimulator
       if (newMode.Mode == InverterModes.force_charge &&
           (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
            newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
-      {
-        int floorSoc = input.GetEffectiveMinSoC();
-        // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
-        // not just the first floor-crossing. Using EstimatedSoc (first-crossing value) leaves
-        // the base trajectory still declining past that point, so needCharge keeps firing every
-        // few slots at progressively more expensive windows until dawn.
-        //
-        // Strategy: find the lowest point of the base trajectory between now and the next PV peak.
-        // chargeTarget = floorSoc + (currentSoc - baseTrough) + buffer
-        //             = currentSoc + (floorSoc - baseTrough) + buffer
-        // After charging, the base trough shifts up by the same amount, landing above the floor.
-        var pvPeak = baseFutureSoC.FirstMaxOrDefault();
-        // Only use the trough window if PV actually recovers above the floor (avoids edge case
-        // where base trajectory is always declining — no sun — where pvPeak.Key equals the first slot).
-        var troughWindowEnd = (pvPeak.Key != default && pvPeak.Value > floorSoc + 10)
-          ? pvPeak.Key
-          : slotTime.AddHours(24);
-        // baseFutureSoC clamps at 0 % (ComputeBaseFutureSoC), so once the no-charging trajectory
-        // reaches empty it just sits there instead of showing how much FURTHER it would have
-        // dropped — silently hiding the true depth of the deficit. Sizing off that clamped value
-        // charges only enough to lift the visible (already-floored) trough to floorSoc + buffer,
-        // which under-corrects whenever the real, unclamped deficit is larger — so the very next
-        // slot finds the same kind of clamped-at-zero trough again and charges a bit more, and
-        // again, instead of covering the whole remaining deficit in one shot. Recompute the same
-        // window WITHOUT the lower clamp to find the true minimum.
-        var cappedTroughWindowEnd = troughWindowEnd < endSlot ? troughWindowEnd : endSlot;
-        var unclampedTrough = ComputeBaseFutureSoC(currentSoc, slotTime, cappedTroughWindowEnd, input, clampAtZero: false)
-          .FirstMinOrDefault();
-        int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : needToCharge.EstimatedSoc;
-        int deficit = Math.Max(0, floorSoc - baseTrough);
-        chargeTargetSocPercent = Math.Min(100, currentSoc + deficit + 2);
-      }
+        chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input);
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent);
 
       slots.Add(new SimulationSlot(slotTime, currentSoc, newMode, pvWh, loadWh, extraLoadWh, battChargeWh, battDischargeWh, gridImportWh, gridExportWh));
@@ -131,6 +100,43 @@ public static class EnergySimulator
     }
 
     return new SimulationResult(slots, input);
+  }
+
+  // ── NeedToCharge charge target ──────────────────────────────────────────────────────────
+  private static int DeficitChargeTargetSoc(
+    int currentSoc, DateTime slotTime, DateTime endSlot,
+    Dictionary<DateTime, int> baseFutureSoC, NeedToChargeResult need, SimulationInput input)
+  {
+    int floorSoc = input.GetEffectiveMinSoC();
+    // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
+    // not just the first floor-crossing. Using EstimatedSoc (first-crossing value) leaves
+    // the base trajectory still declining past that point, so needCharge keeps firing every
+    // few slots at progressively more expensive windows until dawn.
+    //
+    // Strategy: find the lowest point of the base trajectory between now and the next PV peak.
+    // chargeTarget = floorSoc + (currentSoc - baseTrough) + buffer
+    //             = currentSoc + (floorSoc - baseTrough) + buffer
+    // After charging, the base trough shifts up by the same amount, landing above the floor.
+    var pvPeak = baseFutureSoC.FirstMaxOrDefault();
+    // Only use the trough window if PV actually recovers above the floor (avoids edge case
+    // where base trajectory is always declining — no sun — where pvPeak.Key equals the first slot).
+    var troughWindowEnd = (pvPeak.Key != default && pvPeak.Value > floorSoc + 10)
+      ? pvPeak.Key
+      : slotTime.AddHours(24);
+    // baseFutureSoC clamps at 0 % (ComputeBaseFutureSoC), so once the no-charging trajectory
+    // reaches empty it just sits there instead of showing how much FURTHER it would have
+    // dropped — silently hiding the true depth of the deficit. Sizing off that clamped value
+    // charges only enough to lift the visible (already-floored) trough to floorSoc + buffer,
+    // which under-corrects whenever the real, unclamped deficit is larger — so the very next
+    // slot finds the same kind of clamped-at-zero trough again and charges a bit more, and
+    // again, instead of covering the whole remaining deficit in one shot. Recompute the same
+    // window WITHOUT the lower clamp to find the true minimum.
+    var cappedTroughWindowEnd = troughWindowEnd < endSlot ? troughWindowEnd : endSlot;
+    var unclampedTrough = ComputeBaseFutureSoC(currentSoc, slotTime, cappedTroughWindowEnd, input, clampAtZero: false)
+      .FirstMinOrDefault();
+    int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : need.EstimatedSoc;
+    int deficit = Math.Max(0, floorSoc - baseTrough);
+    return Math.Min(100, currentSoc + deficit + 2);
   }
 
   // ── Base future SoC ─────────────────────────────────────────────────────────────────────
@@ -226,7 +232,7 @@ public static class EnergySimulator
 
   private static InverterState ComputeMode(
     InverterState currentMode, NeedToChargeResult need, SimulationInput input,
-    DateTime now, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC,
+    DateTime now, DateTime endSlot, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC,
     int pvWhSlot, int totalLoadWhSlot)
   {
     float importPriceNow = input.ImportPrices.GetPrice(now);
@@ -383,17 +389,20 @@ public static class EnergySimulator
       }
     }
 
-    // ── NeedToCharge → force charge at best available price window ────────────────────────
+    // ── NeedToCharge → force charge in the cheapest quarters before the deadline ──────────
     // If the base SoC forecast predicts we will go below minimum and PV won't rescue us,
-    // we must buy electricity. We pick the cheapest available hour before the critical time.
-    // Exception: if the NEXT hour is even cheaper, hold off (importing now would just cost more).
+    // we must buy electricity. The charge is sized to the deficit (DeficitChargeTargetSoc) and
+    // placed in the N cheapest quarters of the search window, N = quarters needed at the max
+    // charge rate. Waiting for the single cheapest quarter and charging forward from it instead
+    // spilled a larger deficit into the expensive quarters after a cheap band, while equally
+    // cheap quarters before that cheapest one went unused.
     if (need.NeedToCharge)
     {
-      // Choose the search window for the cheapest charge slot.
+      // Choose the search window for the cheapest charge quarters.
       //
       // Two problems with always using deadline-constrained GetBestChargeWindow:
       //   1. LatestChargeTime collapses to "now" when the base SoC first touches the floor
-      //      → bestChargeWindow = current (expensive) hour → premature force_charge.
+      //      → only the current (expensive) quarter is eligible → premature force_charge.
       //   2. A fully unconstrained search finds a global price minimum that could be tomorrow
       //      afternoon when PV is already generating — the simulation waits for that distant
       //      minimum and skips the real overnight cheap window.
@@ -414,55 +423,41 @@ public static class EnergySimulator
         .DefaultIfEmpty(now.AddHours(24))
         .First();
 
-      PriceTableEntry bestChargeWindow;
-      if (need.LatestChargeTime <= pvTakeover)
-      {
+      // Counting entries as quarters requires quarter-hourly entries; live prices already are
+      // (PriceManager normalizes them), but SimulationInput also accepts hourly lists.
+      var upcoming = input.ImportPrices.NormalizeToQuarterHourly().Where(p => p.EndTime > now).ToList();
+      var window = need.LatestChargeTime <= pvTakeover
         // Battery will hit minimum before today's PV recovery → must charge before solar arrives.
-        // `now` is always on an exact quarter-hour slot boundary, and PriceList entries are
-        // ALWAYS normalized to quarter-hourly granularity too (PriceList.NormalizeToQuarterHourly
-        // — an hourly-native source becomes four identical-price 15-min entries, it's never left
-        // as a single hour-spanning entry). So searching from `now` itself is correct and never
-        // lets an already-elapsed slot win; flooring to the top of the calendar hour here would
-        // be WRONG for this always-quarter-hourly data — it would let an already-elapsed
-        // same-hour slot outrank the current one, and since `inWindow` below requires
-        // `now < bestChargeWindow.EndTime`, an elapsed 15-min slot's EndTime (e.g. now itself)
-        // would immediately fail that check, silently preventing force_charge from ever
-        // triggering through this path. (An earlier revision of this comment incorrectly assumed
-        // hourly-spanning price entries reached this code — they don't.)
-        bestChargeWindow = input.ImportPrices
-          .Where(p => p.StartTime >= now && p.StartTime < pvTakeover)
-          .OrderBy(p => p.Price)
-          .FirstOrDefault();
-        if (bestChargeWindow.StartTime == default)
-          bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now); // safety fallback
-      }
-      else
-      {
+        ? upcoming.Where(p => p.StartTime < pvTakeover).ToList()
         // Battery hits minimum after today's PV window (e.g. tomorrow) → broader search up to
         // LatestChargeTime naturally includes cheap afternoon hours without reaching tomorrow PV.
-        bestChargeWindow = input.ImportPrices.GetBestChargeWindow(need, now);
-      }
+        : upcoming.Where(p => p.StartTime <= need.LatestChargeTime).ToList();
+      if (window.Count == 0)
+        window = upcoming.Where(p => p.StartTime <= need.LatestChargeTime).ToList(); // safety fallback
 
-      // Simulation slots are always on exact quarter-hour boundaries, so the ±30-second
-      // guard used by the live system (to avoid triggering before the price feed updates)
-      // would skip the first slot of every window (02:00 > 02:00:30 is false).
-      // Use exact boundary comparison instead.
-      bool inWindow = now >= bestChargeWindow.StartTime && now < bestChargeWindow.EndTime;
+      int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
+      int maxChargeWh = Math.Max(1, input.MaxChargePowerAmps * ChargeVoltage / 4);
+      int neededWh = Math.Max(0, targetSoc - simulatedSoc) * input.BatteryCapacityWh / 100;
+      int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
+
+      // Always charge in the single cheapest quarter (re-picked every slot, so the charge runs
+      // forward from it while it stays the cheapest). On top of that, charge in the N cheapest
+      // quarters that are under ForceChargeMaxPrice — but only those: an over-threshold
+      // quarter ahead of the cheapest one isn't worth it, since holding the floor with
+      // grid_only buys the load at that same price anyway without filling the battery before
+      // the cheap quarter. Price ties go to the earlier quarter. Exact boundary comparison:
+      // simulation slots are always on quarter-hour boundaries.
+      bool IsNow(PriceTableEntry p) => now >= p.StartTime && now < p.EndTime;
+      var cheapest = window.OrderBy(p => p.Price).ThenBy(p => p.StartTime).ToList();
+      bool inWindow = (cheapest.Count > 0 && IsNow(cheapest[0]))
+        || cheapest.Where(p => p.Price <= input.ForceChargeMaxPrice).Take(quartersNeeded).Any(IsNow);
       // Don't start over 96 % (too slow); allow up to 98 % once already charging
       bool socOk = currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
 
+      // No "next hour is cheaper, wait" deferral here: a cheaper next hour is already among
+      // the chosen quarters, and deferring a chosen quarter just pushes the charge past them.
       if (inWindow && socOk)
       {
-        float importPriceNextHour = input.ImportPrices.GetPrice(now.AddHours(1));
-        // No deadline constraint on deferral — the floor is held by grid_only anyway.
-        // (In practice this rarely fires since bestChargeWindow IS the cheapest hour.)
-        bool canWaitForNextHour = importPriceNow > importPriceNextHour;
-        if (canWaitForNextHour)
-        {
-          int effectiveFloor = input.GetEffectiveMinSoC();
-          var mode = simulatedSoc <= effectiveFloor ? InverterModes.grid_only : InverterModes.normal;
-          return new InverterState(mode, ForceChargeReasons.NextHourCheaper);
-        }
         var reason = need.EstimatedSoc <= input.AbsoluteMinSocPercent + 2
           ? ForceChargeReasons.GoingUnderAbsoluteMinima
           : ForceChargeReasons.GoingUnderPreferredMinima;
