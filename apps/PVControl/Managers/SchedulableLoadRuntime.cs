@@ -111,9 +111,37 @@ namespace NetDeamon.apps.PVControl.Managers
       }
     }
 
+    // ── Learned characteristics (start from config, persisted in HA, editable there) ────────
+    /// <summary>Number entity holding <see cref="EnergyPerLevelKwh"/>. Always auto-created in HA.</summary>
+    public Entity? EnergyPerLevelEntity { get; set; }
+
+    /// <summary>Number entity holding <see cref="LearnedPowerW"/>. Always auto-created in HA.</summary>
+    public Entity? ChargePowerEntity { get; set; }
+
+    /// <summary>
+    /// Measured energy per level unit (kWh, e.g. per % SoC), on the meter's side — charger
+    /// losses included. Starts at Config.EnergyPerLevelUnitKwh; learned while running.
+    /// </summary>
+    public float EnergyPerLevelKwh { get; set; }
+
+    /// <summary>Typical measured power while running (W). Starts at Config.AvgPowerW; learned while running.</summary>
+    public int LearnedPowerW { get; set; }
+
+    public LevelEnergyLearner EnergyLearner { get; } = new();
+
+    /// <summary>When LearnedPowerW was last updated from a measurement (for its time-based average).</summary>
+    public DateTime? LastPowerLearnTime { get; set; }
+
+    /// <summary>
+    /// Exponential moving average with time constant <paramref name="tauSeconds"/>: independent of
+    /// how often the power sensor reports.
+    /// </summary>
+    public static int LearnPower(int stored, int measured, double secondsSinceLast, double tauSeconds = 600) =>
+      (int)Math.Round(stored + (measured - stored) * (1 - Math.Exp(-Math.Max(0, secondsSinceLast) / tauSeconds)));
+
     /// <summary>
     /// Effective power draw in W: running average of actual power if above MinActivePowerW,
-    /// otherwise falls back to AvgPowerW from config.
+    /// otherwise the learned typical power.
     /// </summary>
     public int EffectivePowerW
     {
@@ -124,13 +152,16 @@ namespace NetDeamon.apps.PVControl.Managers
           int avg = PowerAverage.GetAverage();
           if (avg > Config.MinActivePowerW) return avg;
         }
-        return Config.AvgPowerW;
+        return LearnedPowerW;
       }
     }
 
+    /// <summary>True while the load measurably draws power.</summary>
+    public bool IsDrawingPower => PowerAverage is not null && PowerAverage.GetAverage() > Config.MinActivePowerW;
+
     /// <summary>Energy still needed to reach TargetLevel, in Wh.</summary>
     public int EnergyNeededWh =>
-      (int)Math.Max(0, (TargetLevel - CurrentLevel) * Config.EnergyPerLevelUnitKwh * 1000);
+      (int)Math.Max(0, (TargetLevel - CurrentLevel) * EnergyPerLevelKwh * 1000);
 
     /// <summary>Estimated duration to reach TargetLevel at EffectivePowerW, in minutes.</summary>
     public int DurationMinutes
@@ -194,7 +225,12 @@ namespace NetDeamon.apps.PVControl.Managers
     /// </summary>
     public List<ExtraLoad> PlannedSessions { get; internal set; } = [];
 
-    public SchedulableLoadRuntime(SchedulableLoadConfig config) => Config = config;
+    public SchedulableLoadRuntime(SchedulableLoadConfig config)
+    {
+      Config = config;
+      EnergyPerLevelKwh = config.EnergyPerLevelUnitKwh;
+      LearnedPowerW = config.AvgPowerW;
+    }
 
     /// <summary>HA entity-ID slug: lowercase Name with spaces replaced by underscores.</summary>
     public string Slug => Config.Name.ToLowerInvariant().Replace(' ', '_');

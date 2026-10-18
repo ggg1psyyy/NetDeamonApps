@@ -220,6 +220,12 @@ namespace NetDeamon.apps.PVControl
           if (load.EnforceReadyByEntity is not null)
             (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnforceReadyByEntity.EntityId).ConfigureAwait(false))
               .SubscribeAsync(async state => await UserStateChanged(load.EnforceReadyByEntity, state));
+          if (load.EnergyPerLevelEntity is not null)
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnergyPerLevelEntity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.EnergyPerLevelEntity, state));
+          if (load.ChargePowerEntity is not null)
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ChargePowerEntity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(load.ChargePowerEntity, state));
 
           // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
           // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
@@ -329,6 +335,20 @@ namespace NetDeamon.apps.PVControl
             await PVCC_EntityManager.SetStateAsync(entity.EntityId, echoed);
           }
         }
+        // Hand-set learned values: take them as the new starting point for further learning.
+        if (load.EnergyPerLevelEntity is not null && entity.EntityId == load.EnergyPerLevelEntity.EntityId
+            && float.TryParse(newState, NumberStyles.Any, CultureInfo.InvariantCulture, out float perLevel) && perLevel > 0)
+        {
+          load.EnergyPerLevelKwh = perLevel;
+          load.EnergyLearner.Reset();
+          await PVCC_EntityManager.SetStateAsync(entity.EntityId, perLevel.ToString("F3", CultureInfo.InvariantCulture));
+        }
+        if (load.ChargePowerEntity is not null && entity.EntityId == load.ChargePowerEntity.EntityId
+            && float.TryParse(newState, NumberStyles.Any, CultureInfo.InvariantCulture, out float power) && power > 0)
+        {
+          load.LearnedPowerW = (int)Math.Round(power);
+          await PVCC_EntityManager.SetStateAsync(entity.EntityId, load.LearnedPowerW.ToString(CultureInfo.InvariantCulture));
+        }
         if (load.EnforceReadyByEntity is not null && entity.EntityId == load.EnforceReadyByEntity.EntityId)
         {
           bool on = newState.Equals("on", StringComparison.OrdinalIgnoreCase);
@@ -423,8 +443,8 @@ namespace NetDeamon.apps.PVControl
         // is often capped short of the full target (PV window, price, SoC gates), so echoing
         // TargetLevel would overstate the real outcome in exactly the cases this is meant to show.
         float plannedWh = allSessions.Sum(e => (float)(e.EndTime - e.StartTime).TotalHours * e.PowerW);
-        float? chargeEndPredictedSoc = allSessions.Count > 0 && load.Config.EnergyPerLevelUnitKwh > 0
-          ? load.CurrentLevel + plannedWh / 1000f / load.Config.EnergyPerLevelUnitKwh
+        float? chargeEndPredictedSoc = allSessions.Count > 0 && load.EnergyPerLevelKwh > 0
+          ? load.CurrentLevel + plannedWh / 1000f / load.EnergyPerLevelKwh
           : null;
         var chargeEndPredicted = load.PlannedSessions.Count > 0 ? load.PlannedSessions[^1].EndTime : load.PredictedEnd;
         var attr_load = new
@@ -440,6 +460,8 @@ namespace NetDeamon.apps.PVControl
           charge_end_predicted = chargeEndPredicted?.ToISO8601() ?? "n/a",
           charge_end_predicted_soc = chargeEndPredictedSoc?.ToString("F0") ?? "n/a",
           ready_by = load.ReadyByTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? "off",
+          energy_per_level_kwh = MathF.Round(load.EnergyPerLevelKwh, 3),
+          learned_power_w = load.LearnedPowerW,
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           charge_timeline = chargeTimeline,
         };
@@ -1130,6 +1152,28 @@ namespace NetDeamon.apps.PVControl
           else
             PVCC_Logger.LogWarning("TotalCost for {Name} reset to 0 (persisted value {Val} out of range)", load.Config.Name, savedEur);
         }
+
+        // Learned characteristics: created with the YAML values, then the persisted (learned or
+        // hand-set) value wins on every later start.
+        load.EnergyPerLevelEntity = await RegisterSensor(
+          $"number.pv_control_{load.Slug}_energy_per_level",
+          $"{load.Config.Name} - Energy per {load.Config.LevelUnit}",
+          null, "mdi:lightning-bolt",
+          addConfig: new { min = 0.001, max = 10, step = 0.001, mode = "box", unit_of_measurement = $"kWh/{load.Config.LevelUnit}" },
+          defaultValue: load.Config.EnergyPerLevelUnitKwh.ToString("F3", CultureInfo.InvariantCulture),
+          reRegister: reset);
+        if (load.EnergyPerLevelEntity.TryGetStateValue(out float savedPerLevel, numericalGetBaseValue: false) && savedPerLevel > 0)
+          load.EnergyPerLevelKwh = savedPerLevel;
+
+        load.ChargePowerEntity = await RegisterSensor(
+          $"number.pv_control_{load.Slug}_charge_power",
+          $"{load.Config.Name} - Charge Power",
+          "power", "mdi:flash",
+          addConfig: new { min = 0, max = 50000, step = 10, mode = "box", unit_of_measurement = "W" },
+          defaultValue: load.Config.AvgPowerW.ToString(CultureInfo.InvariantCulture),
+          reRegister: reset);
+        if (load.ChargePowerEntity.TryGetStateValue(out int savedPower, numericalGetBaseValue: false) && savedPower > 0)
+          load.LearnedPowerW = savedPower;
       }
 
       return true;

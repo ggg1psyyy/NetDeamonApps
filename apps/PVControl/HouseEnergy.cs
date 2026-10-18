@@ -162,6 +162,41 @@ namespace NetDeamon.apps.PVControl
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
       .Sum(l => l.PowerAverage!.GetAverage());
 
+    /// <summary>Updates the load's learned typical power while it draws; persisted when it moves ≥ 10 W.</summary>
+    private static async Task LearnPowerAsync(SchedulableLoadRuntime load)
+    {
+      var now = DateTime.Now;
+      if (!load.IsDrawingPower)
+      {
+        load.LastPowerLearnTime = null;
+        load.EnergyLearner.Reset();
+        return;
+      }
+      if (load.LastPowerLearnTime is { } last)
+      {
+        int learned = SchedulableLoadRuntime.LearnPower(load.LearnedPowerW, load.PowerAverage!.GetAverage(), (now - last).TotalSeconds);
+        bool persist = Math.Abs(learned / 10 - load.LearnedPowerW / 10) > 0;
+        load.LearnedPowerW = learned;
+        if (persist && load.ChargePowerEntity is not null)
+          await PVCC_EntityManager.SetStateAsync(load.ChargePowerEntity.EntityId, learned.ToString(CultureInfo.InvariantCulture));
+      }
+      load.LastPowerLearnTime = now;
+    }
+
+    /// <summary>Updates the load's learned energy per level unit from the energy counter and level sensor.</summary>
+    private static async Task LearnEnergyPerLevelAsync(SchedulableLoadRuntime load)
+    {
+      if (!load.IsDrawingPower || load.Config.CurrentLevelEntity is null
+          || !load.Config.CurrentLevelEntity.TryGetStateValue(out float level))
+        return;
+      if (load.EnergyLearner.Observe(level, load.TotalEnergyKwh, load.EnergyPerLevelKwh) is not { } estimate)
+        return;
+      bool persist = MathF.Round(estimate, 3) != MathF.Round(load.EnergyPerLevelKwh, 3);
+      load.EnergyPerLevelKwh = estimate;
+      if (persist && load.EnergyPerLevelEntity is not null)
+        await PVCC_EntityManager.SetStateAsync(load.EnergyPerLevelEntity.EntityId, estimate.ToString("F3", CultureInfo.InvariantCulture));
+    }
+
     private async Task UserStateChanged(Entity entity)
     {
       if (PVCC_Config.CurrentImportPriceEntities.Any(e => e.EntityId == entity.EntityId)
@@ -207,6 +242,7 @@ namespace NetDeamon.apps.PVControl
       {
         if (schedLoad.Config.ActualPowerEntity!.TryGetStateValue(out float p))
           schedLoad.PowerAverage!.AddValue((int)Math.Round(p));
+        await LearnPowerAsync(schedLoad);
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualEnergyEntity is not null
         && entity.EntityId == l.Config.ActualEnergyEntity!.EntityId))
@@ -214,8 +250,8 @@ namespace NetDeamon.apps.PVControl
         if (!schedLoad.Config.ActualEnergyEntity!.TryGetStateValue(out float energy, numericalGetBaseValue: false))
           continue;
         float diff = energy - schedLoad.LastEnergySum;
-        // Clamp: a single delta larger than 2 h at AvgPowerW is a sensor glitch.
-        float maxDiff = schedLoad.Config.AvgPowerW * 2f / 1000f;
+        // Clamp: a single delta larger than 2 h at the load's typical power is a sensor glitch.
+        float maxDiff = Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW) * 2f / 1000f;
         if (diff > maxDiff)
         {
           PVCC_Logger.LogWarning("Ignoring implausibly large energy delta {Diff:F3} kWh (>{Max:F3}) for {Name} — likely sensor glitch",
@@ -224,7 +260,7 @@ namespace NetDeamon.apps.PVControl
         else if (diff > 0)
         {
           // Decompose energy source: PV direct (free) → grid direct → battery (avg cost).
-          int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.Config.AvgPowerW;
+          int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.LearnedPowerW;
           float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad);
           float pvFraction      = schedPowerW > 0 ? Math.Min(1f, pvSurplusW / schedPowerW) : 0f;
           float remainFraction  = 1f - pvFraction;
@@ -241,6 +277,7 @@ namespace NetDeamon.apps.PVControl
             await PVCC_EntityManager.SetStateAsync(schedLoad.TotalEnergyKwhEntity.EntityId, schedLoad.TotalEnergyKwh.ToString(CultureInfo.InvariantCulture));
           if (schedLoad.TotalCostEurEntity is not null)
             await PVCC_EntityManager.SetStateAsync(schedLoad.TotalCostEurEntity.EntityId, schedLoad.TotalCostEur.ToString(CultureInfo.InvariantCulture));
+          await LearnEnergyPerLevelAsync(schedLoad);
         }
         schedLoad.LastEnergySum = energy;
       }
@@ -417,6 +454,11 @@ namespace NetDeamon.apps.PVControl
       var now = DateTime.Now;
       var currentSlot = now.RoundToNearestQuarterHour();
       bool wasActive = load.ChargeNow;
+      // Last cycle's final result. Rulesets lower in the climb may SetResult before the latch or
+      // the PriorityPlus scan run (e.g. Optimal's "scheduled tomorrow" outside PV hours), so
+      // those must read these copies, not load.ExtraLoads/PredictedEnd as they are by then.
+      var previousLoads = load.ExtraLoads;
+      var previousEnd = load.PredictedEnd;
       load.PlannedSessions = [];
 
       // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
@@ -441,15 +483,15 @@ namespace NetDeamon.apps.PVControl
           (!load.Config.AvailabilityEntity.TryGetStateValue(out bool available) || !available))
       { SetResult([], false, $"{load.Config.Name} not available (not present/plugged in)", null); return; }
 
-      if (load.Config.CurrentLevelEntity is null || load.Config.EnergyPerLevelUnitKwh <= 0)
-      { SetResult([], false, "CurrentLevelEntity or EnergyPerLevelUnitKwh not configured", null); return; }
+      if (load.Config.CurrentLevelEntity is null || load.EnergyPerLevelKwh <= 0)
+      { SetResult([], false, "CurrentLevelEntity or energy per level not configured", null); return; }
 
       if (load.CurrentLevel >= load.TargetLevel)
       { SetResult([], false, $"Target reached ({load.CurrentLevel:F0}{load.Config.LevelUnit} ≥ {load.TargetLevel:F0}{load.Config.LevelUnit})", null); return; }
 
       int chargeRateW = load.EffectivePowerW;
       if (chargeRateW <= 0)
-      { SetResult([], false, "EffectivePowerW is 0 — check AvgPowerW config", null); return; }
+      { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerW config", null); return; }
 
       int energyNeededWh = load.EnergyNeededWh;
       int durationMinutes = energyNeededWh * 60 / chargeRateW;
@@ -581,12 +623,12 @@ namespace NetDeamon.apps.PVControl
           var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
           if (elapsedMin < load.Config.MinWindowMinutes)
           {
-            var latchedLoads = load.ExtraLoads.Count > 0
-              ? load.ExtraLoads.Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW }).ToList()
-              : load.ExtraLoads;
+            var latchedLoads = previousLoads
+              .Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW })
+              .ToList();
             SetResult(latchedLoads, true,
               $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
-              load.PredictedEnd);
+              previousEnd);
             return true;
           }
         }
@@ -901,9 +943,11 @@ namespace NetDeamon.apps.PVControl
       // this cycle. Day or night doesn't matter here, only price — see FindBestPriceAwareStart.
       void RunPriorityPlusBonusRuleset()
       {
-        // A running session is never stopped just to wait for a cheaper start later.
+        // A running session is never stopped just to wait for a cheaper start later. A planned
+        // later start from last cycle stays preferred (see FindBestPriceAwareStart).
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult,
-          readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction);
+          readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
+          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime);
         if (planned is not { } p) return;
 
         var end = p.Start.AddMinutes(durationMinutes);

@@ -46,11 +46,18 @@ public static class SessionPlanner
   /// when none passes. With a deadline, only starts that finish by it are considered, and the
   /// deadline beats the price threshold: if none passes, the cheapest start that still finishes
   /// in time is taken, and if even starting now is too late, now.
+  ///
+  /// <paramref name="preferredStart"/> (last cycle's planned start) makes the plan sticky: the
+  /// live inputs move every cycle, so a later start's saving hovers around the threshold and the
+  /// choice would otherwise flip — and the first flip to "now" commits the session. The
+  /// preferred start is kept while it still passes and is cheaper than the earliest start, unless
+  /// another start beats it by the minimum saving.
   /// </summary>
   public static PlannedStart? FindBestPriceAwareStart(
     DateTime minStart, DateTime horizonEnd, int durationMinutes,
     Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline,
-    DateTime? deadline = null, float minSavingFraction = DefaultMinSavingFraction)
+    DateTime? deadline = null, float minSavingFraction = DefaultMinSavingFraction,
+    DateTime? preferredStart = null)
   {
     var lastStart = deadline is null ? horizonEnd : deadline.Value.AddMinutes(-durationMinutes);
     if (deadline is not null && lastStart < minStart)
@@ -65,7 +72,7 @@ public static class SessionPlanner
     var lastFullStart = simEnd.AddMinutes(-durationMinutes - (deadline is null ? ConsequenceMarginHours * 60 : 0));
     if (lastStart > lastFullStart) lastStart = lastFullStart < minStart ? minStart : lastFullStart;
 
-    (DateTime Start, float Cost)? earliest = null, cheapest = null, cheapestAny = null;
+    (DateTime Start, float Cost)? earliest = null, cheapest = null, cheapestAny = null, preferred = null;
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
     {
       var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
@@ -75,10 +82,15 @@ public static class SessionPlanner
 
       earliest ??= (candidate, cost);
       if (cheapest is null || cost < cheapest.Value.Cost) cheapest = (candidate, cost);
+      if (candidate == preferredStart) preferred = (candidate, cost);
     }
 
     if (earliest is { } e && cheapest is { } c)
     {
+      if (preferred is { } p && p.Start != e.Start && e.Cost > 0 && p.Cost < e.Cost
+          && c.Cost > p.Cost - minSavingFraction * e.Cost)
+        return new PlannedStart(p.Start, StartChoice.Cheaper, (e.Cost - p.Cost) / e.Cost * 100);
+
       float saving = e.Cost - c.Cost;
       return e.Cost > 0 && saving >= minSavingFraction * e.Cost
         ? new PlannedStart(c.Start, StartChoice.Cheaper, saving / e.Cost * 100)

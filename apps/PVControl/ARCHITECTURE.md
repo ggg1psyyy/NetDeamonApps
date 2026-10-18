@@ -228,6 +228,21 @@ timeline, not inverter modes: a load can add import to a slot the baseline alrea
 the grid (force_charge, or grid_only holding the battery at its floor while waiting for the
 charge window), and that added import is the load's own grid use at that slot's price.
 
+**Learned load characteristics** (`number.pv_control_<load>_energy_per_level`,
+`number.pv_control_<load>_charge_power`): both start from the YAML values (`EnergyPerLevelUnitKwh`,
+`AvgPowerW`), are learned while the load draws power (`ActualPowerEntity` above
+`MinActivePowerW`), persisted in those entities, and can be set by hand (e.g. new wallbox).
+Energy per level is meter-side (charger losses included): `LevelEnergyLearner` measures kWh
+between observed whole level steps (≥ 3 levels) and blends it with the stored value weighted as
+20 levels. Charge power is a 10-minute time-constant average of the measured power and replaces
+`AvgPowerW` as the planning power when the load isn't running.
+
+The min-on latch and the PriorityPlus scan read last cycle's session (`previousLoads`/
+`previousEnd`, captured at the start of `DecideLoadWindow`), never `load.ExtraLoads` mid-climb:
+a lower ruleset may already have overwritten it this cycle (Optimal's "scheduled tomorrow").
+The scan prefers last cycle's planned start while it stays cheaper than the earliest start, so
+forecast noise can't flip a deferred plan to "start now" for a single cycle.
+
 Session bookkeeping (`SessionStartTime`/`Mode`/`Settings`, which the min-on latch reads) is
 updated once per cycle from the FINAL decision (`FindLoadWindow` wraps `DecideLoadWindow`), so a
 lower ruleset's "no" that a higher one overrides in the same cycle doesn't end the session.

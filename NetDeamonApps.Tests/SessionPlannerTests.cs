@@ -144,12 +144,47 @@ public class SessionPlannerTests : TestBase
   static readonly DateTime EveningFrom = new(2026, 10, 18, 18, 0, 0);
   const int TwoHours = 120;
 
-  static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice)
+  static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice, DateTime? preferred = null)
   {
     var input = Input(12, price, maxPrice);
     var baseline = EnergySimulator.Simulate(input);
     return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), TwoHours,
-      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline);
+      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, preferredStart: preferred);
+  }
+
+  // Sticky plan: live inputs move every cycle, so a planned start's saving hovers around the
+  // threshold. On 2026-10-18 a 23:15 plan (~2 % cheaper) flipped to "start now" for one cycle,
+  // which committed the session.
+
+  [Fact]
+  public void PreferredStart_SlightlyCheaperThanEarliest_IsKept()
+  {
+    // 0.5 % cheaper: on its own not worth waiting for, but it is last cycle's plan.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.2985f : 0.30f, preferred: CheapFrom);
+
+    Assert.NotNull(p);
+    Assert.Equal(CheapFrom, p.Value.Start);
+    Assert.Equal(StartChoice.Cheaper, p.Value.Choice);
+  }
+
+  [Fact]
+  public void PreferredStart_NoLongerCheaperThanEarliest_StartsEarliest()
+  {
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.31f : 0.30f, preferred: CheapFrom);
+
+    Assert.NotNull(p);
+    Assert.Equal(EveningFrom, p.Value.Start);
+    Assert.Equal(StartChoice.Earliest, p.Value.Choice);
+  }
+
+  [Fact]
+  public void PreferredStart_ClearlyBeatenByAnotherStart_Switches()
+  {
+    var laterBand = CheapFrom.AddHours(2);
+    var p = Best(t => t >= laterBand && t < CheapTo ? 0.20f : t >= CheapFrom && t < laterBand ? 0.29f : 0.30f, preferred: CheapFrom);
+
+    Assert.NotNull(p);
+    Assert.Equal(laterBand, p.Value.Start);
   }
 
   [Fact]
