@@ -163,6 +163,13 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>ExtraLoad windows found by the last FindLoadWindow call.</summary>
     public List<ExtraLoad> ExtraLoads { get; internal set; } = [];
 
+    /// <summary>
+    /// Follow-up sessions planned after <see cref="ExtraLoads"/> until the target level is
+    /// reached (PriorityPlus only). Preview for HA attributes — not part of the control
+    /// simulation; each cycle re-decides ChargeNow on its own.
+    /// </summary>
+    public List<ExtraLoad> PlannedSessions { get; internal set; } = [];
+
     public SchedulableLoadRuntime(SchedulableLoadConfig config) => Config = config;
 
     /// <summary>HA entity-ID slug: lowercase Name with spaces replaced by underscores.</summary>

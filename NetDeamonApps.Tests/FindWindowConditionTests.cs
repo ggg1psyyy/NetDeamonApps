@@ -596,18 +596,13 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// Confirms the "piggy-back on an already-active cheapest-period force charge" case needs no
-  /// special-case code. Empirically, EnergySimulator's cheapest-period branch targets a fixed
-  /// house-battery SoC (ForceChargeTargetSocPercent) at a FIXED charge rate — its wall-clock
-  /// duration doesn't depend on how much else (e.g. an EV) is drawing concurrently, so an EV
-  /// running entirely inside an already-active cheap-price charge window causes NO new
-  /// force_charge slots at all: HasNewGridVs(baseline) stays false, so the bonus ruleset's own
-  /// "no new grid" branch already covers this outcome on its own — the only way the EV ever
-  /// causes genuinely NEW grid need is via the SEPARATE NeedToCharge branch, which IsGridCheapVs
-  /// already price-checks correctly on its own terms (see the test above).
+  /// "PriorityPlus may piggy-back on an active cheapest-period force charge" needs no
+  /// special-case code: an EV running inside that window draws its power from the grid at the
+  /// window's (under-threshold) price, so it is new grid (Priority rejects it) that passes the
+  /// price check (PriorityPlus accepts it).
   /// </summary>
   [Fact]
-  public void PriorityPlus_CheapestPeriodPiggyback_CausesNoNewGridAtAll()
+  public void PriorityPlus_CheapestPeriodPiggyback_IsCheapNewGrid()
   {
     const float CheapPrice     = 0.05f; // cheapest hour: 02:00–02:59
     const float ExpensivePrice = 0.30f;
@@ -643,17 +638,14 @@ public class FindWindowConditionTests : TestBase
     Assert.Contains(baseSim.Slots, s => s.State.Mode == InverterModes.force_charge
                                       && s.State.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice);
 
-    // EV runs concurrently with the already-active cheap-price charge window, drawing heavily
-    // (3 700 W, same high-drain precedent as Priority_HighDrainEV_HasNewGrid_CatchesDaytimeForceCharge
-    // below) — if the branch's duration were sensitive to concurrent load, this would be the
-    // scenario to expose it.
-    var evInput = baseIn.WithExtraLoads([new ExtraLoad { Name = "EV", Priority = 10, StartTime = start, EndTime = start.AddHours(2), PowerW = 3_700 }]);
+    // EV runs only inside the cheap hour while the cheapest-period charge is active, drawing
+    // heavily (3 700 W) — the grid covers it at the cheap price.
+    var cheapHour = baseDate.AddHours(2);
+    var evInput = baseIn.WithExtraLoads([new ExtraLoad { Name = "EV", Priority = 10, StartTime = cheapHour, EndTime = cheapHour.AddHours(1), PowerW = 3_700 }]);
     var evSim   = EnergySimulator.Simulate(evInput);
 
-    Assert.False(evSim.HasNewGridVs(baseSim),
-      "The cheapest-period charge's duration is driven by the house battery's own SoC target, " +
-      "not by concurrent load, so the EV piggy-backing on it causes no new grid need at all — " +
-      "no special-case code is needed for this exception.");
+    Assert.True(evSim.HasNewGridVs(baseSim), "The EV's power comes from the grid — Priority must reject it.");
+    Assert.True(evSim.IsGridCheapVs(baseSim), "…but at the cheap-window price — PriorityPlus may piggy-back.");
   }
 
   // ── NeedToCharge slot selection: use the whole cheap band, not just from its cheapest slot ─
@@ -731,18 +723,18 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// The PriorityPlus case from 2026-10-18: probing an EV start before the cheap band makes the
-  /// house's grid charge larger. That larger charge must move earlier into the cheap band (all
-  /// of it under threshold), so the earlier EV candidate is accepted by IsGridCheapVs instead of
-  /// being rejected for spillover — the scan should not have to wait until after the band.
+  /// The PriorityPlus case from 2026-10-18: an EV start at the beginning of the cheap band makes
+  /// the house's grid charge larger. That larger charge must use the earlier quarters of the
+  /// band (all under threshold) instead of spilling past it, so the EV start is accepted by
+  /// IsGridCheapVs — the scan should not have to wait until after the band.
   /// </summary>
   [Fact]
-  public void PriorityPlus_EarlierEvStart_GridChargeMovesEarlierInBand_Accepted()
+  public void PriorityPlus_EvStartInBand_GridChargeMovesEarlierInBand_Accepted()
   {
     var baseIn  = AutumnBandInput();
     var baseSim = EnergySimulator.Simulate(baseIn);
 
-    var evStart = AutumnStart.Date.AddHours(12);
+    var evStart = AutumnStart.Date.AddHours(13);
     var evIn    = baseIn.WithExtraLoads([new ExtraLoad { Name = "EV", Priority = 10, StartTime = evStart, EndTime = evStart.AddHours(2), PowerW = 1_856 }]);
     var evSim   = EnergySimulator.Simulate(evIn);
 

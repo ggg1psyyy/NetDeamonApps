@@ -633,10 +633,6 @@ public class SimulatorTests : TestBase
     // pre-dawn drain brings SoC well below the preferred threshold before 08:00 sunrise.
     Assert.True(result.OvernightMinSocReached < 20,
       $"Expected OvernightMinSocReached < PreferredMinSoC (20 %), got {result.OvernightMinSocReached} %");
-
-    // Priority mode (alwaysEnforcePreferred=true) must reject a session that drains below PreferredMinSoC (20 %).
-    Assert.False(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true),
-      "IsOvernightMinSocOk should be false: pre-dawn drain drops battery below PreferredMinSoC (20 %)");
   }
 
   [Fact]
@@ -655,7 +651,6 @@ public class SimulatorTests : TestBase
     Assert.Equal(PVPeriods.BeforePV, result.CurrentPVPeriod);
     Assert.True(result.OvernightMinSocReached >= 20,
       $"Expected OvernightMinSocReached ≥ 20 % (battery survives pre-dawn), got {result.OvernightMinSocReached} %");
-    Assert.True(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true));
   }
 
   [Fact]
@@ -672,8 +667,8 @@ public class SimulatorTests : TestBase
 
     Assert.Equal(PVPeriods.AfterPV, result.CurrentPVPeriod);
     // 80 % → 400 W drain; (80%−20%) × 10000 = 6000 Wh / 400 W = 15 h → survives past 11:00 AM
-    Assert.True(result.IsOvernightMinSocOk(alwaysEnforcePreferred: true),
-      "Evening session with high battery should have overnight min above preferred (20 %)");
+    Assert.True(result.OvernightMinSocReached >= 20,
+      $"Evening session with high battery should have overnight min above preferred (20 %), got {result.OvernightMinSocReached} %");
   }
 
   /// <summary>

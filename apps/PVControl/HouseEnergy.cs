@@ -344,7 +344,7 @@ namespace NetDeamon.apps.PVControl
         CurrentMode = _currentMode,
       };
 
-      // Run the baseline simulation once — its ForceChargeSlots and PV window boundaries
+      // Run the baseline simulation once — its grid import and PV window boundaries
       // are used by every FindLoadWindow call to compare against test simulations.
       var baseResult = EnergySimulator.Simulate(baseInput);
 
@@ -386,13 +386,38 @@ namespace NetDeamon.apps.PVControl
     /// <summary>
     /// Finds the valid scheduling window for a load by iterating over candidate start slots
     /// and running a test simulation for each. Updates load.ChargeNow/ChargeReason/PredictedEnd.
-    /// The baseline and its force-charge slots are pre-computed once in RunSimulation.
+    /// The baseline and its grid-supply slots are pre-computed once in RunSimulation.
     /// </summary>
     private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
+    {
+      bool wasActive = load.ChargeNow;
+      DecideLoadWindow(load, baseInput, baseResult);
+
+      // Session bookkeeping from the cycle's FINAL decision only: a lower ruleset's "no" that a
+      // higher one overrides within the same cycle (e.g. Priority's dusk stop, then PriorityPlus's
+      // price rule) must not end the session, or the min-on latch would lose its start time.
+      if (load.ChargeNow && !wasActive)
+      {
+        load.SessionStartTime = DateTime.Now;
+        load.SessionStartMode = load.Mode;
+        load.SessionStartSettings = new SessionStartSettings(
+          baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
+          baseInput.ForceChargeMaxPrice, load.TargetLevel);
+      }
+      else if (!load.ChargeNow)
+      {
+        load.SessionStartTime = null;
+        load.SessionStartMode = null;
+        load.SessionStartSettings = null;
+      }
+    }
+
+    private void DecideLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
     {
       var now = DateTime.Now;
       var currentSlot = now.RoundToNearestQuarterHour();
       bool wasActive = load.ChargeNow;
+      load.PlannedSessions = [];
 
       // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
       // ladder's generic "No valid window" catch-all at the very end: once set, a ruleset's own
@@ -403,20 +428,6 @@ namespace NetDeamon.apps.PVControl
       void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
       {
         decided = true;
-        if (chargeNow && !wasActive)
-        {
-          load.SessionStartTime = now;          // session just started
-          load.SessionStartMode = load.Mode;
-          load.SessionStartSettings = new SessionStartSettings(
-            baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
-            baseInput.ForceChargeMaxPrice, load.TargetLevel);
-        }
-        else if (!chargeNow)
-        {
-          load.SessionStartTime = null;         // session ended
-          load.SessionStartMode = null;
-          load.SessionStartSettings = null;
-        }
         load.ExtraLoads = extraLoads;
         load.ChargeNow = chargeNow;
         load.ChargeReason = reason;
@@ -685,13 +696,10 @@ namespace NetDeamon.apps.PVControl
 
       // ── Priority's ruleset (shared verbatim by PriorityPlus, via the climb below) ──────────
       // May draw the battery down to its configured minimum — Optimal's ruleset above already
-      // established PV alone doesn't cover this. isPriority distinguishes Priority from
-      // PriorityPlus WITHIN this one shared ruleset (e.g. which SoC floor applies); it does NOT
-      // gate whether this ruleset runs at all — the climb below already decided that.
+      // established PV alone doesn't cover this. The floor is the same for Priority and
+      // PriorityPlus: PreferredMinSoC when EnforcePreferredSoC is on, AbsoluteMinSoC when off.
       void RunPriorityRuleset()
       {
-        bool isPriority = load.Mode == LoadSchedulingMode.Priority;
-
         // Schedule new sessions as late as possible before sunrise. Nothing recharges the
         // battery between sunset and sunrise, so the battery's lowest point of the whole night
         // is the same regardless of WHEN within that window the EV runs (same total Wh consumed
@@ -734,7 +742,7 @@ namespace NetDeamon.apps.PVControl
             // isn't available.
             var start = FindLatestSessionStart(idealStart, nextSunrise.Value, load.Config.MinWindowMinutes,
               s => RunSimFrom(s, nextSunrise.Value),
-              sim => sim.IsOvernightMinSocOk(true) && !sim.HasNewGridVs(baseResult));
+              sim => sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
 
             if (start is not null)
             {
@@ -773,9 +781,8 @@ namespace NetDeamon.apps.PVControl
           return;
         }
 
-        // Real-time battery SoC gate. Priority always enforces PreferredMinSoC as the floor
-        // (regardless of EnforcePreferredSoC); PriorityPlus uses PreferredMinSoC when
-        // EnforcePreferredSoC is on, AbsoluteMinSoC when off.
+        // Real-time battery SoC gate: PreferredMinSoC when EnforcePreferredSoC is on,
+        // AbsoluteMinSoC when off.
         //
         // Without this gate, the simulation's IsOvernightMinSocOk looks at the NEXT overnight
         // window (sunset today → sunrise tomorrow). In the pre-dawn hours that window is 18h
@@ -789,7 +796,7 @@ namespace NetDeamon.apps.PVControl
         // again. PV surplus that already covers the charge rate bypasses the wait since it
         // won't draw the battery down further.
         {
-          int socFloor = isPriority || Battery.EnforcePreferredSoC
+          int socFloor = Battery.EnforcePreferredSoC
             ? Battery.PreferredMinimalSoC
             : Battery.AbsoluteMinimalSoC;
           int currentSoC = Battery.BatterySoc;
@@ -835,7 +842,7 @@ namespace NetDeamon.apps.PVControl
                 if (recoveryMax > recoverySlot)
                 {
                   var end = FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e),
-                    sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult));
+                    sim => sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
 
                   if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
                   {
@@ -876,10 +883,8 @@ namespace NetDeamon.apps.PVControl
         // the two blocks above mean this is now mainly reached during the day (continuing a
         // session that started in daylight) or in the pre-dawn hours (the late-start block
         // above already started it there, as late as possible before sunrise, and this just
-        // continues finding its end). Priority always enforces PreferredMinSoC (regardless of
-        // EnforcePreferredSoC); PriorityPlus may go to AbsoluteMinSoC when EnforcePreferredSoC
-        // is off.
-        var stepEnd = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk(isPriority) && !sim.HasNewGridVs(baseResult));
+        // continues finding its end).
+        var stepEnd = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
         if (stepEnd is not null)
         {
           SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = stepEnd.Value, PowerW = chargeRateW }],
@@ -892,7 +897,7 @@ namespace NetDeamon.apps.PVControl
       // this cycle. Day or night doesn't matter here, only price — see FindEarliestPriceAwareStart.
       void RunPriorityPlusBonusRuleset()
       {
-        var start = FindEarliestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult);
+        var start = SessionPlanner.FindEarliestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult);
         if (start is null) return;
 
         var end = start.Value.AddMinutes(durationMinutes);
@@ -921,26 +926,36 @@ namespace NetDeamon.apps.PVControl
       // whether it "won"; the final `if (!decided)` below only fires the generic fallback if
       // NO tier (including the mode's own ceiling) ever called SetResult at all — a tier's own
       // "no" (even just a deferred prediction) always stands once reached.
-      if ((int)load.Mode >= (int)LoadSchedulingMode.Optimal)
+      void Climb()
       {
-        RunOptimalRuleset();
-        if (load.ChargeNow) return;
-      }
+        if ((int)load.Mode >= (int)LoadSchedulingMode.Optimal)
+        {
+          RunOptimalRuleset();
+          if (load.ChargeNow) return;
+        }
 
-      if ((int)load.Mode >= (int)LoadSchedulingMode.Priority)
-      {
-        RunPriorityRuleset();
-        if (load.ChargeNow) return;
-      }
+        if ((int)load.Mode >= (int)LoadSchedulingMode.Priority)
+        {
+          RunPriorityRuleset();
+          if (load.ChargeNow) return;
+        }
 
-      if ((int)load.Mode >= (int)LoadSchedulingMode.PriorityPlus)
-      {
-        RunPriorityPlusBonusRuleset();
-        if (load.ChargeNow) return;
-      }
+        if ((int)load.Mode >= (int)LoadSchedulingMode.PriorityPlus)
+        {
+          RunPriorityPlusBonusRuleset();
+          if (load.ChargeNow) return;
+        }
 
-      if (!decided)
-        SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
+        if (!decided)
+          SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
+      }
+      Climb();
+
+      // Preview of the sessions after this one (e.g. a PV session ending at dusk, then a cheap
+      // window after midnight). Only PriorityPlus can price-plan ahead: Optimal/Priority decide
+      // on PV and battery state as it is at the time. Never fed into the control simulation.
+      if (load.Mode == LoadSchedulingMode.PriorityPlus)
+        load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd);
     }
 
     /// <summary>
@@ -1006,31 +1021,6 @@ namespace NetDeamon.apps.PVControl
         var candidateStart = fixedEnd.AddMinutes(-step * 15);
         if (predicate(runSimFrom(candidateStart)))
           return candidateStart;
-      }
-      return null;
-    }
-
-    /// <summary>
-    /// PriorityPlus's one additional ruleset, tried only after Priority's own complete ruleset
-    /// has already concluded it can't charge this cycle. Scans FORWARD from minStart in 15-min
-    /// steps — day or night, no PV-period gating, only price matters — for the EARLIEST
-    /// candidate where charging the EV either needs no new grid at all (vs. baseline — the same
-    /// comparison Priority's own rule already uses) or needs new grid at a price at/under the
-    /// configured threshold. Delaying the candidate changes what the simulator's NeedToCharge
-    /// logic computes for it (a different deadline, possibly a different, cheaper slot), which
-    /// is why advancing and re-simulating is necessary rather than checking once. Bounded by
-    /// horizonEnd (the price list's own published horizon) — once published prices run out,
-    /// there's nothing left to evaluate, so the scan gives up and returns null.
-    /// </summary>
-    private static DateTime? FindEarliestPriceAwareStart(
-      DateTime minStart, DateTime horizonEnd, int durationMinutes,
-      Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline)
-    {
-      for (var candidate = minStart; candidate <= horizonEnd; candidate = candidate.AddMinutes(15))
-      {
-        var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
-        if (!sim.HasNewGridVs(baseline) || sim.IsGridCheapVs(baseline))
-          return candidate;
       }
       return null;
     }

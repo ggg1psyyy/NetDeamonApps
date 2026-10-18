@@ -387,20 +387,23 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetStateAsync(load.ChargeNowEntity.EntityId, load.ChargeNow ? "ON" : "OFF");
         int powerAvgW = load.PowerAverage?.GetAverage() ?? 0;
         int netPvW = _house.CurrentAveragePVPower - Math.Max(0, _house.CurrentAverageHouseLoad - powerAvgW);
+        // The whole plan: the current/next session plus any planned follow-ups.
+        var allSessions = load.ExtraLoads.Concat(load.PlannedSessions).ToList();
         var chargeTimeline = _house.Prediction_BatterySoC.TodayAndTomorrow
           .Where(s => s.Key >= now)
           .Select(s => new
           {
             datetime = s.Key.ToISO8601(),
-            charging = load.ExtraLoads.Any(e => s.Key >= e.StartTime && s.Key < e.EndTime),
+            charging = allSessions.Any(e => s.Key >= e.StartTime && s.Key < e.EndTime),
           }).ToList();
         // Derived from the actual planned window(s), not TargetLevel — FindLoadWindow's search
         // is often capped short of the full target (PV window, price, SoC gates), so echoing
         // TargetLevel would overstate the real outcome in exactly the cases this is meant to show.
-        float plannedWh = load.ExtraLoads.Sum(e => (float)(e.EndTime - e.StartTime).TotalHours * e.PowerW);
-        float? chargeEndPredictedSoc = load.ExtraLoads.Count > 0 && load.Config.EnergyPerLevelUnitKwh > 0
+        float plannedWh = allSessions.Sum(e => (float)(e.EndTime - e.StartTime).TotalHours * e.PowerW);
+        float? chargeEndPredictedSoc = allSessions.Count > 0 && load.Config.EnergyPerLevelUnitKwh > 0
           ? load.CurrentLevel + plannedWh / 1000f / load.Config.EnergyPerLevelUnitKwh
           : null;
+        var chargeEndPredicted = load.PlannedSessions.Count > 0 ? load.PlannedSessions[^1].EndTime : load.PredictedEnd;
         var attr_load = new
         {
           reason = load.ChargeReason,
@@ -411,8 +414,9 @@ namespace NetDeamon.apps.PVControl
           power_avg_w = powerAvgW,
           net_pv_w = netPvW,
           charge_start_predicted = load.ExtraLoads.Count > 0 ? load.ExtraLoads[0].StartTime.ToISO8601() : "n/a",
-          charge_end_predicted = load.PredictedEnd?.ToISO8601() ?? "n/a",
+          charge_end_predicted = chargeEndPredicted?.ToISO8601() ?? "n/a",
           charge_end_predicted_soc = chargeEndPredictedSoc?.ToString("F0") ?? "n/a",
+          planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           charge_timeline = chargeTimeline,
         };
         await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);

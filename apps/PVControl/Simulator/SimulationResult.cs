@@ -73,10 +73,6 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
   /// </summary>
   public int OvernightMinSocReached { get; }
 
-  // ── Inverter mode schedule ─────────────────────────────────────────────────────────────
-  /// <summary>Slot start times where the simulator chose force_charge mode.</summary>
-  public IReadOnlySet<DateTime> ForceChargeSlots { get; }
-
   // ── Construction ──────────────────────────────────────────────────────────────────────
   internal SimulationResult(List<SimulationSlot> slots, SimulationInput input)
   {
@@ -138,12 +134,6 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
     }
     else
       OvernightMinSocReached = 100;
-
-    // Force-charge slot index
-    ForceChargeSlots = slots
-      .Where(s => s.State.Mode == InverterModes.force_charge)
-      .Select(s => s.Time)
-      .ToHashSet();
   }
 
   // ── Derived predicates ─────────────────────────────────────────────────────────────────
@@ -151,34 +141,33 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
   /// <summary>
   /// True if the overnight SoC floor stays at or above the required minimum.
   /// Uses <see cref="SimulationInput.PreferredMinSocPercent"/> when
-  /// <paramref name="alwaysEnforcePreferred"/> is true or
   /// <see cref="SimulationInput.EnforcePreferredSoc"/> is set;
   /// uses <see cref="SimulationInput.AbsoluteMinSocPercent"/> otherwise.
   /// </summary>
-  public bool IsOvernightMinSocOk(bool alwaysEnforcePreferred = false)
+  public bool IsOvernightMinSocOk() =>
+    OvernightMinSocReached >= _input.GetEffectiveMinSoC();
+
+  /// <summary>
+  /// Slots where this simulation imports more grid energy than <paramref name="baseline"/> —
+  /// the grid use the extra load causes. Compared by energy, not by inverter mode: the load can
+  /// add import to a slot the baseline already supplies from the grid (force_charge, or
+  /// grid_only holding the battery at its floor), which a slot-set comparison can't see.
+  /// </summary>
+  private IEnumerable<DateTime> NewGridSlotsVs(SimulationResult baseline)
   {
-    var threshold = (alwaysEnforcePreferred || _input.EnforcePreferredSoc)
-      ? _input.PreferredMinSocPercent
-      : _input.AbsoluteMinSocPercent;
-    return OvernightMinSocReached >= threshold;
+    var baseImportWh = baseline.Slots.ToDictionary(s => s.Time, s => s.GridImportWh);
+    return Slots.Where(s => s.GridImportWh > baseImportWh.GetValueOrDefault(s.Time, 0)).Select(s => s.Time);
   }
 
-  /// <summary>
-  /// True if this simulation introduced any force_charge slots not present in
-  /// <paramref name="baseline"/> — i.e. the extra load causes new grid charging.
-  /// </summary>
-  public bool HasNewGridVs(SimulationResult baseline)
-    => ForceChargeSlots.Any(t => !baseline.ForceChargeSlots.Contains(t));
+  /// <summary>True if the extra load causes any grid import vs <paramref name="baseline"/>.</summary>
+  public bool HasNewGridVs(SimulationResult baseline) => NewGridSlotsVs(baseline).Any();
 
   /// <summary>
-  /// True if every new force_charge slot (vs <paramref name="baseline"/>) falls within
-  /// a price window at or below <see cref="SimulationInput.ForceChargeMaxPrice"/>.
-  /// Returns true when no new grid slots were introduced.
+  /// True if every slot with extra grid import (vs <paramref name="baseline"/>) is priced at or
+  /// below <see cref="SimulationInput.ForceChargeMaxPrice"/>. True when there is none.
   /// </summary>
   public bool IsGridCheapVs(SimulationResult baseline)
-    => !ForceChargeSlots
-      .Where(t => !baseline.ForceChargeSlots.Contains(t))
-      .Any(t => !_input.ImportPrices.Any(p =>
+    => NewGridSlotsVs(baseline).All(t => _input.ImportPrices.Any(p =>
         p.StartTime <= t && p.EndTime > t && p.Price <= _input.ForceChargeMaxPrice));
 
   // ── Helpers ────────────────────────────────────────────────────────────────────────────

@@ -40,8 +40,9 @@ Each slot contains:
 - `CurrentPVPeriod` — `BeforePV` / `InPVPeriod` / `AfterPV`
 - `WillReachMaxSocToday/Tomorrow` — whether any slot hits ≥ 99 %
 - `OvernightMinSocReached` — lowest SoC in the sunset → sunrise window
-- `ForceChargeSlots` — set of slot times where `force_charge` was chosen
-- `HasNewGridVs(baseline)` / `IsGridCheapVs(baseline)` — used by load scheduling
+- `HasNewGridVs(baseline)` / `IsGridCheapVs(baseline)` — used by load scheduling: slots where
+  this simulation imports more grid energy than the baseline, and whether all of them are priced
+  at/under `ForceChargeMaxPrice`
 
 The simulator decides slot by slot: should the inverter force-charge from grid, export,
 or run normally? All price/forecast data is baked into `SimulationInput` upfront.
@@ -93,11 +94,11 @@ Load uses only the near-term ramp (no day-scale — load follows historical patt
 2. Build baseInput  ← all predictions + prices + battery state + user settings
 
 3. baseline = Simulate(baseInput)
-   baseForceChargeSlots = slots where baseline already force_charges from grid
-   (these are "free" — the system would grid-charge here anyway)
+   (each load's test simulations are compared against its grid import — only the import a
+   load ADDS counts as that load's grid use)
 
 4. For each schedulable load (highest Priority first):
-       FindLoadWindow(load, baseInput, baseForceChargeSlots)
+       FindLoadWindow(load, baseInput, baseline)
        → writes load.ChargeNow / ChargeReason / PredictedEnd / ExtraLoads
 
 5. finalInput = baseInput + all found ExtraLoads
@@ -191,10 +192,11 @@ of it.
 before the next sunrise that stays safe (minimizing how long the battery sits drawn down
 overnight, since nothing recharges it before sunrise), and an already-active session is stopped
 at dusk once past its own anti-oscillation latch. During PV hours, session length is found via
-binary search, requiring `IsOvernightMinSocOk(true) && !HasNewGridVs(baseline)` — no new grid
-import, ever, under Priority's own rule.
+binary search, requiring `IsOvernightMinSocOk() && !HasNewGridVs(baseline)` — no new grid
+import, ever, under Priority's own rule. The SoC floor (live gate and overnight check) follows
+`EnforcePreferredSoC` like every mode: preferred minimum when on, absolute minimum when off.
 
-**PriorityPlus's bonus ruleset** (`RunPriorityPlusBonusRuleset`/`FindEarliestPriceAwareStart`):
+**PriorityPlus's bonus ruleset** (`RunPriorityPlusBonusRuleset`/`SessionPlanner.FindEarliestPriceAwareStart`):
 tried only once Priority's ruleset above has already concluded it can't charge this cycle. Day
 or night doesn't matter here — only price. It scans forward from "now" in 15-minute steps,
 re-simulating the EV at each advancing candidate start, for the earliest one where the candidate
@@ -205,8 +207,22 @@ different deadline, possibly a different, cheaper slot) — checking once at "no
 Bounded by the published import-price horizon (today + tomorrow once published); once prices run
 out there's nothing left to evaluate, and the scan gives up.
 
-`HasNewGridVs`/`IsGridCheapVs` compare against the full simulated timeline, not just the
-overnight window — a slot either side of sunset counts as "new" if it wasn't in baseline.
+**Planned follow-up sessions** (`SessionPlanner.PlanFollowUpSessions`, PriorityPlus only): after the
+climb, if the current/next session doesn't reach the target level, the same price scan plans the
+following session(s) — each judged against a baseline that already contains the earlier ones — up
+to 3, within the price horizon. Stored in `SchedulableLoadRuntime.PlannedSessions` and published as
+the `planned_sessions` attribute (also reflected in `charge_timeline`, `charge_end_predicted` and
+`charge_end_predicted_soc`). Preview only: never part of the control simulation; every cycle
+re-decides `ChargeNow` from scratch.
+
+`HasNewGridVs`/`IsGridCheapVs` compare grid import energy slot by slot over the full simulated
+timeline, not inverter modes: a load can add import to a slot the baseline already supplies from
+the grid (force_charge, or grid_only holding the battery at its floor while waiting for the
+charge window), and that added import is the load's own grid use at that slot's price.
+
+Session bookkeeping (`SessionStartTime`/`Mode`/`Settings`, which the min-on latch reads) is
+updated once per cycle from the FINAL decision (`FindLoadWindow` wraps `DecideLoadWindow`), so a
+lower ruleset's "no" that a higher one overrides in the same cycle doesn't end the session.
 
 ---
 

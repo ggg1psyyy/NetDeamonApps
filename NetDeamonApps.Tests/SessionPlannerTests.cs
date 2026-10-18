@@ -1,0 +1,139 @@
+using NetDeamon.apps;
+using NetDeamon.apps.PVControl;
+using NetDeamon.apps.PVControl.Simulator;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Xunit;
+
+namespace NetDeamonApps.Tests;
+
+/// <summary>
+/// SessionPlanner.PlanFollowUpSessions: the PriorityPlus preview of sessions after the current
+/// one (e.g. a PV session ending at 18:15, then a cheap window after midnight).
+/// </summary>
+public class SessionPlannerTests : TestBase
+{
+  const int BatCap  = 11_520;
+  const int EvW     = 1_856;
+  const float MaxPrice = 0.34f;
+  static readonly DateTime Start      = new(2026, 10, 18, 16, 0, 0);
+  static readonly DateTime FirstEnd   = new(2026, 10, 18, 18, 15, 0);
+  static readonly DateTime CheapFrom  = new(2026, 10, 19, 0, 0, 0);
+  static readonly DateTime CheapTo    = new(2026, 10, 19, 4, 0, 0);
+
+  static SimulationInput Input(int socPercent, Func<DateTime, float> price)
+  {
+    var date   = Start.Date;
+    var prices = new List<PriceTableEntry>();
+    for (var t = date; t < date.AddDays(2); t = t.AddMinutes(15))
+      prices.Add(new PriceTableEntry(t, t.AddMinutes(15), price(t)));
+    var load = new Dictionary<DateTime, int>();
+    var pv   = new Dictionary<DateTime, int>();
+    for (var t = date; t < date.AddDays(3); t = t.AddMinutes(15))
+    {
+      load[t] = 112;
+      pv[t]   = t.Date > date && t.Hour >= 6 && t.Hour < 18 ? 600 : 0;
+    }
+    return new SimulationInput
+    {
+      StartTime                   = Start,
+      StartSocPercent             = socPercent,
+      BatteryCapacityWh           = BatCap,
+      AbsoluteMinSocPercent       = 12,
+      PreferredMinSocPercent      = 15,
+      EnforcePreferredSoc         = false,
+      MaxChargePowerAmps          = 30,
+      InverterEfficiency          = 0.9f,
+      ImportPrices                = prices,
+      ExportPrices                = prices,
+      LoadPredictionWh            = load,
+      PVPredictionWh              = pv,
+      ExtraLoads                  = [],
+      EnableCheapForceCharge      = false,
+      OpportunisticDischarge      = false,
+      ForceChargeMaxPrice         = MaxPrice,
+      ForceChargeTargetSocPercent = 95,
+      CurrentMode                 = new InverterState(InverterModes.normal),
+    };
+  }
+
+  static float CheapAfterMidnight(DateTime t) => t >= CheapFrom && t < CheapTo ? 0.20f : 0.40f;
+
+  static ExtraLoad Ev(DateTime start, DateTime end) =>
+    new() { Name = "EV", Priority = 10, StartTime = start, EndTime = end, PowerW = EvW };
+
+  static int Wh(IEnumerable<ExtraLoad> sessions) =>
+    (int)sessions.Sum(e => (e.EndTime - e.StartTime).TotalHours * e.PowerW);
+
+  [Fact]
+  public void CurrentSessionCoversTarget_NoFollowUp()
+  {
+    var input = Input(50, CheapAfterMidnight);
+    var first = Ev(Start, FirstEnd);
+
+    var planned = SessionPlanner.PlanFollowUpSessions(input, [first], Wh([first]), CheapTo);
+
+    Assert.Empty(planned);
+  }
+
+  [Fact]
+  public void CurrentSessionEndsShort_FollowUpCoversRemainingEnergyAndPassesPriceCheck()
+  {
+    var input = Input(50, CheapAfterMidnight);
+    var first = Ev(Start, FirstEnd);
+    const int needWh = 18_000;
+
+    var planned = SessionPlanner.PlanFollowUpSessions(input, [first], needWh, input.ImportPrices.Max(p => p.EndTime));
+
+    var next = Assert.Single(planned);
+    Assert.True(next.StartTime >= FirstEnd, $"Follow-up starts {next.StartTime:HH:mm}, before the current session ends.");
+    Assert.InRange(Wh([first, next]), needWh - EvW / 4, needWh);
+
+    // Same acceptance rule the scan uses, against a baseline that already has the first session.
+    var baseline = EnergySimulator.Simulate(input.WithExtraLoads([first]));
+    var withNext = EnergySimulator.Simulate(input.WithExtraLoads([first, next]));
+    Assert.True(!withNext.HasNewGridVs(baseline) || withNext.IsGridCheapVs(baseline));
+
+    // The follow-up must not buy grid at over-threshold prices — including while the battery is
+    // held at its floor (grid_only) waiting for the cheap window. Continuing straight at 18:15
+    // did exactly that: ~10.7 kWh at 40 ct from 19:00 to midnight.
+    var baseBySlot = baseline.Slots.ToDictionary(s => s.Time);
+    int expensiveExtraImportWh = withNext.Slots
+      .Where(s => input.ImportPrices.GetPrice(s.Time) > MaxPrice)
+      .Sum(s => s.GridImportWh - baseBySlot[s.Time].GridImportWh);
+    Assert.True(expensiveExtraImportWh <= 0,
+      $"Follow-up {next.StartTime:HH:mm}–{next.EndTime:dd. HH:mm} adds {expensiveExtraImportWh} Wh of grid import over threshold.");
+  }
+
+  /// <summary>
+  /// grid_only (battery held at its floor, grid covers the load) is grid supply just like
+  /// force_charge: an EV that drains the battery to its floor during expensive hours causes new
+  /// grid use at those prices, so it must fail the price check.
+  /// </summary>
+  [Fact]
+  public void EvDrainingBatteryToFloorBeforeCheapWindow_FailsPriceCheck()
+  {
+    var input    = Input(50, CheapAfterMidnight);
+    var first    = Ev(Start, FirstEnd);
+    var baseline = EnergySimulator.Simulate(input.WithExtraLoads([first]));
+    var evening  = EnergySimulator.Simulate(input.WithExtraLoads([first, Ev(FirstEnd, new DateTime(2026, 10, 19, 1, 45, 0))]));
+
+    Assert.Contains(evening.Slots, s => s.State.Mode == InverterModes.grid_only && s.Time < CheapFrom);
+    Assert.True(evening.HasNewGridVs(baseline));
+    Assert.False(evening.IsGridCheapVs(baseline));
+  }
+
+  [Fact]
+  public void NoAcceptableStartBeforePriceHorizon_NoFollowUp()
+  {
+    // Flat expensive prices, low battery: an evening EV start needs new grid over threshold,
+    // and the horizon ends right after the current session, so nothing can be planned.
+    var input = Input(30, _ => 0.40f);
+    var first = Ev(Start, FirstEnd);
+
+    var planned = SessionPlanner.PlanFollowUpSessions(input, [first], 18_000, FirstEnd.AddHours(1));
+
+    Assert.Empty(planned);
+  }
+}
