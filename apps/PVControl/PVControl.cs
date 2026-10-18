@@ -236,6 +236,8 @@ namespace NetDeamon.apps.PVControl
             PVCC_Logger.LogInformation("Subscribing to availability changes for {load} ({id})", load.Config.Name, load.Config.AvailabilityEntity.EntityId);
             load.Config.AvailabilityEntity.StateChanges().SubscribeAsync(async _ =>
             {
+              load.RequestReplan("availability changed");
+              load.ClearOffLatch();
 #if !DEBUG
               await ScheduledOperations();
 #endif
@@ -263,6 +265,8 @@ namespace NetDeamon.apps.PVControl
       if (entity == null)
         return;
       PVCC_Logger.LogDebug("Entering UserStateChanged - Entity: {ent}, newState: {state}", entity.EntityId, newState);
+      // Any user change can affect a load's decision — search all windows again right away.
+      _house.RequestReplan($"user changed {entity.EntityId}");
       newState = newState.ToLower();
 
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
@@ -462,6 +466,8 @@ namespace NetDeamon.apps.PVControl
           ready_by = load.ReadyByTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? "off",
           energy_per_level_kwh = MathF.Round(load.EnergyPerLevelKwh, 3),
           learned_power_w = load.LearnedPowerW,
+          last_plan = load.LastPlan?.Time.ToISO8601() ?? "n/a",
+          last_plan_reason = load.LastPlanReason,
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           charge_timeline = chargeTimeline,
         };

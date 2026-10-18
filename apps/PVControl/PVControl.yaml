@@ -131,7 +131,13 @@ NetDeamon.apps.PVControl.PVConfig:
       # Minimum window length (minutes) required to start a session.
       # Prevents start/stop oscillation when the window is marginal (e.g. real draw > AvgPowerW).
       # Tune alongside AvgPowerW — if real draw matches preset, 0 is fine.
-      MinWindowMinutes: 30
+      MinWindowMinutes: 15
+      # Minimum off-time after a session stops before it may restart (stops are never delayed).
+      MinOffMinutes: 15
+      # Max minutes between two charge-window searches (the expensive part of a cycle). In between
+      # it only replans on triggers: setting changes, new prices/quarter-hour, house battery SoC
+      # or car SoC changes, charger start/stop, house load off its forecast.
+      ReplanIntervalMinutes: 5
       # Mode and TargetLevel omitted — HA entities auto-created
 
   # REMOVED: HeatpumpManager (will be re-implemented as a SchedulableLoad later)

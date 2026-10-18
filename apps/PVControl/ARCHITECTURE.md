@@ -228,6 +228,21 @@ timeline, not inverter modes: a load can add import to a slot the baseline alrea
 the grid (force_charge, or grid_only holding the battery at its floor while waiting for the
 charge window), and that added import is the load's own grid use at that slot's price.
 
+**Min-off latch** (`MinOffMinutes`, counterpart of the min-on latch `MinWindowMinutes`): in
+`FindLoadWindow`, a restart within MinOffMinutes of the last stop is held back — ChargeNow stays
+false and the planned session moves to the end of the off-time ("Off-latched …"). Stops are
+never delayed. Bypassed by a mode change, a change of `SessionStartSettings`, or an availability
+change. The end of either latch triggers a replan.
+
+**Replanning** (`ReplanPolicy`, per-load `ReplanIntervalMinutes`, default 5): every 15-s cycle
+still runs the house simulation, the final simulation and the inverter command, but a load's
+`FindLoadWindow` (the expensive part) only runs when due — interval elapsed, a requested replan
+(any user change, availability change, new prices, house load off its forecast for 5 min via
+`LoadDeviationTracker`), a new quarter-hour, house battery SoC or the load's level changed, or
+the load started/stopped drawing power. In between, its last decision (ChargeNow, sessions)
+stays and is simulated as is. The load's live safety checks live inside `FindLoadWindow`, so
+each of their inputs is a trigger. `last_plan` / `last_plan_reason` attributes show when and why.
+
 **Learned load characteristics** (`number.pv_control_<load>_energy_per_level`,
 `number.pv_control_<load>_charge_power`): both start from the YAML values (`EnergyPerLevelUnitKwh`,
 `AvgPowerW`), are learned while the load draws power (`ActualPowerEntity` above

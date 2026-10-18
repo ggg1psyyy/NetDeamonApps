@@ -200,6 +200,7 @@ namespace NetDeamon.apps.PVControl
         || (PVCC_Config.CurrentExportPriceEntities?.Any(e => e.EntityId == entity.EntityId) ?? false))
       {
         Prices.UpdatePriceList();
+        RequestReplan("prices updated");
       }
       if (entity.EntityId == PVCC_Config.CurrentBatteryPowerEntity?.EntityId && PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
       {
@@ -384,9 +385,22 @@ namespace NetDeamon.apps.PVControl
       // are used by every FindLoadWindow call to compare against test simulations.
       var baseResult = EnergySimulator.Simulate(baseInput);
 
-      // Find valid window for each schedulable load (highest priority first).
+      // House load staying off its forecast means the plans assumed a load that isn't happening.
+      if (_loadDeviation.Observe(now, CurrentAverageHouseLoad, Prediction_Load.CurrentValue * 4))
+        RequestReplan("house load off forecast");
+
+      // Find valid window for each schedulable load (highest priority first) — only when it's
+      // due (ReplanPolicy); otherwise its last decision stays and is simulated below as is.
       foreach (var load in SchedulableLoads.OrderByDescending(l => l.Config.Priority))
+      {
+        float level = load.Config.CurrentLevelEntity is not null && load.Config.CurrentLevelEntity.TryGetStateValue(out float lv) ? lv : -1;
+        var snapshot = new ReplanSnapshot(now, Battery.BatterySoc, level, load.IsDrawingPower, IsLatched(load, now));
+        var reason = ReplanPolicy.Reason(load.LastPlan, snapshot, load.Config.ReplanIntervalMinutes, load.TakeReplanRequest());
+        if (reason is null) continue;
         FindLoadWindow(load, baseInput, baseResult);
+        load.LastPlan = snapshot with { Latched = IsLatched(load, now) };
+        load.LastPlanReason = reason;
+      }
 
       // Run final simulation with all found ExtraLoads merged in.
       var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
@@ -429,19 +443,44 @@ namespace NetDeamon.apps.PVControl
       bool wasActive = load.ChargeNow;
       DecideLoadWindow(load, baseInput, baseResult);
 
+      var now = DateTime.Now;
+      var settings = new SessionStartSettings(
+        baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
+        baseInput.ForceChargeMaxPrice, load.TargetLevel, load.ReadyByTime);
+
+      // Min-off latch: a restart within MinOffMinutes of the last stop is held back — the planned
+      // session moves to the end of the off-time. Only restarts: stops are never delayed.
+      if (load.ChargeNow && !wasActive
+          && SchedulableLoadRuntime.OffLatchUntil(load.SessionStopTime, load.Config.MinOffMinutes, now,
+               load.SessionStopMode == load.Mode && load.SessionStopSettings == settings) is { } until)
+      {
+        var notBefore = until.RoundToNearestQuarterHour();
+        if (notBefore < until) notBefore = notBefore.AddMinutes(15);
+        var delayed = SchedulableLoadRuntime.DelayUntil(load.ExtraLoads, notBefore);
+        load.ExtraLoads = delayed;
+        load.PredictedEnd = delayed.Count > 0 ? delayed.Max(e => e.EndTime) : load.PredictedEnd;
+        load.ChargeNow = false;
+        load.ChargeReason = $"Off-latched ({load.Config.Name}: {(now - load.SessionStopTime!.Value).TotalMinutes:F0}/{load.Config.MinOffMinutes} min min-off) — {load.ChargeReason}";
+      }
+
       // Session bookkeeping from the cycle's FINAL decision only: a lower ruleset's "no" that a
       // higher one overrides within the same cycle (e.g. Priority's dusk stop, then PriorityPlus's
       // price rule) must not end the session, or the min-on latch would lose its start time.
       if (load.ChargeNow && !wasActive)
       {
-        load.SessionStartTime = DateTime.Now;
+        load.SessionStartTime = now;
         load.SessionStartMode = load.Mode;
-        load.SessionStartSettings = new SessionStartSettings(
-          baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
-          baseInput.ForceChargeMaxPrice, load.TargetLevel, load.ReadyByTime);
+        load.SessionStartSettings = settings;
+        load.SessionStopTime = null;
       }
       else if (!load.ChargeNow)
       {
+        if (wasActive)
+        {
+          load.SessionStopTime = now;
+          load.SessionStopMode = load.Mode;
+          load.SessionStopSettings = settings;
+        }
         load.SessionStartTime = null;
         load.SessionStartMode = null;
         load.SessionStartSettings = null;
@@ -1173,6 +1212,21 @@ namespace NetDeamon.apps.PVControl
     public void UpdatePredictions(bool all = false)
     {
       RunSimulation();
+    }
+
+    private readonly LoadDeviationTracker _loadDeviation = new();
+
+    /// <summary>Whether the load's min-on or min-off latch currently holds (ignoring bypasses).</summary>
+    private static bool IsLatched(SchedulableLoadRuntime load, DateTime now) =>
+      load.ChargeNow
+        ? load.SessionStartTime is { } s && (now - s).TotalMinutes < load.Config.MinWindowMinutes
+        : SchedulableLoadRuntime.OffLatchUntil(load.SessionStopTime, load.Config.MinOffMinutes, now, true) is not null;
+
+    /// <summary>Makes every schedulable load search its window again on the next cycle.</summary>
+    public void RequestReplan(string reason)
+    {
+      foreach (var load in SchedulableLoads)
+        load.RequestReplan(reason);
     }
   }
 }

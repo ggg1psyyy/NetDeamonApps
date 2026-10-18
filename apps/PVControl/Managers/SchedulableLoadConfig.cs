@@ -98,6 +98,23 @@ namespace NetDeamon.apps.PVControl.Managers
     /// </summary>
     public int MinWindowMinutes { get; set; } = 0;
 
+    /// <summary>
+    /// Minimum off-time in minutes after a session stops before it may start again — the
+    /// counterpart of the min-on latch. Stops are never delayed, only restarts. Bypassed by a
+    /// mode change, a change of the settings the decision is based on, or an availability change.
+    /// 0 disables (default).
+    /// </summary>
+    public int MinOffMinutes { get; set; } = 0;
+
+    /// <summary>
+    /// Maximum minutes between two window searches for this load (the expensive part of a
+    /// cycle). In between it only replans on triggers — user changes, new prices, a new
+    /// quarter-hour, house battery SoC or load level changes, the load starting/stopping, the
+    /// house load staying off its forecast (see ReplanPolicy). The house simulation and inverter
+    /// command still update every cycle.
+    /// </summary>
+    public int ReplanIntervalMinutes { get; set; } = 5;
+
     // ── HA entity display configuration for auto-created entities ─────────────────────────
     // ── HA entity display configuration ───────────────────────────────────────────────────
     /// <summary>MDI icon used for all auto-created HA entities of this load (e.g. "mdi:ev-station").</summary>

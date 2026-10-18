@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl.Simulator;
 using NetDaemon.HassModel.Entities;
@@ -206,6 +207,53 @@ namespace NetDeamon.apps.PVControl.Managers
     /// as the mode-switch bypass above. Null when not active.
     /// </summary>
     public SessionStartSettings? SessionStartSettings { get; internal set; }
+
+    /// <summary>When the last session stopped (for the min-off latch). Null when running or cleared.</summary>
+    public DateTime? SessionStopTime { get; internal set; }
+    public LoadSchedulingMode? SessionStopMode { get; internal set; }
+    public SessionStartSettings? SessionStopSettings { get; internal set; }
+
+    /// <summary>Clears the min-off latch (e.g. the load became available again).</summary>
+    public void ClearOffLatch() => SessionStopTime = null;
+
+    /// <summary>
+    /// End of the min-off latch, or null when it doesn't hold: no recorded stop, disabled, already
+    /// over, or bypassed because mode or settings changed since the stop.
+    /// </summary>
+    public static DateTime? OffLatchUntil(DateTime? stopTime, int minOffMinutes, DateTime now, bool sameModeAndSettings)
+    {
+      if (stopTime is null || minOffMinutes <= 0 || !sameModeAndSettings) return null;
+      var until = stopTime.Value.AddMinutes(minOffMinutes);
+      return now < until ? until : null;
+    }
+
+    /// <summary>Moves sessions so none starts before <paramref name="notBefore"/>, keeping their length.</summary>
+    public static List<ExtraLoad> DelayUntil(IEnumerable<ExtraLoad> sessions, DateTime notBefore) =>
+      sessions.Select(e => e.StartTime >= notBefore ? e : new ExtraLoad
+      {
+        Name = e.Name, Priority = e.Priority, PowerW = e.PowerW,
+        StartTime = notBefore, EndTime = notBefore + (e.EndTime - e.StartTime),
+      }).ToList();
+
+    // ── Replanning (see ReplanPolicy) ──────────────────────────────────────────────────────
+    /// <summary>The inputs of the last FindLoadWindow run. Null until the first plan.</summary>
+    public ReplanSnapshot? LastPlan { get; set; }
+
+    /// <summary>Why the last FindLoadWindow run happened (published as an attribute).</summary>
+    public string LastPlanReason { get; set; } = "";
+
+    private string? _replanRequest;
+
+    /// <summary>Forces a replan on the next cycle (user changes, new prices, …). The first reason wins.</summary>
+    public void RequestReplan(string reason) => _replanRequest ??= reason;
+
+    /// <summary>Returns and clears a pending replan request.</summary>
+    public string? TakeReplanRequest()
+    {
+      var r = _replanRequest;
+      _replanRequest = null;
+      return r;
+    }
 
     /// <summary>ExtraLoad windows found by the last FindLoadWindow call.</summary>
     public List<ExtraLoad> ExtraLoads { get; internal set; } = [];
