@@ -135,9 +135,20 @@ public static class EnergySimulator
     var unclampedTrough = ComputeBaseFutureSoC(currentSoc, slotTime, cappedTroughWindowEnd, input, clampAtZero: false)
       .FirstMinOrDefault();
     int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : need.EstimatedSoc;
-    int deficit = Math.Max(0, floorSoc - baseTrough);
-    return Math.Min(100, currentSoc + deficit + 2);
+    // Lift the trough to exactly floor + hysteresis: the same level at which ComputeNeedToCharge
+    // stops an ongoing charge, so the simulated charge and the live stop condition agree.
+    int deficit = Math.Max(0, floorSoc + NeedToChargeHysteresisPct - baseTrough);
+    return Math.Min(100, currentSoc + deficit);
   }
+
+  /// <summary>
+  /// Hysteresis band (SoC %) of the NeedToCharge grid charge: it starts when the base trough
+  /// reaches the floor, but once charging continues until the trough is this far above it.
+  /// Must clearly exceed the live SoC's 1 % resolution: with 1 % (and a 2 % charge buffer) every
+  /// SoC tick moved the trough across the threshold — on 2026-10-19 that gave 28 grid charges of
+  /// 30–60 s between 03:20 and 04:37 instead of one charge.
+  /// </summary>
+  public const int NeedToChargeHysteresisPct = 5;
 
   // ── Base future SoC ─────────────────────────────────────────────────────────────────────
   // Integrates PV – totalLoad (including extra loads) from fromSlot onward without applying
@@ -180,9 +191,10 @@ public static class EnergySimulator
     InverterState currentMode, SimulationInput input, DateTime now)
   {
     int minSoC = input.GetEffectiveMinSoC();
-    // Add 1 % hysteresis while already charging to prevent thrashing at the boundary
+    // While already charging, keep going until the trough is NeedToChargeHysteresisPct above
+    // the floor ("<= minSoC" below, so floor + band − 1 ⇔ trough < floor + band).
     if (currentMode.Mode == InverterModes.force_charge)
-      minSoC++;
+      minSoC += NeedToChargeHysteresisPct - 1;
 
     // When do we first drop to or below minSoC?
     // If we're already below it (edge case after a settings change or offline period),

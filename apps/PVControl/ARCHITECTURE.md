@@ -47,6 +47,13 @@ Each slot contains:
 The simulator decides slot by slot: should the inverter force-charge from grid, export,
 or run normally? All price/forecast data is baked into `SimulationInput` upfront.
 
+**NeedToCharge grid charge:** starts when the no-charging trajectory's trough (before PV
+recovers) reaches the SoC floor; once charging it continues until that trough is
+`NeedToChargeHysteresisPct` (5 %) above the floor, and the charge target lifts the trough to
+exactly that level. The band must clearly exceed the live SoC's 1 % resolution — with 1 % every
+SoC tick restarted the charge (28 bursts of 30–60 s on 2026-10-19). The charge goes into the
+cheapest quarter plus the cheapest quarters under `ForceChargeMaxPrice` needed for the deficit.
+
 **This same function is called many times per cycle** — once as a baseline, then once per
 schedulable load candidate window, then once more for the final combined result.
 
@@ -59,7 +66,7 @@ Values are in **Wh per 15-min slot**.
 
 | Name | Source | What it forecasts |
 |---|---|---|
-| `Prediction_Load` | SQLite history (weighted avg by day-of-week) | House base load |
+| `Prediction_Load` | SQLite history (avg per local hour of day, recent days weighted more) | House base load |
 | `Prediction_PV` | OpenMeteo via HA sensors (today + tomorrow kWh) | Solar production |
 | `Prediction_NetEnergy` | PV − Load (with running-average correction) | Net surplus/deficit |
 | `Prediction_BatterySoC` | Simulation output | Battery SoC % per slot |

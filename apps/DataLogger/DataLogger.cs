@@ -162,6 +162,14 @@ namespace PVControl
         (nameof(_config.WarmwaterEnergyEntity), _config.WarmwaterEnergyEntity),
       ];
 
+      // Fallback lists resolve to null when none of their entities has a value — that's a
+      // failure, not "not configured", and the price column would silently stay empty.
+      if (_config.PriceEnergyImportEntities is { Count: > 0 } imports && _config.PriceEnergyImportEntity is null)
+        _logger.LogWarning("DataLogger: none of the import price entities has a value: {ids}", string.Join(", ", imports.Select(e => e.EntityId)));
+      if (!_config.PriceEnergyExportSameAsImport && !_config.PriceEnergyExportFixed
+          && _config.PriceEnergyExportEntities is { Count: > 0 } exports && _config.PriceEnergyExportEntity is null)
+        _logger.LogWarning("DataLogger: none of the export price entities has a value: {ids}", string.Join(", ", exports.Select(e => e.EntityId)));
+
       foreach (var (name, entity) in entities)
       {
         if (entity is null) continue; // not configured — expected, not a failure
