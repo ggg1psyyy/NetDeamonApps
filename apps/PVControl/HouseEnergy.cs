@@ -294,11 +294,11 @@ namespace NetDeamon.apps.PVControl
       {
         _gridRunningAverage.AddValue(grid);
       }
-      if (entity.EntityId == PVCC_Config.InverterStatusEntity?.EntityId && PVCC_Config.InverterStatusEntity.TryGetStateValue(out string inverterStatus))
+      if (entity.EntityId == PVCC_Config.InverterStatusEntity?.EntityId && PVCC_Config.InverterStatusEntity.TryGetStateValue(out string inverterStatus)
+          && inverterStatus != _currentInverterRunMode)
       {
         PVCC_Logger.LogInformation("Inverter RunMode changed from {CurrentInverterRunMode} to {InverterStatus}", _currentInverterRunMode, inverterStatus);
-        // if the inverter switches back to normal mode (but not from remote mode), we send the reset signal before switching back to the selected mode
-        if (_currentInverterRunMode != "Normal (R)" && inverterStatus == PVCC_Config.InverterStatusNormalString)
+        if (IsReturnToNormalMode(_currentInverterRunMode, inverterStatus, PVCC_Config.InverterStatusNormalString))
         {
           _resetCounter = 2;
           PVCC_Logger.LogInformation("Inverter returned to normal run mode, sending {ResetCounter} reset signal(s)", _resetCounter);
@@ -307,6 +307,16 @@ namespace NetDeamon.apps.PVControl
         _currentInverterRunMode = inverterStatus;
       }
     }
+
+    /// <summary>
+    /// Whether the inverter came back to normal mode from another mode (not from remote mode),
+    /// so the reset signal must be sent before switching back to the selected mode. Only a real
+    /// change counts: when the integration briefly reports "unknown" (live 2026-10-19 14:03:20 –
+    /// 14:03:34, all SolaX sensors), the unknown state isn't stored, so the reading coming back
+    /// equals the last known mode and must not trigger a reset.
+    /// </summary>
+    public static bool IsReturnToNormalMode(string previous, string current, string normalString) =>
+      current != previous && previous != "Normal (R)" && current == normalString;
 
     private int _resetCounter = 0;
     private int _bugFixCounter = 0;
