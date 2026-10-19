@@ -140,13 +140,32 @@ NetDeamon.apps.PVControl.PVConfig:
       ReplanIntervalMinutes: 5
       # Mode and TargetLevel omitted — HA entities auto-created
 
-  # REMOVED: HeatpumpManager (will be re-implemented as a SchedulableLoad later)
-  # current Load (W)
-  # HeatPumpLoadEntity: sensor.wp_power_total
-  # current Warwater temperature (�C)
-  # WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
-  # automatic Warmwater target temperature (�C)
-  # WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
-  # manual Warmwater target temperature (�C)
-  # WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
-  # WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
+  # Warm-water tank planner: heats with one-time heatings at the cheapest times that keep the
+  # comfort periods warm. Creates select.pv_control_warm_water_mode (Off / PlanOnly / Auto),
+  # comfort and boost temperature numbers, switch.pv_control_warm_water_boost, a time + enable
+  # switch per comfort period, and sensor.pv_control_warm_water_plan. Set the heat pump's own
+  # warm-water setpoint low (e.g. 20 °C) before switching to Auto — it stays as a safety net.
+  WarmWater:
+    Name: "Warm Water"
+    TemperatureEntity: sensor.wp_warmwasser_temperatur
+    # Used for learning the tank model, replanning and the house load; the control itself uses
+    # OneTimeActiveEntity.
+    HeatingActiveEntity: binary_sensor.wp_warmwasser_erzeugung_aktiv
+    OneTimeActiveEntity: binary_sensor.wp_einmalige_ww_erzeugung_aktiv
+    OneTimeSetpointEntity: number.wp_solltemperatur_warmwasser_einmalig
+    OneTimeSwitchEntity: switch.wp_einmalige_warmwasser_erzeugung
+    AutomaticSetpointEntity: number.wp_solltemperatur_warmwasser
+    PowerEntity: sensor.wp_power_total
+    # Subtract the historical warm-water energy from the house load prediction (the plan adds it back).
+    HistoryDbColumn: "warmwaterenergy"
+    MaxTemp: 57
+    ComfortTempDefault: 42
+    ComfortMarginK: 1
+    BoostTempDefault: 45
+    ComfortPeriods:
+      - Name: Morning
+        DefaultTime: "06:30"
+        DurationMinutes: 60
+      - Name: Evening
+        DefaultTime: "19:00"
+        DurationMinutes: 120

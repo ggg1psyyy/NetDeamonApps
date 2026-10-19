@@ -127,7 +127,7 @@ Attributes of `charge_now`: `reason`, `mode`, `target_level`, `current_level`, `
 
 #### Schedulable loads
 
-Extra loads (EV charger now, heat pump later) are scheduled by simulating them as an extra load in the house simulation and checking the result.
+Extra loads (the EV charger) are scheduled by simulating them as an extra load in the house simulation and checking the result. Warm water has its own planner (see below).
 
 **Modes** form a ladder — each mode runs its own ruleset plus all lower ones, bottom up, and the first one that allows charging wins:
 
@@ -166,6 +166,43 @@ The house battery minimum follows `switch.pv_control_enforce_preferred_soc` in e
 | `MinWindowMinutes`, `MinOffMinutes` | Minimum on-time (also the shortest window worth starting) and minimum off-time |
 | `ReplanIntervalMinutes` | Max minutes between schedule searches (default 5) |
 | `Icon`, `ChargeNowDeviceClass`, `LevelUnit`, `TargetLevelMin/Max/Step/Default` | Display settings of the auto-created entities |
+
+#### Warm water
+
+The heat pump heats the warm-water tank with one-time heatings at the cheapest times that keep the comfort periods warm (e.g. ≥ 42 °C from 06:30 for 1 h and from 19:00 for 2 h); outside them the tank may cool down. In `Auto`, PVControl switches the one-time heating on and off itself (the heat pump's switch stays on after reaching the setpoint), adjusts its setpoint when the plan changes, and stops a run mid-way when the plan no longer wants it. Set the heat pump's own warm-water setpoint low (e.g. 20 °C) as a safety net before switching to `Auto`.
+
+How it decides: a tank model learned daily from 10 days of HA history (heating ~17 K/h, standby loss growing with the temperature, ~1.7 kW) and what a kWh of heating costs in every 15-min slot according to the house simulation (PV surplus = lost export, battery energy = what refilling it costs, otherwise the import price). A dynamic program picks the cheapest heating slots. Heating early to a higher temperature (up to 57 °C) only wins when the price difference beats the extra heat loss — measured, a tank at 57 °C loses about twice as much per hour as one at 42 °C.
+
+| Entity | Description |
+|---|---|
+| `select.pv_control_warm_water_mode` | `Off` (heat pump automatic, PVControl only forecasts it), `PlanOnly` (default: plans and publishes, never touches the heat pump), `Auto` (PVControl runs the one-time heatings) |
+| `number.pv_control_warm_water_comfort_temp` | Comfort temperature, default 42 °C — the plan aims 1 K above it (`ComfortMarginK`) for model error |
+| `time.pv_control_warm_water_morning` | Start of the morning comfort period (default 06:30, lasts 60 min) |
+| `switch.pv_control_warm_water_morning_enabled` | Morning comfort period on/off (default on) |
+| `time.pv_control_warm_water_evening` | Start of the evening comfort period (default 19:00, lasts 120 min) |
+| `switch.pv_control_warm_water_evening_enabled` | Evening comfort period on/off (default on) |
+| `switch.pv_control_warm_water_boost` | "Warm water now": heats to the boost temperature right away in any mode; switches itself off when reached, when the heat pump stopped, or after 3 h. ~3 K take ~11 min, from 30 °C to 45 °C ~50 min |
+| `number.pv_control_warm_water_boost_temp` | Boost temperature, default 45 °C |
+| `sensor.pv_control_warm_water_plan` | State: the next heating (`06:15 → 44.5 °C`), `heating to … °C` or `no heating planned`. Attributes below |
+
+Attributes of `sensor.pv_control_warm_water_plan`:
+
+| Attribute | Meaning |
+|---|---|
+| `mode`, `boost` | Current mode, boost on/off |
+| `control` | What the control did or waits for this cycle (e.g. `Plan: start heating to 44.5 °C`, `Waiting for the heat pump to start (2 min)`, `Plan only (not controlling)`) |
+| `temperature`, `comfort_temp` | Tank temperature now, comfort temperature |
+| `runs` | Planned heatings: `start`, `end`, `from_temp`, `to_temp`, `power_w` |
+| `automatic_runs` | What the heat pump's own automatic would do (from its setpoint, 5 K hysteresis) |
+| `plan_cost_eur`, `automatic_cost_eur` | Heating cost of both until the end of tomorrow — the difference is the expected saving |
+| `comfort_deficit_k`, `automatic_comfort_deficit_k` | Largest shortfall below the comfort minimum (0 = all comfort periods met) |
+| `temp_forecast` | Planned tank temperature every 30 min, `[time, °C]` |
+| `model` | Learned tank model: `heating_k_per_h`, `loss_k_per_h_at_42` / `_at_55`, `power_w_at_45`, `usage_k_per_h` (per hour of day), `fitted` |
+| `last_plan`, `last_plan_reason` | When and why the plan was last made |
+
+**Getting started:** deploy (mode starts as `PlanOnly`), compare `runs` with `automatic_runs` and `plan_cost_eur` with `automatic_cost_eur` for a day or two and check `model` looks plausible; then set the heat pump's own warm-water setpoint low (e.g. 20 °C) and switch to `Auto`, watching `control`.
+
+YAML (`PVControl.yaml` → `WarmWater`): the heat pump entities (temperature, heating/one-time active, one-time setpoint and switch, automatic setpoint, power), `HistoryDbColumn`, `MaxTemp`, `ComfortTempDefault`, `ComfortMarginK`, `BoostTempDefault`, `ComfortPeriods` (name, default time, duration), `RunStartCostEur`, `ReplanIntervalMinutes`, `HistoryDays`.
 
 ---
 
@@ -209,6 +246,9 @@ dotnet test NetDeamonApps.Tests/
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
+| `TankModelTests` | Warm-water tank model fit on 10 days of real history, history helpers |
+| `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation |
+| `WarmWaterControlTests` | Starting, stopping (incl. mid-run) and re-targeting the one-time heating, boost lifecycle, comfort windows |
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
 | `PriceListTests` | Hourly/quarter-hourly price normalization and hourly billing averages |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |

@@ -245,9 +245,17 @@ namespace NetDeamon.apps.PVControl
           }
         }
 
+        if (_house.WarmWater is { } warmWater)
+        {
+          foreach (var entity in warmWater.CommandEntities)
+            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(entity.EntityId).ConfigureAwait(false))
+              .SubscribeAsync(async state => await UserStateChanged(entity, state));
+          await warmWater.RefitAsync(cancellationToken);
+        }
+
 #if !DEBUG
         PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
-#endif 
+#endif
 
 #if DEBUG
         var x = _house.ProposedState;
@@ -310,6 +318,8 @@ namespace NetDeamon.apps.PVControl
           _house.ForceChargeTargetSoC = value;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.ForceChargeTargetSoC.ToString());
       }
+      if (_house.WarmWater is not null)
+        await _house.WarmWater.HandleCommandAsync(entity, newState);
       // Handle auto-created mode and target-level entities for each schedulable load.
       foreach (var load in _house.SchedulableLoads)
       {
@@ -472,6 +482,13 @@ namespace NetDeamon.apps.PVControl
           charge_timeline = chargeTimeline,
         };
         await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);
+      }
+      #endregion
+      #region Warm water
+      if (_house.WarmWater is { } warmWater)
+      {
+        await warmWater.ActAsync(now);
+        await warmWater.PublishAsync(now);
       }
       #endregion
       #region Remaining battery
@@ -1181,6 +1198,9 @@ namespace NetDeamon.apps.PVControl
         if (load.ChargePowerEntity.TryGetStateValue(out int savedPower, numericalGetBaseValue: false) && savedPower > 0)
           load.LearnedPower = savedPower;
       }
+
+      if (_house.WarmWater is not null)
+        await _house.WarmWater.RegisterEntitiesAsync(reset);
 
       return true;
     }

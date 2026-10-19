@@ -4,6 +4,7 @@ using NetDaemon.HassModel.Entities;
 using NetDeamon.apps.PVControl.Managers;
 using NetDeamon.apps.PVControl.Predictions;
 using NetDeamon.apps.PVControl.Simulator;
+using NetDeamon.apps.PVControl.WarmWater;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -67,6 +68,8 @@ namespace NetDeamon.apps.PVControl
         .Where(c => !string.IsNullOrEmpty(c))
         .Select(c => c!)
         .ToList();
+      if (!string.IsNullOrEmpty(PVCC_Config.WarmWater?.HistoryDbColumn))
+        excludeColumns.Add(PVCC_Config.WarmWater.HistoryDbColumn);
       Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBFullLocation, 10, excludeColumns: excludeColumns);
 
       if (PVCC_Config.ForecastPVEnergyTodayEntities is null || PVCC_Config.ForecastPVEnergyTomorrowEntities is null)
@@ -98,6 +101,9 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.BatteryInputEnergyEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.BatteryInputEnergyEntity));
       PVCC_Config.CurrentGridPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentGridPowerEntity));
       PVCC_Config.InverterStatusEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.InverterStatusEntity));
+
+      if (PVCC_Config.WarmWater is { } wwConfig)
+        WarmWater = new WarmWaterController(wwConfig);
 
       // Initialize runtime objects for each schedulable load and wire up their power averages.
       SchedulableLoads = PVCC_Config.SchedulableLoads
@@ -160,7 +166,10 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Sum of average power (W) from all schedulable loads that are actively drawing above their minimum threshold.</summary>
     private int ActiveSchedulableLoadPowerW() => SchedulableLoads
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
-      .Sum(l => l.PowerAverage!.GetAverage());
+      .Sum(l => l.PowerAverage!.GetAverage()) + (WarmWater?.ActivePowerW ?? 0);
+
+    /// <summary>Warm-water tank planner; null when not configured.</summary>
+    public WarmWaterController? WarmWater { get; }
 
     /// <summary>
     /// Updates the load's learned typical power from an instantaneous reading (see
@@ -388,6 +397,20 @@ namespace NetDeamon.apps.PVControl
       // House load staying off its forecast means the plans assumed a load that isn't happening.
       if (_loadDeviation.Observe(now, CurrentAverageHouseLoad, Prediction_Load.CurrentValue * 4))
         RequestReplan("house load off forecast");
+
+      // Warm water first: the tank needs heating whatever the other loads do, so the loads below
+      // plan against a baseline that already contains it.
+      if (WarmWater is not null)
+      {
+        if (WarmWater.ReplanReason(now) is { } wwReason)
+          WarmWater.Replan(baseInput, baseResult, now, wwReason);
+        var wwLoads = WarmWater.ExtraLoads(now);
+        if (wwLoads.Count > 0)
+        {
+          baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. wwLoads]);
+          baseResult = EnergySimulator.Simulate(baseInput);
+        }
+      }
 
       // Find valid window for each schedulable load (highest priority first) — only when it's
       // due (ReplanPolicy); otherwise its last decision stays and is simulated below as is.
@@ -1227,6 +1250,7 @@ namespace NetDeamon.apps.PVControl
     {
       foreach (var load in SchedulableLoads)
         load.RequestReplan(reason);
+      WarmWater?.RequestReplan(reason);
     }
   }
 }

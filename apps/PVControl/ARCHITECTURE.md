@@ -104,16 +104,23 @@ Load uses only the near-term ramp (no day-scale — load follows historical patt
    (each load's test simulations are compared against its grid import — only the import a
    load ADDS counts as that load's grid use)
 
-4. For each schedulable load (highest Priority first):
+4. Warm water (if configured): replan when due (WarmWaterController.ReplanReason), then
+   baseInput += its heating runs and baseline = Simulate(baseInput) again — the tank needs
+   heating whatever the other loads do, so they plan against a baseline that contains it
+
+5. For each schedulable load (highest Priority first):
        FindLoadWindow(load, baseInput, baseline)
        → writes load.ChargeNow / ChargeReason / PredictedEnd / ExtraLoads
 
-5. finalInput = baseInput + all found ExtraLoads
+6. finalInput = baseInput + all found ExtraLoads
 
-6. _simulationResult = Simulate(finalInput)
+7. _simulationResult = Simulate(finalInput)
    → this is what ProposedState reads from
    → also used to update Prediction_BatterySoC
 ```
+
+After RunSimulation, `PVControl.ScheduledOperationsCore` lets the warm-water controller act on
+its plan (`ActAsync`: start a one-time heating, end a boost) and publish it.
 
 ---
 
@@ -271,6 +278,76 @@ lower ruleset's "no" that a higher one overrides in the same cycle doesn't end t
 
 ---
 
+## Warm water (`WarmWater/`)
+
+The warm-water tank isn't a schedulable load: its level doesn't stay where it's left — it loses
+heat all the time, faster the warmer it is. So the question isn't "reach a target by a time" but
+"be warm enough in every comfort window at the lowest cost". The heat pump's own automatic is
+meant to be set low (e.g. 20 °C) as a safety net; PVControl heats with one-time heatings
+(`number.wp_solltemperatur_warmwasser_einmalig` + `switch.wp_einmalige_warmwasser_erzeugung`;
+the heat pump stops heating at the setpoint, but the switch stays on until switched off).
+
+**`TankModel`** — learned daily from 10 days of HA history (`WarmWaterController.RefitAsync`):
+- heating rate (K/h): total rise / total time of the heating runs ≥ 8 min (measured ~17 K/h at any temperature)
+- standby loss `k·(T − ambient)`, at least 0.2 K/h: linear fit of the drop over one-hour windows
+  away from heating runs (+40 min sensor settling). Measured 0.75 K/h at 41 °C, 1.57 K/h at 55 °C
+- usage per hour of day: the mean extra drop of that hour beyond the standby loss (≈ 0 so far —
+  the sensor barely shows tapping)
+- power, linear over the run temperature (measured 1.65 kW at 42 °C, ~1.9 kW at 50 °C) — from
+  the heat pump power during heating runs, time-weighted
+- any part with too little data keeps the measured defaults (`TankModel.Default`)
+
+**`WarmWaterPlanner`** (pure):
+- `HeatingPricesPerKwh` — what a kWh of heating costs in each slot, from the house simulation:
+  the heat pump drawing in just that slot vs the baseline, by `NetGridCostVs` (lost export for PV
+  surplus, refill cost for battery energy, import price otherwise). Probed per 30 min (96
+  simulations, ~0.6 s).
+- `Plan` — dynamic program over the 15-min slots × tank temperature (0.1 K buckets) × "heated
+  the whole last slot". Per slot: off, or heat for 1/10 … 10/10 of it (so a run can stop between
+  slot boundaries). Cost = heating energy × slot price + `RunStartCostEur` per run start + 10 €/K
+  per slot below a comfort window's minimum (so a window is only missed when it can't be met).
+  Each state keeps its path's exact temperature, so bucket rounding never accumulates. A run that
+  can't be stopped is first heated to its target (`ForcedTarget`, see below). Heating early only wins
+  when the price difference beats the extra standby loss at the higher temperature.
+- `PredictAutomatic` — the heat pump's own automatic (setpoint − 5 K → setpoint), the forecast
+  while PVControl doesn't control the tank, and the baseline the plan's cost is compared with.
+
+**`WarmWaterControl.Decide`** (pure) — the one-time switch is the command, the "active" sensor
+the feedback. The switch stays on after the heat pump stopped at the setpoint, so PVControl
+switches it off again; switching it off also stops a running heating. In `Auto`:
+- inside a planned run, switch off, tank more than 1 K below the run's target → **Start**
+  (setpoint = target rounded up to 0.5 K, then switch on)
+- running, setpoint ≠ the run's target → **SetSetpoint** (the plan's target moved)
+- switch on, no planned run now → **Stop** (run finished, or the plan stops it mid-run)
+- switch on during a run but nothing heats → **Stop**, the next cycle starts cleanly — but only
+  10 min after PVControl's own start (measured: "active" follows the switch in 5–7 s, the
+  compressor ~2.5 min later)
+
+The plan's run times don't include that start-up delay, so a run still heating past its planned
+end triggers a replan first ("run outlasted its plan") instead of being switched off short of
+its target.
+
+Boost (any mode): the same towards the boost temperature; ends (and switches off) when reached,
+when the heat pump stopped after running, or after 3 h. `Off`/`PlanOnly` don't touch the switch
+otherwise. At most one command per 3 min; nothing while the heat pump entities are unavailable.
+
+In the plan, a one-time heating running in `Auto` isn't forced to finish (`HeatingNow`: continuing
+costs no run start, but the plan may stop it); forced to its target are only a boost, a one-time
+heating outside `Auto`, and the heat pump's own automatic.
+
+**Modes:** `Off` (heat pump automatic, PVControl only forecasts it), `PlanOnly` (default — plans
+and publishes next to the automatic forecast, doesn't touch the heat pump), `Auto`.
+
+**House simulation:** the automatic forecast (Off/PlanOnly) or the plan (Auto, boost) goes into
+the simulation as ExtraLoads; the DataLogger `warmwaterenergy` column is subtracted from the
+house load forecast, and the measured heat pump power while warm water heats from the house load
+running average — same as a schedulable load.
+
+**Replanning:** first plan, setting change, price update, new quarter-hour, heating start/stop,
+tank model update, at the latest every `ReplanIntervalMinutes` (15).
+
+---
+
 ## Key files
 
 | File | Role |
@@ -286,6 +363,11 @@ lower ruleset's "no" that a higher one overrides in the same cycle doesn't end t
 | `Managers/SchedulableLoadRuntime.cs` | Live runtime state per load |
 | `Predictions/NetEnergyPrediction.cs` | PV − load + `WithRunningAvgCorrection` (day-scale + near-term ramp) |
 | `Predictions/` | 4 prediction classes + abstract base `Prediction` + `PredictionContainer` |
+| `WarmWater/TankModel.cs` | Learned tank model (heating rate, standby loss, usage, power) and its fit |
+| `WarmWater/WarmWaterPlanner.cs` | Heating prices per slot, the dynamic-program plan, the automatic forecast |
+| `WarmWater/WarmWaterControl.cs` | Pure control decision (start a run, boost) and the daily comfort windows |
+| `WarmWater/WarmWaterController.cs` | HA side: history fit, entities, replanning, service calls |
+| `WarmWater/WarmWaterConfig.cs` | YAML config + `PVConfig.WarmWater` |
 | `Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic. `Decide()` is used only via unit tests (main flow uses the simulation oracle); `PrioritySoCGateOk()` is wired into `HouseEnergy.FindLoadWindow`'s live Priority/PriorityPlus SoC gate |
 
 ---
@@ -318,3 +400,15 @@ For each schedulable load:
 - Always creates `binary_sensor.pv_control_<slug>_charge_now`
 
 `<slug>` = `Name.ToLower().Replace(' ', '_')`, e.g. `"EV Charger"` → `ev_charger`.
+
+For the warm-water tank (`WarmWaterController.RegisterEntitiesAsync`, slug from `WarmWater.Name`,
+`"Warm Water"` → `warm_water`):
+- `select.pv_control_warm_water_mode` (Off / PlanOnly / Auto, default PlanOnly)
+- `number.pv_control_warm_water_comfort_temp`, `number.pv_control_warm_water_boost_temp`
+- `switch.pv_control_warm_water_boost` (switched off by the controller when the boost is over)
+- per comfort period: `time.pv_control_warm_water_<period>` and `switch.pv_control_warm_water_<period>_enabled`
+- `sensor.pv_control_warm_water_plan` — next heating as state; plan, automatic forecast, costs,
+  temperature forecast, model and control reason as attributes (see README)
+
+All command entities are handled by `WarmWaterController.HandleCommandAsync` (called from
+`PVControl.UserStateChanged`), which echoes the value and requests a replan.
