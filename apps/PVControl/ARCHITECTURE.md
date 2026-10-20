@@ -233,7 +233,7 @@ bypasses the min-on latch like the other settings in `SessionStartSettings`.
 climb, if the current/next session doesn't reach the target level, the same price scan plans the
 following session(s) — each judged against a baseline that already contains the earlier ones — up
 to 3, within the price horizon. Stored in `SchedulableLoadRuntime.PlannedSessions` and published as
-the `planned_sessions` attribute (also reflected in `charge_timeline`, `charge_end_predicted` and
+the `planned_sessions` attribute (also reflected in `zz_charge_timeline`, `charge_end_predicted` and
 `charge_end_predicted_soc`). Preview only: never part of the control simulation; every cycle
 re-decides `ChargeNow` from scratch.
 

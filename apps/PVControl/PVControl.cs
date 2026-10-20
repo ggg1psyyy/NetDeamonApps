@@ -479,7 +479,7 @@ namespace NetDeamon.apps.PVControl
           last_plan = load.LastPlan?.Time.ToISO8601() ?? "n/a",
           last_plan_reason = load.LastPlanReason,
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
-          charge_timeline = chargeTimeline,
+          zz_charge_timeline = chargeTimeline,
         };
         await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);
       }
