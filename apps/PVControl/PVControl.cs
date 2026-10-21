@@ -2,6 +2,7 @@
 using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.HassModel.Entities;
 using NetDeamon.apps;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reactive.Concurrency;
@@ -383,11 +384,25 @@ namespace NetDeamon.apps.PVControl
       }
       try
       {
-        await ScheduledOperationsCore();
-      }
-      catch (Exception ex)
-      {
-        PVCC_Logger.LogError(ex, "ScheduledOperations threw an exception");
+        try
+        {
+          await ScheduledOperationsCore();
+          _cycleFailures = 0;
+        }
+        catch (Exception ex)
+        {
+          _cycleFailures++;
+          _lastCycleError = ex.Message;
+          PVCC_Logger.LogError(ex, "ScheduledOperations threw an exception");
+        }
+        try
+        {
+          await PublishHealthAsync(DateTime.Now);
+        }
+        catch (Exception ex)
+        {
+          PVCC_Logger.LogError(ex, "Publishing the health status failed");
+        }
       }
       finally
       {
@@ -400,6 +415,93 @@ namespace NetDeamon.apps.PVControl
       }
     }
     private bool _socUnavailableLogged;
+
+    #region Health
+    private Entity _healthEntity = null!;
+    // A problem counts after 30 s (two cycles — a single 15-s sensor blip doesn't), and keeps
+    // counting until it has been gone for 1 min.
+    private readonly HealthMonitor _health = new(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+    private HealthLevel? _lastHealthLevel;
+    private int _cycleFailures;
+    private string? _lastCycleError;
+    private DateTime _lastHourlyRowCheck;
+    private DateTime? _lastHourlyRow;
+
+    static bool Unavailable(Entity? e) => e is null || e.State is null or "unknown" or "unavailable";
+
+    private IEnumerable<HealthIssue> CollectHealthIssues(DateTime now)
+    {
+      var battery = _house.Battery;
+      bool socUnavailable = battery.IsSoCUnavailable(now);
+      bool socReadingNow = PVCC_Config.BatterySoCEntity.TryGetStateValue(out int _);
+      var issues = HealthChecks.BatterySoC(socReadingNow, socUnavailable, battery.LastGoodSoC).ToList();
+
+      issues.AddRange(HealthChecks.InverterData(new[] { PVCC_Config.InverterStatusEntity, PVCC_Config.CurrentBatteryPowerEntity,
+          PVCC_Config.CurrentGridPowerEntity, PVCC_Config.CurrentHouseLoadEntity, PVCC_Config.CurrentPVPowerEntity }
+        .Where(e => e is not null && Unavailable(e)).Select(e => e!.EntityId).ToList()));
+
+      var prices = _house.Prices.PriceListImport;
+      issues.AddRange(HealthChecks.ImportPrices(now, PVCC_Config.CurrentImportPriceEntities.Select(e => e.EntityId).ToList(),
+        PVCC_Config.CurrentImportPriceEntity?.EntityId, prices.Count > 0 ? prices.Max(p => p.EndTime) : null));
+
+      issues.AddRange(HealthChecks.Forecasts(_house.Prediction_Load.DataOK, _house.Prediction_PV.DataOK,
+        PVCC_Config.ForecastPVEnergyTodayEntities.Concat(PVCC_Config.ForecastPVEnergyTomorrowEntities)
+          .Where(e => !e.TryGetStateValue(out float _)).Select(e => e.EntityId).ToList()));
+
+      issues.AddRange(HealthChecks.Cycle(_cycleFailures, _lastCycleError));
+      issues.AddRange(HealthChecks.WarmWater(_house.WarmWater is not null, _house.WarmWater?.HeatPumpAvailable ?? true));
+
+      if (now - _lastHourlyRowCheck >= TimeSpan.FromMinutes(5))
+      {
+        _lastHourlyRowCheck = now;
+        _lastHourlyRow = ReadLastHourlyRow();
+      }
+      issues.AddRange(HealthChecks.DataLogger(now, _lastHourlyRow));
+      return issues;
+    }
+
+    /// <summary>Timestamp of DataLogger's newest hourly row (the DB the load prediction reads).</summary>
+    private static DateTime? ReadLastHourlyRow()
+    {
+      try
+      {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={PVCC_Config.DBFullLocation};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT max(timestamp) FROM hourly";
+        return command.ExecuteScalar() is string text
+          ? DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime
+          : null;
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Health: reading the energy history DB failed");
+        return null;
+      }
+    }
+
+    /// <summary>sensor.pv_control_health: ok / degraded / error, the issues, and the time of the last
+    /// cycle (an HA automation notifies on a level change, and when last_cycle gets old — then
+    /// NetDaemon itself isn't running and this sensor can't say so).</summary>
+    private async Task PublishHealthAsync(DateTime now)
+    {
+      var status = _health.Evaluate(now, CollectHealthIssues(now));
+      if (status.Level != _lastHealthLevel)
+      {
+        PVCC_Logger.Log(status.Level == HealthLevel.ok ? LogLevel.Information : LogLevel.Warning,
+          "Health {Level}: {Issues}", status.Level, string.Join("; ", status.Issues.Select(i => i.Message)));
+        _lastHealthLevel = status.Level;
+      }
+      await PVCC_EntityManager.SetStateAsync(_healthEntity.EntityId, status.Level.ToString());
+      await PVCC_EntityManager.SetAttributesAsync(_healthEntity.EntityId, new
+      {
+        summary = status.Issues.Count == 0 ? "All checks ok" : string.Join("; ", status.Issues.Select(i => i.Message)),
+        issues = status.Issues.Select(i => new { key = i.Key, level = i.Level.ToString(), message = i.Message, since = i.Since.ToISO8601() }).ToList(),
+        last_cycle = now.ToISO8601(),
+        version = AppVersion.Current,
+      });
+    }
+    #endregion
 
     /// <summary>Battery SoC unavailable for longer than <see cref="BatteryState.SoCMaxHold"/>: hand the
     /// inverter back to normal mode (its own automatic) instead of keeping any special mode.</summary>
@@ -854,6 +956,10 @@ namespace NetDeamon.apps.PVControl
       var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
       await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Current);
       PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Current);
+      _healthEntity = await RegisterSensor("sensor.pv_control_health", "Health", "ENUM", "mdi:heart-pulse",
+        addConfig: new { options = Enum.GetNames<HealthLevel>() },
+        defaultValue: HealthLevel.ok.ToString(),
+        reRegister: reset);
 
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },

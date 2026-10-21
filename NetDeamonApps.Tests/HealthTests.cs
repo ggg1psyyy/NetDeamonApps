@@ -1,0 +1,147 @@
+using NetDeamon.apps.PVControl;
+using Xunit;
+
+namespace NetDeamonApps.Tests;
+
+/// <summary>
+/// sensor.pv_control_health: the debounce (<see cref="HealthMonitor"/>) and the checks
+/// (<see cref="HealthChecks"/>). Reading the HA entities and the DB for them, and publishing the
+/// sensor (PVControl.CollectHealthIssues / PublishHealthAsync), need a live HA and aren't tested.
+/// </summary>
+public class HealthTests
+{
+  static readonly DateTime T0 = new(2026, 10, 21, 13, 28, 15);
+  static HealthMonitor Monitor() => new(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+  static readonly HealthIssue SocHeld = new("soc", HealthLevel.degraded, "Battery SoC unknown");
+
+  // ── HealthMonitor ──────────────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void SingleCycleBlip_Live132815_StaysOk()
+  {
+    // SolaX sensors unknown 13:28:02–13:28:17: seen in one cycle only.
+    var m = Monitor();
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0, [SocHeld]).Level);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(15), []).Level);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(30), []).Level);
+  }
+
+  [Fact]
+  public void TwoSeparateBlips_DontAddUp()
+  {
+    var m = Monitor();
+    m.Evaluate(T0, [SocHeld]);
+    m.Evaluate(T0.AddSeconds(15), []);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(30), [SocHeld]).Level);
+  }
+
+  [Fact]
+  public void PresentFor30s_Counts()
+  {
+    var m = Monitor();
+    m.Evaluate(T0, [SocHeld]);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(15), [SocHeld]).Level);
+    var s = m.Evaluate(T0.AddSeconds(30), [SocHeld]);
+    Assert.Equal(HealthLevel.degraded, s.Level);
+    Assert.Equal(T0, Assert.Single(s.Issues).Since);
+  }
+
+  [Fact]
+  public void Counting_ClearsOnlyAfterOneMinuteGone()
+  {
+    var m = Monitor();
+    for (int i = 0; i <= 2; i++) m.Evaluate(T0.AddSeconds(15 * i), [SocHeld]); // counting from +30 s
+    Assert.Equal(HealthLevel.degraded, m.Evaluate(T0.AddSeconds(45), []).Level);
+    Assert.Equal(HealthLevel.degraded, m.Evaluate(T0.AddSeconds(75), []).Level);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(90), []).Level);
+  }
+
+  [Fact]
+  public void EscalateAfter_DegradedBecomesError()
+  {
+    var m = Monitor();
+    var issue = HealthChecks.InverterData(["sensor.solax_run_mode"]).Single();
+    HealthStatus? s = null;
+    for (int i = 0; i <= 7; i++) s = m.Evaluate(T0.AddSeconds(15 * i), [issue]); // up to 1:45
+    Assert.Equal(HealthLevel.degraded, s!.Level);
+    Assert.Equal(HealthLevel.error, m.Evaluate(T0.AddMinutes(2), [issue]).Level);
+  }
+
+  [Fact]
+  public void Level_IsTheWorstCountingIssue()
+  {
+    var m = Monitor();
+    HealthIssue[] issues = [SocHeld, new("cycle", HealthLevel.error, "3 cycle(s) failed")];
+    m.Evaluate(T0, issues);
+    var s = m.Evaluate(T0.AddSeconds(30), issues);
+    Assert.Equal(HealthLevel.error, s.Level);
+    Assert.Equal("cycle", s.Issues[0].Key); // worst first
+  }
+
+  // ── HealthChecks ───────────────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void BatterySoC_HeldIsDegraded_UnavailableIsError()
+  {
+    Assert.Empty(HealthChecks.BatterySoC(true, false, T0));
+    Assert.Equal(HealthLevel.degraded, HealthChecks.BatterySoC(false, false, T0).Single().Level);
+    Assert.Equal(HealthLevel.error, HealthChecks.BatterySoC(false, true, T0).Single().Level);
+  }
+
+  static readonly string[] PriceSources =
+    ["sensor.epex_spot_data_market_price_3", "sensor.epex_spot_data_market_price", "sensor.epex_spot_data_market_price_2"];
+
+  [Fact]
+  public void Prices_Live20261021_PrimarySourceDisabled_Degraded()
+  {
+    // _3 belongs to the disabled ENTSO-E entry; PVControl runs on the second source.
+    var issue = HealthChecks.ImportPrices(T0, PriceSources, "sensor.epex_spot_data_market_price", new DateTime(2026, 10, 22, 0, 0, 0)).Single();
+    Assert.Equal("price_source", issue.Key);
+    Assert.Equal(HealthLevel.degraded, issue.Level);
+  }
+
+  [Fact]
+  public void Prices_NoneForNow_Error() =>
+    Assert.Equal(HealthLevel.error, HealthChecks.ImportPrices(T0, PriceSources, PriceSources[0], T0.Date.AddHours(13)).Single().Level);
+
+  [Fact]
+  public void Prices_TomorrowMissingAfter16()
+  {
+    var todayOnly = new DateTime(2026, 10, 22, 0, 0, 0);
+    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(15.9), PriceSources, PriceSources[0], todayOnly));
+    Assert.Equal("prices_tomorrow", HealthChecks.ImportPrices(T0.Date.AddHours(16), PriceSources, PriceSources[0], todayOnly).Single().Key);
+    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(16), PriceSources, PriceSources[0], todayOnly.AddDays(1)));
+  }
+
+  [Fact]
+  public void Cycle_OneFailureDegraded_ThreeError()
+  {
+    Assert.Empty(HealthChecks.Cycle(0, null));
+    Assert.Equal(HealthLevel.degraded, HealthChecks.Cycle(1, "x").Single().Level);
+    Assert.Equal(HealthLevel.error, HealthChecks.Cycle(3, "x").Single().Level);
+  }
+
+  [Fact]
+  public void DataLogger_HourlyRowOlderThanTwoHours_Degraded()
+  {
+    var last = new DateTime(2026, 10, 21, 12, 59, 59);
+    Assert.Empty(HealthChecks.DataLogger(new DateTime(2026, 10, 21, 14, 59, 0), last));
+    Assert.Single(HealthChecks.DataLogger(new DateTime(2026, 10, 21, 15, 0, 0), last));
+    Assert.Single(HealthChecks.DataLogger(T0, null));
+  }
+
+  [Fact]
+  public void Forecasts_InvalidIsError_MissingSourceDegraded()
+  {
+    Assert.Empty(HealthChecks.Forecasts(true, true, []));
+    Assert.Equal(HealthLevel.degraded, HealthChecks.Forecasts(true, true, ["sensor.energy_production_today_4"]).Single().Level);
+    Assert.Equal(HealthLevel.error, HealthChecks.Forecasts(false, true, []).Single().Level);
+  }
+
+  [Fact]
+  public void WarmWater_HeatPumpUnavailable_Degraded()
+  {
+    Assert.Empty(HealthChecks.WarmWater(false, false));
+    Assert.Equal(HealthLevel.degraded, HealthChecks.WarmWater(true, false).Single().Level);
+  }
+}

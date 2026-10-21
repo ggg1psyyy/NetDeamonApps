@@ -68,6 +68,23 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | `sensor.pv_control_battery_status` | Battery status: `idle`, `charging`, `discharging`, `unknown` |
 | `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
 | `sensor.pv_control_version` | Deployed build (see [Build & Deploy](#build--deploy)), also the "Firmware" of the PV Control device |
+| `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
+
+#### Health
+
+`sensor.pv_control_health` sums up the checks below every 15-s cycle. A problem counts after 30 s (a single 15-s sensor blip doesn't) and until it has been gone for 1 min; the state is the worst counting problem.
+
+| Check | `degraded` | `error` |
+|---|---|---|
+| Battery SoC | unknown, last value used (≤ 2 min) | unavailable > 2 min → inverter in normal mode |
+| Inverter data (run mode, battery/grid/PV power, house load) | unknown | unknown > 2 min |
+| Import prices | first configured source has no data / tomorrow's prices missing after 16:00 | no price for now |
+| PV forecast, load prediction | a PV forecast source unavailable | prediction invalid |
+| 15-s cycle | one failed | 3+ failed in a row |
+| Warm water | heat pump entities unavailable (control paused) | — |
+| DataLogger | newest hourly row older than 2 h | — |
+
+Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on a level change, when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (replace `notify.notify` with your notify action).
 
 #### Price entities
 
@@ -287,6 +304,7 @@ dotnet test NetDeamonApps.Tests/
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts (live 2026-10-21 13:28), stale after 2 min → normal mode |
+| `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 
 ---

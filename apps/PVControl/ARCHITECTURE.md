@@ -131,6 +131,13 @@ it publishes mode `normal` (the inverter's own automatic, `charge_Reason: SoCUna
 battery charging and export enabled) and skips the rest — schedulable loads and warm water keep
 their last state — until the SoC is back.
 
+**Health.** After every cycle (also a failed one or the SoC fallback) `PVControl.PublishHealthAsync`
+collects the problems of this cycle (`HealthChecks`: SoC, inverter data, prices, forecasts, cycle
+failures, warm-water heat pump, DataLogger's newest hourly row — read every 5 min) and
+`HealthMonitor` debounces them: counted after 30 s present, cleared after 1 min gone, an issue
+with `EscalateAfter` becomes an error after that long. Published as `sensor.pv_control_health`
+(worst level, issues, `last_cycle`); the HA notification automation is `HA/Health.yaml`.
+
 ---
 
 ## Schedulable loads

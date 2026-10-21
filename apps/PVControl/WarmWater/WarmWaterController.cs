@@ -143,6 +143,9 @@ public sealed class WarmWaterController
   static bool? OnOff(Entity e) => e.State?.ToLowerInvariant() switch { "on" => true, "off" => false, _ => null };
 
   // ── Control ────────────────────────────────────────────────────────────────────────────────
+  /// <summary>The heat pump entities the control needs were readable in the last cycle (health sensor).</summary>
+  public bool HeatPumpAvailable { get; private set; } = true;
+
   public async Task ActAsync(DateTime now)
   {
     if (LastFit is null || now - LastFit.Value >= TimeSpan.FromDays(1))
@@ -153,8 +156,10 @@ public sealed class WarmWaterController
         || OnOff(Config.OneTimeActiveEntity) is not { } oneTimeActive)
     {
       ControlReason = "Heat pump unavailable";
+      HeatPumpAvailable = false;
       return;
     }
+    HeatPumpAvailable = true;
     if (BoostOn)
       _boostSawRunning |= oneTimeActive;
     if (_wasActive && !oneTimeActive) _lastStop = now;

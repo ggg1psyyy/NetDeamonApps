@@ -1,0 +1,39 @@
+alias: PV Control - Health
+description: >-
+  Notifies when sensor.pv_control_health changes (ok / degraded / error), when PVControl stopped
+  running (last_cycle older than 2 min) and when it runs again. Replace notify.notify with your
+  notify action.
+mode: queued
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_health
+    not_from:
+      - unknown
+      - unavailable
+    not_to:
+      - unknown
+      - unavailable
+    id: LEVEL
+  - trigger: template
+    value_template: >-
+      {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
+      {{ lc is not none and now() - as_datetime(lc) > timedelta(minutes=2) }}
+    id: STOPPED
+  - trigger: template
+    value_template: >-
+      {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
+      {{ lc is not none and now() - as_datetime(lc) < timedelta(minutes=1) }}
+    id: RUNNING
+conditions: []
+actions:
+  - action: notify.notify
+    data:
+      title: >-
+        {% if trigger.id == 'STOPPED' %}PV Control not running
+        {% elif trigger.id == 'RUNNING' %}PV Control running again
+        {% else %}PV Control {{ trigger.to_state.state }}{% endif %}
+      message: >-
+        {% if trigger.id == 'STOPPED' %}No cycle since {{ state_attr('sensor.pv_control_health', 'last_cycle') }}
+        {% elif trigger.id == 'RUNNING' %}{{ states('sensor.pv_control_health') }}: {{ state_attr('sensor.pv_control_health', 'summary') }}
+        {% else %}{{ trigger.to_state.attributes.summary }}{% endif %}
