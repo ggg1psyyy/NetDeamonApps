@@ -5,7 +5,6 @@ NetDeamon.apps.PVControl.PVConfig:
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
   # since these fail sometimes you can have multiple different sources, order = priority
   CurrentImportPriceEntities: 
-    - sensor.epex_spot_data_market_price_3
     - sensor.epex_spot_data_market_price
     - sensor.epex_spot_data_market_price_2
   ImportPriceMultiplier: 1.0
