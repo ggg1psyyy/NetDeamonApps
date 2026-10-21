@@ -409,7 +409,7 @@ For the warm-water tank (`WarmWaterController.RegisterEntitiesAsync`, slug from 
 `"Warm Water"` → `warm_water`):
 - `select.pv_control_warm_water_mode` (Off / PlanOnly / Auto, default PlanOnly)
 - `number.pv_control_warm_water_comfort_temp`, `number.pv_control_warm_water_boost_temp`
-- `switch.pv_control_warm_water_boost` (switched off by the controller when the boost is over)
+- `button.pv_control_warm_water_boost` (until 2026-10-20 a switch, removed on startup; boost state in `sensor.pv_control_warm_water_plan`)
 - per comfort period: `time.pv_control_warm_water_<period>` and `switch.pv_control_warm_water_<period>_enabled`
 - `sensor.pv_control_warm_water_plan` — next heating as state; plan, automatic forecast, costs,
   temperature forecast, model and control reason as attributes (see README)

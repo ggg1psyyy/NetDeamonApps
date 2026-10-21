@@ -59,7 +59,8 @@ public sealed class WarmWaterController
   public WarmWaterMode Mode => _modeEntity?.State is { } s && Enum.TryParse(s, true, out WarmWaterMode m) ? m : WarmWaterMode.Off;
   public double ComfortTemp => _comfortTempEntity is not null && _comfortTempEntity.TryGetStateValue(out float v, numericalGetBaseValue: false) ? v : Config.ComfortTempDefault;
   public double BoostTemp => _boostTempEntity is not null && _boostTempEntity.TryGetStateValue(out float v, numericalGetBaseValue: false) ? v : Config.BoostTempDefault;
-  public bool BoostOn => _boostEntity?.State?.Equals("on", StringComparison.OrdinalIgnoreCase) ?? false;
+  /// <summary>A boost is going: the boost button was pressed and the boost hasn't ended yet (kept in memory only).</summary>
+  public bool BoostOn => _boostSince is not null;
   double? Temperature => Config.TemperatureEntity.TryGetStateValue(out float t, numericalGetBaseValue: false) ? t : null;
   bool IsOn(Entity e) => e.State?.Equals("on", StringComparison.OrdinalIgnoreCase) ?? false;
   bool Heating => IsOn(Config.HeatingActiveEntity);
@@ -155,10 +156,7 @@ public sealed class WarmWaterController
       return;
     }
     if (BoostOn)
-    {
-      _boostSince ??= now;
       _boostSawRunning |= oneTimeActive;
-    }
     if (_wasActive && !oneTimeActive) _lastStop = now;
     _wasActive = oneTimeActive;
     var decision = WarmWaterControl.Decide(new ControlInput(now, temp, switchOn, oneTimeActive, OneTimeSetpoint, _lastCommand, _lastStart,
@@ -168,7 +166,6 @@ public sealed class WarmWaterController
     if (decision.EndBoost is { } why)
     {
       PVCC_Logger.LogInformation("{name}: boost ended ({why})", Config.Name, why);
-      await PVCC_EntityManager.SetStateAsync(_boostEntity.EntityId, "OFF");
       ResetBoost();
       RequestReplan("boost ended");
     }
@@ -311,8 +308,12 @@ public sealed class WarmWaterController
     _boostTempEntity = await RegisterSensor($"number.{p}_boost_temp", $"{Config.Name} - Boost Temperature", "temperature", "mdi:thermometer-chevron-up",
       addConfig: new { min = 30, max = Config.MaxTemp, step = 0.5, mode = "slider", unit_of_measurement = "°C" },
       defaultValue: Config.BoostTempDefault.ToString(CultureInfo.InvariantCulture), reRegister: reset);
-    _boostEntity = await RegisterSensor($"switch.{p}_boost", $"{Config.Name} - Boost", "switch", "mdi:shower-head",
-      defaultValue: "OFF", reRegister: reset);
+    // Up to 2026-10-20 the boost was a switch; a running heating is never stopped, so switching it
+    // off did almost nothing — it's a button now. Remove the old switch from HA.
+    if (new Entity(PVCC_HaContext, $"switch.{p}_boost").State is not null)
+      await PVCC_EntityManager.RemoveAsync($"switch.{p}_boost");
+    _boostEntity = await RegisterSensor($"button.{p}_boost", $"{Config.Name} - Boost", null, "mdi:shower-head",
+      reRegister: reset);
     _planEntity = await RegisterSensor($"sensor.{p}_plan", $"{Config.Name} - Plan", null, "mdi:water-boiler-auto",
       defaultValue: "unknown", reRegister: reset);
     foreach (var period in Config.ComfortPeriods)
@@ -347,10 +348,10 @@ public sealed class WarmWaterController
     }
     else if (id == _boostEntity.EntityId)
     {
-      bool on = newState.Equals("on", StringComparison.OrdinalIgnoreCase);
-      PVCC_Logger.LogInformation("{name}: boost {state}", Config.Name, on ? "on" : "off");
-      ResetBoost();
-      await PVCC_EntityManager.SetStateAsync(id, on ? "ON" : "OFF");
+      // Button press (payload "PRESS"). Pressing again during a boost restarts its timeout.
+      PVCC_Logger.LogInformation("{name}: boost pressed — heating to {temp} °C", Config.Name, BoostTemp);
+      _boostSince = DateTime.Now;
+      _boostSawRunning = false;
     }
     else if (_periods.Any(p => p.Time.EntityId == id))
     {
@@ -368,7 +369,8 @@ public sealed class WarmWaterController
   {
     var current = Plan.Runs.FirstOrDefault(r => r.Start <= now && r.End > now);
     var next = Plan.Runs.FirstOrDefault(r => r.Start > now);
-    string state = current != default ? $"heating to {current.TargetTemp:F1} °C"
+    string state = BoostOn ? $"boost to {BoostTemp:F1} °C"
+      : current != default ? $"heating to {current.TargetTemp:F1} °C"
       : next != default ? $"{next.Start:HH:mm} → {next.TargetTemp:F1} °C"
       : "no heating planned";
     await PVCC_EntityManager.SetStateAsync(_planEntity.EntityId, state);
@@ -385,6 +387,7 @@ public sealed class WarmWaterController
       temperature = Temperature,
       comfort_temp = ComfortTemp,
       boost = BoostOn,
+      boost_since = _boostSince?.ToISO8601(),
       plan_cost_eur = Math.Round(Plan.CostEur, 3),
       automatic_cost_eur = Math.Round(Automatic.CostEur, 3),
       comfort_deficit_k = Math.Round(Plan.ComfortDeficitK, 1),

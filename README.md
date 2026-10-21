@@ -181,7 +181,7 @@ How it decides: a tank model learned daily from 10 days of HA history (heating ~
 | `switch.pv_control_warm_water_morning_enabled` | Morning comfort period on/off (default on) |
 | `time.pv_control_warm_water_evening` | Start of the evening comfort period (default 19:00, lasts 120 min) |
 | `switch.pv_control_warm_water_evening_enabled` | Evening comfort period on/off (default on) |
-| `switch.pv_control_warm_water_boost` | "Warm water now": heats to the boost temperature right away in any mode; switches itself off when reached, when the heat pump stopped, or after 3 h. ~3 K take ~11 min, from 30 °C to 45 °C ~50 min |
+| `button.pv_control_warm_water_boost` | "Warm water now": heats to the boost temperature right away in any mode (a running heating keeps going, at least to the boost temperature). The boost ends when reached, when the heat pump stopped, or after 3 h; the plan sensor shows it (`boost to … °C`, attributes `boost`, `boost_since`). ~3 K take ~11 min, from 30 °C to 45 °C ~50 min |
 | `number.pv_control_warm_water_boost_temp` | Boost temperature, default 45 °C |
 | `sensor.pv_control_warm_water_plan` | State: the next heating (`06:15 → 44.5 °C`), `heating to … °C` or `no heating planned`. Attributes below |
 
@@ -189,7 +189,7 @@ Attributes of `sensor.pv_control_warm_water_plan`:
 
 | Attribute | Meaning |
 |---|---|
-| `mode`, `boost` | Current mode, boost on/off |
+| `mode`, `boost`, `boost_since` | Current mode, whether a boost is going and since when |
 | `control` | What the control did or waits for this cycle (e.g. `Plan: start heating to 44.5 °C`, `Waiting for the heat pump to start (2 min)`, `Plan only (not controlling)`) |
 | `temperature`, `comfort_temp` | Tank temperature now, comfort temperature |
 | `runs` | Planned heatings: `start`, `end`, `from_temp`, `to_temp`, `power_w` |

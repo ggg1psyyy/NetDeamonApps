@@ -142,7 +142,7 @@ NetDeamon.apps.PVControl.PVConfig:
 
   # Warm-water tank planner: heats with one-time heatings at the cheapest times that keep the
   # comfort periods warm. Creates select.pv_control_warm_water_mode (Off / PlanOnly / Auto),
-  # comfort and boost temperature numbers, switch.pv_control_warm_water_boost, a time + enable
+  # comfort and boost temperature numbers, button.pv_control_warm_water_boost, a time + enable
   # switch per comfort period, and sensor.pv_control_warm_water_plan. Set the heat pump's own
   # warm-water setpoint low (e.g. 20 °C) before switching to Auto — it stays as a safety net.
   WarmWater:
