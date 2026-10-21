@@ -38,7 +38,8 @@ public sealed class WarmWaterController
   readonly RunningIntAverage _power = new(TimeSpan.FromMinutes(2));
   string? _replanRequest;
   bool _lastHeating;
-  DateTime? _lastCommand, _lastStart, _boostSince;
+  DateTime? _lastCommand, _lastStart, _lastStop, _boostSince;
+  bool _wasActive;
   bool _boostSawRunning;
 
   public WarmWaterController(WarmWaterConfig config)
@@ -117,16 +118,15 @@ public sealed class WarmWaterController
       .Select(p => (SchedulableLoadRuntime.TryParseReadyBy(p.Time.State, out var t) ? t : default, p.Config.DurationMinutes));
     var comfort = WarmWaterControl.ComfortWindows(periods, now, horizonEnd, ComfortTemp + Config.ComfortMarginK);
 
-    // Runs PVControl can't or won't stop are forced to their target; a one-time heating in Auto
-    // is the plan's to continue or stop.
+    // A heating that runs is never stopped (WarmWaterControl), so the plan heats it to its target
+    // first: the boost, the one-time setpoint, or the heat pump's automatic setpoint.
     bool oneTime = IsOn(Config.OneTimeActiveEntity);
     double? forced = null;
-    if (BoostOn && temp < BoostTemp) forced = BoostTemp;
-    else if (oneTime && Mode != WarmWaterMode.Auto && OneTimeSetpoint is { } oneTimeSetpoint) forced = oneTimeSetpoint;
+    if (BoostOn && temp < BoostTemp) forced = Math.Max(BoostTemp, oneTime && OneTimeSetpoint is { } s ? s : 0);
+    else if (oneTime && OneTimeSetpoint is { } oneTimeSetpoint) forced = oneTimeSetpoint;
     else if (Heating && !oneTime && AutomaticSetpoint is { } auto) forced = auto;
-    bool heatingNow = oneTime && Mode == WarmWaterMode.Auto;
 
-    var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur, heatingNow);
+    var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur);
     Plan = WarmWaterPlanner.Plan(request);
     Automatic = AutomaticSetpoint is { } setpoint
       ? WarmWaterPlanner.PredictAutomatic(request with { Comfort = comfort }, setpoint, Config.AutomaticHysteresisK, Heating)
@@ -159,8 +159,10 @@ public sealed class WarmWaterController
       _boostSince ??= now;
       _boostSawRunning |= oneTimeActive;
     }
+    if (_wasActive && !oneTimeActive) _lastStop = now;
+    _wasActive = oneTimeActive;
     var decision = WarmWaterControl.Decide(new ControlInput(now, temp, switchOn, oneTimeActive, OneTimeSetpoint, _lastCommand, _lastStart,
-      Mode, Plan.Runs, Config.MaxTemp, BoostOn, BoostTemp, _boostSince, _boostSawRunning, Config.BoostTimeoutMinutes));
+      Mode, Plan.Runs, Config.MaxTemp, BoostOn, BoostTemp, _boostSince, _boostSawRunning, Config.BoostTimeoutMinutes, _lastStop));
     ControlReason = decision.Reason;
 
     if (decision.EndBoost is { } why)

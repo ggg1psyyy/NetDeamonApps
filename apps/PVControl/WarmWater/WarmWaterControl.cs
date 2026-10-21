@@ -20,20 +20,22 @@ public enum WarmWaterMode
 /// <param name="OneTimeActive">Whether the one-time heating actually runs — the feedback.</param>
 /// <param name="Setpoint">Current one-time setpoint, null when unknown.</param>
 /// <param name="LastStart">When PVControl last switched the one-time heating on.</param>
+/// <param name="LastStop">When a one-time heating last stopped (active → off), for the minimum off-time.</param>
 /// <param name="BoostSawRunning">The one-time heating was seen running since the boost started.</param>
 public readonly record struct ControlInput(
   DateTime Now, double Temp, bool SwitchOn, bool OneTimeActive, double? Setpoint, DateTime? LastCommand, DateTime? LastStart,
   WarmWaterMode Mode, IReadOnlyList<PlannedRun> Runs, double MaxTemp,
-  bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes);
+  bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes,
+  DateTime? LastStop = null);
 
 public enum ControlCommand
 {
   None,
   /// <summary>Set the one-time setpoint to the target, then switch the one-time heating on.</summary>
   Start,
-  /// <summary>Switch the one-time heating off (run finished, or the plan doesn't want it now).</summary>
+  /// <summary>Switch the one-time heating off — only once the heat pump has stopped (or a start wasn't taken).</summary>
   Stop,
-  /// <summary>Change the setpoint of the running one-time heating.</summary>
+  /// <summary>Raise the setpoint of the running one-time heating.</summary>
   SetSetpoint,
 }
 
@@ -46,15 +48,19 @@ public readonly record struct ControlDecision(ControlCommand Command, double? Ta
 
 /// <summary>
 /// What to do with the heat pump this cycle. The one-time switch is the command, the "active"
-/// sensor the feedback: a run is started by setpoint + switch on, finished or cancelled by switch
-/// off (the switch stays on after the heat pump stopped at the setpoint), and its setpoint follows
-/// the plan's target. Only in Auto, and for a boost in any mode. Pure, so it's testable without
-/// Home Assistant.
+/// sensor the feedback. Every compressor start wears the heat pump, so a heating that runs is
+/// never stopped: it continues to its setpoint, which may only be raised (a later plan or a boost
+/// wanting more). The switch is switched off only after the heat pump stopped by itself (it stays
+/// on otherwise), or when a start wasn't taken. New planned runs need ≥ 3 K of rise and 60 min since
+/// the last run ended. Planned runs only in Auto; a boost in any mode. Pure, so it's testable
+/// without Home Assistant.
 /// </summary>
 public static class WarmWaterControl
 {
-  /// <summary>A planned run isn't started when the tank is already this close to its target.</summary>
-  public const double StartDeadbandK = 1.0;
+  /// <summary>A planned run is only started when it raises the tank at least this much.</summary>
+  public const double MinRunK = 3.0;
+  /// <summary>No planned start within this time after the last heating stopped.</summary>
+  public static readonly TimeSpan MinOffTime = TimeSpan.FromMinutes(60);
   /// <summary>A boost is done this close to its temperature.</summary>
   public const double BoostReachedK = 0.3;
   /// <summary>No new command within this time after the last one — the heat pump and its sensors need time to react.</summary>
@@ -69,56 +75,68 @@ public static class WarmWaterControl
   public static ControlDecision Decide(ControlInput c)
   {
     bool cooledDown = c.LastCommand is not { } last || c.Now - last >= CommandCooldown;
+    bool controlling = c.Mode == WarmWaterMode.Auto || c.BoostOn;
 
+    string? endBoost = null;
     if (c.BoostOn)
-    {
-      string? end = c.Temp >= c.BoostTemp - BoostReachedK ? $"reached {c.Temp:F1} °C"
+      endBoost = c.Temp >= c.BoostTemp - BoostReachedK ? $"reached {c.Temp:F1} °C"
         : c.BoostSawRunning && !c.OneTimeActive ? "heat pump stopped"
         : c.BoostSince is { } since && c.Now - since >= TimeSpan.FromMinutes(c.BoostTimeoutMinutes) ? "timeout"
         : null;
-      if (end is not null)
-        // The plan takes over from here (in Auto it may keep heating) — it starts again if needed.
-        return new(c.SwitchOn ? ControlCommand.Stop : ControlCommand.None, null, end, $"Boost over ({end})");
-      return Drive(c, SetpointFor(c.BoostTemp, c.MaxTemp), cooledDown, "Boost");
+    bool boosting = c.BoostOn && endBoost is null;
+
+    // What the heating should reach now: the boost, or the planned run (Auto).
+    var run = c.Mode == WarmWaterMode.Auto ? c.Runs.FirstOrDefault(r => r.Start <= c.Now && r.End > c.Now) : default;
+    double? target = boosting ? SetpointFor(c.BoostTemp, c.MaxTemp)
+      : run != default ? SetpointFor(run.TargetTemp, c.MaxTemp)
+      : null;
+    string who = boosting ? "Boost" : "Plan";
+
+    ControlDecision With(ControlDecision d) => d with { EndBoost = endBoost, Reason = endBoost is null ? d.Reason : $"Boost over ({endBoost}); {d.Reason}" };
+
+    // Heating runs: never stopped, the setpoint may only go up.
+    if (c.SwitchOn && c.OneTimeActive)
+    {
+      if (controlling && target is { } up && (c.Setpoint is not { } sp || up >= sp + 0.25) && cooledDown)
+        return With(new(ControlCommand.SetSetpoint, up, null, $"{who}: setpoint {c.Setpoint:F1} → {up:F1} °C"));
+      return With(ControlDecision.Wait($"Heating to {c.Setpoint:F1} °C"));
     }
 
-    if (c.Mode != WarmWaterMode.Auto)
-      return ControlDecision.Wait(c.Mode == WarmWaterMode.Off ? "Off (heat pump automatic)" : "Plan only (not controlling)");
+    // Switch on, nothing heats: the heating finished (the switch stays on), or our start isn't
+    // taken yet — give it time, then switch off so the next start is clean.
+    if (c.SwitchOn)
+    {
+      if (!controlling && c.LastStart is null)
+        return ControlDecision.Wait(HandsOff(c.Mode));
+      if (c.LastStart is { } started && c.Now - started < StartAckTimeout)
+        return With(ControlDecision.Wait($"Waiting for the heat pump to start ({(c.Now - started).TotalMinutes:F0} min)"));
+      return With(cooledDown
+        ? new(ControlCommand.Stop, null, null, "Heating finished — switch off")
+        : ControlDecision.Wait("Waiting for the heat pump"));
+    }
 
-    var run = c.Runs.FirstOrDefault(r => r.Start <= c.Now && r.End > c.Now);
+    // Switch off: start if needed.
+    if (boosting)
+      return cooledDown
+        ? new(ControlCommand.Start, target, null, $"Boost: start heating to {target:F1} °C")
+        : ControlDecision.Wait("Boost: waiting for the heat pump");
+    if (c.Mode != WarmWaterMode.Auto)
+      return With(ControlDecision.Wait(HandsOff(c.Mode)));
     if (run == default)
     {
-      if (c.SwitchOn)
-        return cooledDown
-          ? new(ControlCommand.Stop, null, null, c.OneTimeActive ? "Plan says stop" : "Run finished — switch off")
-          : ControlDecision.Wait("Waiting for the heat pump");
       var next = c.Runs.FirstOrDefault(r => r.Start > c.Now);
-      return ControlDecision.Wait(next == default ? "No heating planned" : $"Next heating {next.Start:HH:mm} → {next.TargetTemp:F1} °C");
+      return With(ControlDecision.Wait(next == default ? "No heating planned" : $"Next heating {next.Start:HH:mm} → {next.TargetTemp:F1} °C"));
     }
-    if (!c.SwitchOn && c.Temp >= run.TargetTemp - StartDeadbandK)
-      return ControlDecision.Wait($"Planned run not needed ({c.Temp:F1} °C ≈ {run.TargetTemp:F1} °C)");
-    return Drive(c, SetpointFor(run.TargetTemp, c.MaxTemp), cooledDown, "Plan");
+    if (c.Temp > run.TargetTemp - MinRunK)
+      return With(ControlDecision.Wait($"Planned run too small ({c.Temp:F1} → {run.TargetTemp:F1} °C, < {MinRunK:F0} K)"));
+    if (c.LastStop is { } stopped && c.Now - stopped < MinOffTime)
+      return With(ControlDecision.Wait($"Off-time: no start before {stopped + MinOffTime:HH:mm}"));
+    return With(cooledDown
+      ? new(ControlCommand.Start, target, null, $"Plan: start heating to {target:F1} °C")
+      : ControlDecision.Wait("Plan: waiting for the heat pump"));
   }
 
-  /// <summary>Gets a one-time heating to <paramref name="target"/> running, or keeps it there.</summary>
-  static ControlDecision Drive(ControlInput c, double target, bool cooledDown, string who)
-  {
-    if (!cooledDown)
-      return ControlDecision.Wait($"{who}: waiting for the heat pump");
-    if (!c.SwitchOn)
-      return new(ControlCommand.Start, target, null, $"{who}: start heating to {target:F1} °C");
-    if (!c.OneTimeActive)
-    {
-      // Switch on but nothing runs: left on after an earlier run, or the heat pump didn't take
-      // the start. Off now, the next cycle starts again cleanly — but give our own start time.
-      if (c.LastStart is { } started && c.Now - started < StartAckTimeout)
-        return ControlDecision.Wait($"{who}: waiting for the heat pump to start ({(c.Now - started).TotalMinutes:F0} min)");
-      return new(ControlCommand.Stop, null, null, $"{who}: switch on without heating — reset");
-    }
-    if (c.Setpoint is not { } sp || Math.Abs(sp - target) >= 0.25)
-      return new(ControlCommand.SetSetpoint, target, null, $"{who}: setpoint {c.Setpoint:F1} → {target:F1} °C");
-    return ControlDecision.Wait($"{who}: heating to {target:F1} °C");
-  }
+  static string HandsOff(WarmWaterMode mode) => mode == WarmWaterMode.Off ? "Off (heat pump automatic)" : "Plan only (not controlling)";
 
   /// <summary>
   /// The comfort windows from now to <paramref name="horizonEnd"/>: every period daily at its time

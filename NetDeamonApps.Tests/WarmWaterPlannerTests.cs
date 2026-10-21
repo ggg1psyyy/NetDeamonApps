@@ -105,25 +105,15 @@ public class WarmWaterPlannerTests : TestBase
   }
 
   [Fact]
-  public void ControlledRunInProgress_PlanMayStopIt()
+  public void RunningHeating_ExpensiveNow_StillFinishedFirst()
   {
-    // A one-time heating PVControl started is going, but nothing needs warm water before the
-    // evening and heating now is expensive: the plan stops it and heats later in the cheap hours.
+    // Live 2026-10-20 16:26: a running heating was stopped after 3 min because a replan found
+    // later hours cheaper. A running heating is forced to its setpoint, whatever the prices.
     static float Price(DateTime t) => t.Hour is 16 or 17 ? 0.10f : 0.40f;
-    var plan = WarmWaterPlanner.Plan(Request(41, Price, EveningWindow) with { HeatingNow = true });
-
-    Assert.DoesNotContain(plan.Runs, r => r.Start == Start);
-    Assert.Contains(plan.Runs, r => r.Start.Hour is 16 or 17);
-  }
-
-  [Fact]
-  public void ControlledRunInProgress_ContinuingCostsNoRunStart()
-  {
-    // Same price all day and the window is now: keep heating instead of paying a new start.
-    var now = new ComfortWindow(Start, Start.AddHours(1), 43);
-    var plan = WarmWaterPlanner.Plan(Request(41, _ => 0.30f, [now]) with { HeatingNow = true });
+    var plan = WarmWaterPlanner.Plan(Request(41, Price, EveningWindow, forced: 47.5));
 
     Assert.Equal(Start, plan.Runs[0].Start);
+    Assert.InRange(plan.Runs[0].TargetTemp, 47.4, 47.5);
   }
 
   [Fact]

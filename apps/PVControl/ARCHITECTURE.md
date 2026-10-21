@@ -313,27 +313,31 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   while PVControl doesn't control the tank, and the baseline the plan's cost is compared with.
 
 **`WarmWaterControl.Decide`** (pure) — the one-time switch is the command, the "active" sensor
-the feedback. The switch stays on after the heat pump stopped at the setpoint, so PVControl
-switches it off again; switching it off also stops a running heating. In `Auto`:
-- inside a planned run, switch off, tank more than 1 K below the run's target → **Start**
-  (setpoint = target rounded up to 0.5 K, then switch on)
-- running, setpoint ≠ the run's target → **SetSetpoint** (the plan's target moved)
-- switch on, no planned run now → **Stop** (run finished, or the plan stops it mid-run)
-- switch on during a run but nothing heats → **Stop**, the next cycle starts cleanly — but only
-  10 min after PVControl's own start (measured: "active" follows the switch in 5–7 s, the
-  compressor ~2.5 min later)
+the feedback. Every compressor start wears the heat pump, so **a heating that runs is never
+stopped**: it continues to its setpoint, which may only be raised. In `Auto`:
+- inside a planned run, switch off, the run raises the tank ≥ 3 K (`MinRunK`) and the last
+  heating stopped ≥ 60 min ago (`MinOffTime`) → **Start** (setpoint = target rounded up to 0.5 K,
+  then switch on)
+- heating, the plan's run wants a higher target → **SetSetpoint** (never lower)
+- heating, whatever the plan says now → nothing (no stop mid-run)
+- switch on but nothing heats → the heating finished (the switch stays on after the setpoint is
+  reached) or our start isn't taken yet: **Stop** — but only 10 min after PVControl's own start
+  (measured: "active" follows the switch in 5–7 s, the compressor ~2.5 min later)
 
-The plan's run times don't include that start-up delay, so a run still heating past its planned
-end triggers a replan first ("run outlasted its plan") instead of being switched off short of
-its target.
+Boost (any mode): start towards the boost temperature now (not held back by the off-time), or
+raise a running heating's setpoint; ends when reached, when the heat pump stopped after running,
+or after 3 h — a heating going higher than the boost keeps running. `Off`/`PlanOnly` don't touch
+the switch otherwise. At most one command per 3 min; nothing while the heat pump entities are
+unavailable.
 
-Boost (any mode): the same towards the boost temperature; ends (and switches off) when reached,
-when the heat pump stopped after running, or after 3 h. `Off`/`PlanOnly` don't touch the switch
-otherwise. At most one command per 3 min; nothing while the heat pump entities are unavailable.
+In the plan, any heating that runs is forced to its target first (`ForcedTarget`: the boost, the
+one-time setpoint, or the automatic setpoint), so the plan matches what will happen.
 
-In the plan, a one-time heating running in `Auto` isn't forced to finish (`HeatingNow`: continuing
-costs no run start, but the plan may stop it); forced to its target are only a boost, a one-time
-heating outside `Auto`, and the heat pump's own automatic.
+The control acts with the clock read *after* the replan (`ActAsync(DateTime.Now)`): the plan's
+current run starts at the planning time, and with the cycle's earlier `now` (live 2026-10-20
+16:26: 16:26:14.0 vs a run starting 16:26:14.9) it found no current run and switched off a
+heating 3 min after starting it. The plan's run times also don't include the start-up delay, so a
+run still heating past its planned end triggers a replan ("run outlasted its plan").
 
 **Modes:** `Off` (heat pump automatic, PVControl only forecasts it), `PlanOnly` (default — plans
 and publishes next to the automatic forecast, doesn't touch the heat pump), `Auto`.

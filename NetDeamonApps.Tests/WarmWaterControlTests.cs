@@ -38,19 +38,46 @@ public class WarmWaterControlTests : TestBase
     Assert.Equal(ControlCommand.None, Decide(Input(switchOn: true, active: true, setpoint: 44.5)).Command);
 
   [Fact]
-  public void Running_PlanChangedTarget_SetpointFollows()
+  public void Running_PlanWantsMore_SetpointRaised()
   {
-    var d = Decide(Input(switchOn: true, active: true, setpoint: 50));
+    var d = Decide(Input(switchOn: true, active: true, setpoint: 42));
     Assert.Equal(ControlCommand.SetSetpoint, d.Command);
     Assert.Equal(44.5, d.Target);
   }
 
   [Fact]
-  public void Running_PlanHasNoRunNow_StopsMidRun()
+  public void Running_PlanWantsLess_SetpointNotLowered() =>
+    Assert.Equal(ControlCommand.None, Decide(Input(switchOn: true, active: true, setpoint: 50)).Command);
+
+  [Fact]
+  public void Running_PlanHasNoRunNow_NeverStopped()
   {
     var later = Run with { Start = Now.AddHours(2), End = Now.AddHours(2.5) };
-    var d = Decide(Input(temp: 41, switchOn: true, active: true, runs: [later]));
-    Assert.Equal(ControlCommand.Stop, d.Command);
+    Assert.Equal(ControlCommand.None, Decide(Input(temp: 41, switchOn: true, active: true, runs: [later])).Command);
+  }
+
+  [Fact]
+  public void Running_PlanMadeAfterTheCyclesClock_NotStopped()
+  {
+    // Live 2026-10-20 16:26:15: the cycle read the clock (16:26:14.0), the replan then made a run
+    // starting at 16:26:14.9 — "no current run" → switched off 3 min after the start.
+    var replanned = Run with { Start = Now.AddSeconds(0.9), End = Now.AddMinutes(26) };
+    var d = Decide(Input(temp: 40.3, switchOn: true, active: true, setpoint: 47.5, runs: [replanned], lastStart: Now.AddMinutes(-3)));
+    Assert.Equal(ControlCommand.None, d.Command);
+  }
+
+  [Fact]
+  public void AfterAHeating_NoPlannedStartWithin60Min()
+  {
+    Assert.Equal(ControlCommand.None, Decide(Input() with { LastStop = Now.AddMinutes(-59) }).Command);
+    Assert.Equal(ControlCommand.Start, Decide(Input() with { LastStop = Now.AddMinutes(-60) }).Command);
+  }
+
+  [Fact]
+  public void PlannedRunUnder3K_NotStarted()
+  {
+    Assert.Equal(ControlCommand.None, Decide(Input(temp: 41.5)).Command); // 41.5 → 44.3
+    Assert.Equal(ControlCommand.Start, Decide(Input(temp: 41.3)).Command);
   }
 
   [Fact]
@@ -139,6 +166,20 @@ public class WarmWaterControlTests : TestBase
     Assert.NotNull(d.EndBoost);
     Assert.Equal(ControlCommand.Stop, d.Command);
   }
+
+  [Fact]
+  public void Boost_ReachedWhileHeatingHigher_HeatingContinues()
+  {
+    // A planned run to 49 °C is going; the boost (45 °C) is reached on the way — boost over, but
+    // the heating isn't stopped.
+    var d = Decide(Input(temp: 45, switchOn: true, active: true, setpoint: 49, boost: true, boostSince: Now.AddMinutes(-10), boostSawRunning: true));
+    Assert.NotNull(d.EndBoost);
+    Assert.Equal(ControlCommand.None, d.Command);
+  }
+
+  [Fact]
+  public void Boost_NotHeldBackByOffTime() =>
+    Assert.Equal(ControlCommand.Start, Decide(Input(temp: 41, runs: [], boost: true, boostSince: Now) with { LastStop = Now.AddMinutes(-5) }).Command);
 
   [Fact]
   public void Boost_TimesOut() =>

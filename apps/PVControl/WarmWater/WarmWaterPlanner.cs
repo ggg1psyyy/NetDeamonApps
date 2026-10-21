@@ -20,9 +20,8 @@ public sealed record WarmWaterPlan(IReadOnlyList<PlannedRun> Runs, IReadOnlyList
 
 /// <summary>Everything a plan is made from. <see cref="Slots"/> are 15-min slot starts, the first one containing <see cref="Now"/>.</summary>
 /// <param name="PricePerKwh">What one kWh of heating costs in each slot (see <see cref="WarmWaterPlanner.HeatingPricesPerKwh"/>).</param>
-/// <param name="ForcedTarget">A run that can't be stopped (a boost, or one PVControl doesn't control): it continues until the tank reaches this temperature.</param>
+/// <param name="ForcedTarget">A heating that is going (never stopped) or a boost: it continues until the tank reaches this temperature.</param>
 /// <param name="RunStartCostEur">Added per run start, so the plan prefers one longer run over several short ones.</param>
-/// <param name="HeatingNow">A run PVControl controls is going: continuing it costs no run start, but the plan may stop it.</param>
 public sealed record PlanRequest(
   DateTime Now,
   double StartTemp,
@@ -32,8 +31,7 @@ public sealed record PlanRequest(
   IReadOnlyList<ComfortWindow> Comfort,
   double MaxTemp,
   double? ForcedTarget = null,
-  float RunStartCostEur = 0.02f,
-  bool HeatingNow = false);
+  float RunStartCostEur = 0.02f);
 
 /// <summary>
 /// Plans warm-water heating at the lowest cost that keeps the comfort windows warm. Pure
@@ -103,7 +101,7 @@ public static class WarmWaterPlanner
         if (actions[first++] < 1 - 1e-9) break; // reached the target within this slot
       }
     }
-    bool heating = first > 0 ? actions[first - 1] >= 1 - 1e-9 : r.HeatingNow;
+    bool heating = first > 0 && actions[first - 1] >= 1 - 1e-9;
 
     int buckets = Bucket(r.MaxTemp) + 2;
     // State = (temperature bucket, heated in the previous slot). Each state keeps the cheapest

@@ -487,7 +487,9 @@ namespace NetDeamon.apps.PVControl
       #region Warm water
       if (_house.WarmWater is { } warmWater)
       {
-        await warmWater.ActAsync(now);
+        // Not the cycle's `now`: the plan was just made (up to ~1 s later) and its current run
+        // starts at that time — an earlier `now` found no current run and stopped the heating.
+        await warmWater.ActAsync(DateTime.Now);
         await warmWater.PublishAsync(now);
       }
       #endregion
