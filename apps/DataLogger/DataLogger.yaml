@@ -34,5 +34,7 @@ PVControl.DataLoggerConfig:
   CarChargeEntity: sensor.esp_ct8_daily_energy_carport
   CarSoCEntity: sensor.byd_atto_2_ladezustand
   # CarDischargeEntity: 
-  HeatPumpEnergyEntity: sensor.wp_daily_energy_total
+  # Never-resetting total (since 2026-10-21). sensor.wp_daily_energy_total sums two ESP daily
+  # counters that reset a moment apart at midnight — counted as a reset plus 2.98 kWh on 2026-10-20.
+  HeatPumpEnergyEntity: sensor.wp_energy_lifetime_total
   WarmwaterEnergyEntity: sensor.ww_energy_consumption_day

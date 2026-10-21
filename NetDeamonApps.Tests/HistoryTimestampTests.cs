@@ -69,6 +69,26 @@ public class HistoryTimestampTests
     Assert.Equal(0.002f, DataLogger.CounterIncrease(readings), 3);
   }
 
+  [Fact]
+  public void CounterIncrease_SumOfTwoDailyCounters_CountsTheLaterResetPartTwice()
+  {
+    // sensor.wp_daily_energy_total (sum of two ESP daily counters), live 2026-10-20 00:00:02: one
+    // part resets first → 2.984, then the other → 0. That's two resets, the first one counted as
+    // 2.984 kWh of new energy (true for that hour: ~0.04). Why DataLogger reads the never-resetting
+    // sensor.wp_energy_lifetime_total instead.
+    Assert.Equal(2.984f, DataLogger.CounterIncrease([86.005f, 2.984f, 0f, 0.0001f]), 3);
+  }
+
+  [Fact]
+  public void CounterIncrease_LifetimeTotalWithRestartSteps_CountsTheRealIncrease()
+  {
+    // sensor.wp_energy_lifetime_total, live 2026-10-21 10:14–10:37 (ESP flashed three times): steps
+    // back by 0.001 kWh before each restart and goes unavailable once (not a reading).
+    float[] readings = [0.003f, 0.004f, 0.005f, 0.006f, 0.005f, 0.006f, 0.007f, 0.008f, 0.009f, 0.010f, 0.009f, 0.010f,
+      0.011f, 0.012f, 0.013f, 0.014f, 0.015f, 0.015f, 0.016f, 0.015f, 0.016f, 0.017f, 0.018f, 0.019f];
+    Assert.Equal(0.016f, DataLogger.CounterIncrease(readings), 3);
+  }
+
   [Theory]
   [InlineData(new float[] { })]
   [InlineData(new float[] { 5f })]
