@@ -399,10 +399,47 @@ namespace NetDeamon.apps.PVControl
         await ScheduledOperations();
       }
     }
+    private bool _socUnavailableLogged;
+
+    /// <summary>Battery SoC unavailable for longer than <see cref="BatteryState.SoCMaxHold"/>: hand the
+    /// inverter back to normal mode (its own automatic) instead of keeping any special mode.</summary>
+    private async Task PublishSoCUnavailableAsync(DateTime now)
+    {
+      if (!_socUnavailableLogged)
+      {
+        PVCC_Logger.LogWarning("Battery SoC unavailable since {Since} — inverter set to normal mode until it's back",
+          _house.Battery.LastGoodSoC?.ToString("HH:mm:ss") ?? "start");
+        _socUnavailableLogged = true;
+      }
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, InverterModes.normal.ToString());
+      await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, new
+      {
+        next_charge_window_start = "none",
+        next_charge_window_end = "none",
+        price = "0",
+        charge_Reason = "SoCUnavailable",
+        soc_unavailable_since = _house.Battery.LastGoodSoC?.ToISO8601() ?? "start",
+      });
+      await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, "ON");
+      await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, "ON");
+    }
+
     private async Task ScheduledOperationsCore()
     {
       PVCC_Logger.LogTrace("Entering Schedule");
       DateTime now = DateTime.Now;
+      // Short SoC dropouts are bridged with the last good value (BatteryState.BatterySoc); after
+      // SoCMaxHold nothing is decided from the battery — the inverter runs in its own normal mode.
+      if (_house.Battery.IsSoCUnavailable(now))
+      {
+        await PublishSoCUnavailableAsync(now);
+        return;
+      }
+      if (_socUnavailableLogged)
+      {
+        PVCC_Logger.LogInformation("Battery SoC available again ({SoC}%), resuming control", _house.Battery.BatterySoc);
+        _socUnavailableLogged = false;
+      }
       PVCC_Logger.LogTrace("Updating Predictions");
       if (_house.Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
       {

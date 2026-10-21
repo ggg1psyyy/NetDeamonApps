@@ -79,6 +79,22 @@ public class SimulatorTests : TestBase
     };
   }
 
+  [Theory]
+  [InlineData(0, true)]   // SoC sensor unknown read as 0 % (before the fix)
+  [InlineData(39, false)] // last good SoC held through the dropout
+  public void SoCDropout_Live20261021_ZeroPercentForcesAGridCharge(int startSoc, bool forceChargeNow)
+  {
+    // Live 2026-10-21 13:28:15: SolaX sensors unknown for 15 s, SoC 39 % → read as 0 % →
+    // force_charge, 6.4 kW from the grid (house ~450 W, PV ~1.9 kW, battery 11.52 kWh, min SoC 10 % + 2).
+    var start = new DateTime(2026, 10, 21, 13, 28, 15);
+    var slots = EnergySimulator.Simulate(BuildInput(start, startSocPct: startSoc, batteryCapWh: 11_520,
+      absMinSocPct: 12, prefMinSocPct: 15, loadWhPerSlot: 113, pvWhPerSlot: 470));
+    // HouseEnergy.ProposedState acts on the slot nearest to now: 13:30.
+    var current = slots.First(s => s.Time == new DateTime(2026, 10, 21, 13, 30, 0));
+    Assert.True(forceChargeNow == (current.State.Mode == InverterModes.force_charge),
+      string.Join(", ", slots.Take(6).Select(s => $"{s.Time:HH:mm} {s.State.Mode} {s.State.ModeReason}")));
+  }
+
   // ── window / slot-count tests ─────────────────────────────────────────────
 
   [Fact]

@@ -34,8 +34,33 @@ public class BatteryState
 
   public void AddBatteryPowerValue(int value) => _battChargeAverage.AddValue(value);
 
-  public int BatterySoc =>
-    PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : 0;
+  /// <summary>How long the last good SoC is used through a sensor dropout; after that the SoC is
+  /// unavailable (<see cref="IsSoCUnavailable"/>) and PVControl hands the inverter back to normal mode.</summary>
+  public static readonly TimeSpan SoCMaxHold = TimeSpan.FromMinutes(2);
+  private readonly HeldReading _soc = new(SoCMaxHold);
+
+  private void ReadSoC() =>
+    _soc.Update(DateTime.Now, PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : null);
+
+  /// <summary>Battery SoC (%); the last good reading while the sensor is unknown (not 0 — that's an
+  /// empty battery to the simulation and triggered a grid charge on 2026-10-21 13:28).</summary>
+  public int BatterySoc
+  {
+    get
+    {
+      ReadSoC();
+      return _soc.Value ?? 0;
+    }
+  }
+
+  /// <summary>No SoC reading for longer than <see cref="SoCMaxHold"/> (or none at all yet).</summary>
+  public bool IsSoCUnavailable(DateTime now)
+  {
+    ReadSoC();
+    return _soc.IsStale(now);
+  }
+
+  public DateTime? LastGoodSoC => _soc.LastGood;
 
   private int? _lastKnownMinBatterySoC;
 

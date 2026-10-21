@@ -122,6 +122,15 @@ Load uses only the near-term ramp (no day-scale — load follows historical patt
 After RunSimulation, `PVControl.ScheduledOperationsCore` lets the warm-water controller act on
 its plan (`ActAsync`: start a one-time heating, end a boost) and publish it.
 
+**Battery SoC dropouts.** `BatteryState.BatterySoc` keeps the last good reading while the SoC
+sensor is unknown (`HeldReading`), like battery capacity and minimum SoC. Before, an unknown SoC
+read as 0 % — an empty battery to the simulation: live 2026-10-21 13:28:02–13:28:17 the SolaX
+sensors dropped out, the 13:28:15 cycle went `force_charge` and the inverter drew 6.4 kW from the
+grid. After `SoCMaxHold` (2 min) without a reading the cycle decides nothing from the battery:
+it publishes mode `normal` (the inverter's own automatic, `charge_Reason: SoCUnavailable`,
+battery charging and export enabled) and skips the rest — schedulable loads and warm water keep
+their last state — until the SoC is back.
+
 ---
 
 ## Schedulable loads

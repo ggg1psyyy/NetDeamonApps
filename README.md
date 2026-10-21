@@ -286,6 +286,7 @@ dotnet test NetDeamonApps.Tests/
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
+| `HeldReadingTests` | Battery SoC held through sensor dropouts (live 2026-10-21 13:28), stale after 2 min → normal mode |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 
 ---
