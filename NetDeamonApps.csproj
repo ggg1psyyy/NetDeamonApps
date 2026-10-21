@@ -27,6 +27,26 @@
         <Compile Remove="HA\**" />
         <None Remove="HA\**" />
     </ItemGroup>
+    <!-- Version from git (see apps/AppVersion.cs): 0.5.<commit count>+<short hash>[.dirty] -->
+    <PropertyGroup>
+        <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    </PropertyGroup>
+    <Target Name="GitVersion" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo">
+        <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+        </Exec>
+        <Exec Command="git rev-parse --short=7 HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitHash" />
+        </Exec>
+        <Exec Command="git status --porcelain --untracked-files=no" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitChanges" />
+        </Exec>
+        <PropertyGroup Condition="'$(GitHash)' != ''">
+            <GitDirty Condition="'$(GitChanges)' != ''">.dirty</GitDirty>
+            <Version>0.5.$(GitCommitCount)</Version>
+            <InformationalVersion>0.5.$(GitCommitCount)+$(GitHash)$(GitDirty)</InformationalVersion>
+        </PropertyGroup>
+    </Target>
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
         <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon4' folder for add-on or your custom folder to deploy." Importance="high" />
     </Target>

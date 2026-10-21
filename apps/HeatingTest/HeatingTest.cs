@@ -220,20 +220,24 @@ public sealed class HeatingTest : IAsyncInitializable
     _config.HeatPumpModeEntity?.State);
 
   // ── HA entities ───────────────────────────────────────────────────────────────────────────
-  async Task<Entity> RegisterAsync(string id, string name, string? deviceClass, string icon, object? addConfig, string defaultValue)
+  // republish: publish the config even if the entity exists (state kept) — HA updates the device's
+  // firmware version only from a published config.
+  async Task<Entity> RegisterAsync(string id, string name, string? deviceClass, string icon, object? addConfig, string defaultValue, bool republish = false)
   {
     var entity = new Entity(_ha, id);
-    if (entity.State is null)
+    bool isNew = entity.State is null;
+    if (isNew || republish)
     {
       dynamic cfg = new ExpandoObject();
       var dict = (IDictionary<string, object>)cfg;
       if (addConfig is not null)
         foreach (var p in addConfig.GetType().GetProperties())
           dict[p.Name] = p.GetValue(addConfig)!;
-      dict["device"] = new { identifiers = new[] { "heating_test" }, name = "Heating Test", model = "Heating Test", manufacturer = "AH" };
+      dict["device"] = new { identifiers = new[] { "heating_test" }, name = "Heating Test", model = "Heating Test", manufacturer = "AH", sw_version = AppVersion.Current };
       dict["icon"] = icon;
       await _mqtt.CreateAsync(id, new EntityCreationOptions { Name = name, DeviceClass = deviceClass }, cfg).ConfigureAwait(false);
-      await _mqtt.SetStateAsync(id, defaultValue).ConfigureAwait(false);
+      if (isNew)
+        await _mqtt.SetStateAsync(id, defaultValue).ConfigureAwait(false);
     }
     return entity;
   }
@@ -250,6 +254,8 @@ public sealed class HeatingTest : IAsyncInitializable
       new { min = 1, max = 16, step = 0.5, mode = "box", unit_of_measurement = "h" },
       _config.DefaultDurationHours.ToString(CultureInfo.InvariantCulture));
     _status = await RegisterAsync("sensor.heating_test_status", "Heating Test - Status", null, "mdi:flask", null, "Idle");
+    var version = await RegisterAsync("sensor.heating_test_version", "Heating Test - Version", null, "mdi:tag-outline", null, AppVersion.Current, republish: true);
+    await _mqtt.SetStateAsync(version.EntityId, AppVersion.Current).ConfigureAwait(false);
   }
 
   async Task CommandAsync(Entity entity, string state)

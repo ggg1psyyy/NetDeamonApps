@@ -813,6 +813,11 @@ namespace NetDeamon.apps.PVControl
     private async Task<bool> RegisterControlSensors(bool reset=false)
     {
       //reset = true;
+      // Deployed build: republished on every start so the device's "Firmware" follows it too.
+      var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
+      await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Current);
+      PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Current);
+
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.automatic.ToString(),

@@ -67,6 +67,7 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | `binary_sensor.pv_control_export_allowed` | Whether PV surplus may currently be exported to the grid (off during negative export price) |
 | `sensor.pv_control_battery_status` | Battery status: `idle`, `charging`, `discharging`, `unknown` |
 | `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
+| `sensor.pv_control_version` | Deployed build (see [Build & Deploy](#build--deploy)), also the "Firmware" of the PV Control device |
 
 #### Price entities
 
@@ -227,6 +228,7 @@ A night only starts if the heat pump is in heating mode (`select.warmepumpe_modu
 | `time.heating_test_start` | Start of a night (default 22:00) |
 | `number.heating_test_duration` | Length of a night (default 12 h) |
 | `sensor.heating_test_status` | `Idle` / `Armed` / `Test` / `Reference` / `Restoring`; attributes: last decision (e.g. why a night was skipped), running run, original level, next kind, last runs |
+| `sensor.heating_test_version` | Deployed build, also the "Firmware" of the Heating Test device |
 
 **DB** (`apps/HeatingTest/heating_test.db`, times as local ISO-8601 text with offset — open with DB Browser for SQLite, Python, Excel, …):
 
@@ -252,6 +254,8 @@ dotnet publish -c Release     # Publish for deployment
 ```
 
 Copy the published output to `/config/netdaemon4` on your Home Assistant instance (NetDaemon4 add-on) or your custom deployment folder.
+
+The build gets its version from git: `0.5.<commit count>+<short hash>`, with `.dirty` appended when it was built with uncommitted changes (e.g. `0.5.233+1bdea38`, `0.5.233+1bdea38.dirty`). After a deploy, `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' "Firmware" show it; their history shows every deploy. Building needs `git` on the path, otherwise the version is `1.0.0`.
 
 For local development, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with your HA host, port, and token.
 
@@ -282,6 +286,7 @@ dotnet test NetDeamonApps.Tests/
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
+| `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 
 ---
 

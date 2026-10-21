@@ -76,12 +76,14 @@ namespace NetDeamon.apps.PVControl
       PVCC_Scheduler = null!;
       PVCC_ApiManager = null!;
     }
-    public static async Task<Entity> RegisterSensor(string id, string name, string? deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false)
+    /// <param name="republish">Publish the config even if the entity exists (no remove, state kept) —
+    /// HA updates the device info (e.g. its firmware version) only from a published config.</param>
+    public static async Task<Entity> RegisterSensor(string id, string name, string? deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false, bool republish = false)
     {
       var identifiers = new[] { "pv_control" };
-      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = 0.5 };
+      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = AppVersion.Current };
       Entity entity = new(PVCC_HaContext, id);
-      if (entity?.State == null || reRegister)
+      if (entity?.State == null || reRegister || republish)
       {
         if (reRegister && entity?.State != null)
         {
