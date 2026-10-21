@@ -29,11 +29,15 @@ conditions: []
 actions:
   - action: notify.notify
     data:
+      # Reads the sensor, not trigger.to_state: a manual run has no trigger data (then it sends
+      # the current status).
       title: >-
-        {% if trigger.id == 'STOPPED' %}PV Control not running
-        {% elif trigger.id == 'RUNNING' %}PV Control running again
-        {% else %}PV Control {{ trigger.to_state.state }}{% endif %}
+        {% set id = trigger.id | default('') %}
+        {% if id == 'STOPPED' %}PV Control not running
+        {% elif id == 'RUNNING' %}PV Control running again
+        {% else %}PV Control {{ states('sensor.pv_control_health') }}{% endif %}
       message: >-
-        {% if trigger.id == 'STOPPED' %}No cycle since {{ state_attr('sensor.pv_control_health', 'last_cycle') }}
-        {% elif trigger.id == 'RUNNING' %}{{ states('sensor.pv_control_health') }}: {{ state_attr('sensor.pv_control_health', 'summary') }}
-        {% else %}{{ trigger.to_state.attributes.summary }}{% endif %}
+        {% set id = trigger.id | default('') %}
+        {% if id == 'STOPPED' %}No cycle since {{ state_attr('sensor.pv_control_health', 'last_cycle') }}
+        {% elif id == 'RUNNING' %}{{ states('sensor.pv_control_health') }}: {{ state_attr('sensor.pv_control_health', 'summary') }}
+        {% else %}{{ state_attr('sensor.pv_control_health', 'summary') }}{% endif %}
