@@ -260,7 +260,7 @@ namespace NetDeamon.apps.PVControl
 
 #if DEBUG
         var x = _house.ProposedState;
-        _house.UpdatePredictions(true);
+        _house.UpdatePredictions();
 #endif
 
       }
@@ -543,15 +543,8 @@ namespace NetDeamon.apps.PVControl
         _socUnavailableLogged = false;
       }
       PVCC_Logger.LogTrace("Updating Predictions");
-      if (_house.Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
-      {
-        PVCC_Logger.LogError("Prediction doesn't start with today");
-        _house.UpdatePredictions(true);
-      }
-      else
-      {
-        _house.UpdatePredictions();
-      }
+      // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
+      _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))

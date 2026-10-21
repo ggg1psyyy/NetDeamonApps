@@ -27,10 +27,9 @@ namespace NetDeamon.apps.PVControl.Predictions
       Initialize("NetEnergy Prediction");
     }
 
-    protected override Dictionary<DateTime, int> PopulateData()
+    protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
       Dictionary<DateTime, int> result = [];
-      var now = DateTime.Now;
 
       int actualPVWh = 0;
       if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float pvWh))
@@ -43,15 +42,21 @@ namespace NetDeamon.apps.PVControl.Predictions
         ? WithRunningAvgCorrection(_LoadPrediction.TodayAndTomorrow, _CurrentLoad.GetAverage(), now)
         : _LoadPrediction.TodayAndTomorrow;
 
+      var missingPV = new List<DateTime>();
       foreach (var item in correctedLoad)
       {
         if (!correctedPV.TryGetValue(item.Key, out int pv))
         {
           pv = 0;
-          PVCC_Logger.LogError("Could not find SolarForeCast for {date}", item.Key);
+          missingPV.Add(item.Key);
         }
         result.Add(item.Key, pv - item.Value);
       }
+      // One line instead of one per slot (2026-10-20 00:00: 96 lines when the load and PV windows
+      // were built for different days).
+      if (missingPV.Count > 0)
+        PVCC_Logger.LogError("PV forecast missing for {Count} slots {First:dd.MM. HH:mm} → {Last:dd.MM. HH:mm}, counted as 0",
+          missingPV.Count, missingPV.Min(), missingPV.Max());
       return result.OrderBy(o => o.Key).ToDictionary();
     }
 

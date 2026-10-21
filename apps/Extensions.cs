@@ -480,10 +480,11 @@ namespace NetDeamon.apps
       }
       return nextQuarter;
     }
-    public static void ClearAndCreateEmptyPredictionData(this Dictionary<DateTime, int> data)
+    /// <summary>Empty (0) prediction window for the day of <paramref name="now"/>: today 00:00 → tomorrow 23:45.</summary>
+    public static void ClearAndCreateEmptyPredictionData(this Dictionary<DateTime, int> data, DateTime now)
     {
       data.Clear();
-      for (var time = DateTime.Now.Date; time < DateTime.Now.AddDays(2).Date; time = time.AddMinutes(15))
+      for (var time = now.Date; time < now.Date.AddDays(2); time = time.AddMinutes(15))
       {
         data.Add(time, 0);
       }

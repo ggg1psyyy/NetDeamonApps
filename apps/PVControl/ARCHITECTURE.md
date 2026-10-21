@@ -97,6 +97,10 @@ Load uses only the near-term ramp (no day-scale — load follows historical patt
 
 ```
 1. Refresh predictions (Load if date changed, PV always, NetEnergy always)
+   Load's day rollover (NeedsDayRollover) is logged as information; only a failed
+   recalculation is an error (once), retried every cycle — or every 5 min while invalid.
+   All predictions get the same `now` (UpdateData(now) → PopulateData(now), validated against
+   it): with separate clock reads a cycle at midnight built windows for different days
 
 2. Build baseInput  ← all predictions + prices + battery state + user settings
 

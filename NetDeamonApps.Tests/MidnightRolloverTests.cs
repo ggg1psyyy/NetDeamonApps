@@ -57,6 +57,22 @@ public class MidnightRolloverTests : TestBase
     Assert.False(newConditionFires);
   }
 
+  // ── HouseEnergy.NeedsDayRollover (the one place the rollover is decided) ──
+  // Until 2026-10 PVControl checked the same thing again before RunSimulation and logged
+  // "Prediction doesn't start with today" as an ERROR every midnight — for the normal rollover.
+
+  [Fact]
+  public void NeedsDayRollover_YesterdaysWindowAfterMidnight_True() =>
+    Assert.True(NetDeamon.apps.PVControl.HouseEnergy.NeedsDayRollover(MakeWindow(Yesterday), Today.AddSeconds(1)));
+
+  [Fact]
+  public void NeedsDayRollover_TodaysWindow_False() =>
+    Assert.False(NetDeamon.apps.PVControl.HouseEnergy.NeedsDayRollover(MakeWindow(Today), Today.AddHours(13)));
+
+  [Fact]
+  public void NeedsDayRollover_EmptyWindow_TrueInsteadOfThrowing() =>
+    Assert.True(NetDeamon.apps.PVControl.HouseEnergy.NeedsDayRollover(new Dictionary<DateTime, int>(), Today));
+
   // ── PV template: stale entity data is never passed raw to ValidateData ─────
 
   [Fact]

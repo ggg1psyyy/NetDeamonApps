@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace NetDeamon.apps.PVControl.Predictions
@@ -12,10 +13,10 @@ namespace NetDeamon.apps.PVControl.Predictions
   {
     public BatterySoCPrediction() => Initialize("Battery SoC Prediction");
 
-    protected override Dictionary<DateTime, int> PopulateData()
+    protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
       Dictionary<DateTime, int> result = [];
-      result.ClearAndCreateEmptyPredictionData();
+      result.ClearAndCreateEmptyPredictionData(now);
       return result;
     }
   }

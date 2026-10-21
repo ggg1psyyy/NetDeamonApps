@@ -31,9 +31,9 @@ namespace NetDeamon.apps.PVControl.Predictions
       Initialize("Load Prediction");
     }
 
-    protected override Dictionary<DateTime, int> PopulateData()
+    protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
-      DateTime today = DateTime.Now.Date;
+      DateTime today = now.Date;
       var hourly = HourlyWeightedAverages(LoadHistory(), today, _weightScaling);
 
       Dictionary<DateTime, int> data = [];

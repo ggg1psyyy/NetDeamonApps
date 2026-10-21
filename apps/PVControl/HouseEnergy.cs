@@ -364,16 +364,24 @@ namespace NetDeamon.apps.PVControl
     /// </summary>
     public void RunSimulation(List<ExtraLoad>? extraLoads = null)
     {
-      // Update upstream predictions first
+      // Update upstream predictions first — all with this one clock read: around midnight a second
+      // read can be the next day, and the load and PV windows then covered different days
+      // (live 2026-10-20 00:00:00: "Could not find SolarForeCast" for every 19.10. slot).
       var now = DateTime.Now;
       // Check the START of the 48h window, not Today.First().
       // After midnight, Today still returns the second half of yesterday's window (e.g. 03/18 entries
       // from a 03/17–03/18 dataset), so Today.First().Key.Date == now.Date is true and load never
       // refreshes — leaving stale 03/17 entries that solar forecast no longer covers.
-      if (Prediction_Load.TodayAndTomorrow.First().Key.Date != now.Date)
-        Prediction_Load.UpdateData();
-      Prediction_PV.UpdateData();
-      Prediction_NetEnergy.UpdateData();
+      // An invalid result is replaced by an empty window starting today (PredictionContainer), so
+      // it's retried here every 5 min instead of waiting for the next midnight.
+      if (NeedsDayRollover(Prediction_Load.TodayAndTomorrow, now)
+          || (!Prediction_Load.DataOK && now - _lastLoadRetry >= TimeSpan.FromMinutes(5)))
+      {
+        _lastLoadRetry = now;
+        RollOverLoadPrediction(now);
+      }
+      Prediction_PV.UpdateData(now);
+      Prediction_NetEnergy.UpdateData(now);
 
       // Build the base SimulationInput without extra loads. FindEVChargingWindow will run
       // multiple test simulations to find the valid EV charging window, then we run the
@@ -448,7 +456,7 @@ namespace NetDeamon.apps.PVControl
       //   - past slots of today (midnight→now) use actual SoC history from HA (seeded on
       //     startup), falling back to previously predicted values for slots after startup.
       var fullSoC = new Dictionary<DateTime, int>();
-      fullSoC.ClearAndCreateEmptyPredictionData(); // fills today 00:00 → tomorrow 23:45 with 0s
+      fullSoC.ClearAndCreateEmptyPredictionData(now); // fills today 00:00 → tomorrow 23:45 with 0s
 
       var startSlot = now.RoundToNearestQuarterHour();
       foreach (var slot in _simulationResult.Slots)
@@ -458,7 +466,7 @@ namespace NetDeamon.apps.PVControl
       foreach (var t in fullSoC.Keys.Where(k => k < startSlot).ToList())
         fullSoC[t] = _actualSoCHistory.GetValueOrDefault(t, Prediction_BatterySoC.TodayAndTomorrow.GetValueOrDefault(t, 0));
 
-      Prediction_BatterySoC.UpdateData(fullSoC);
+      Prediction_BatterySoC.UpdateData(fullSoC, now);
     }
 
     // ── Schedulable load window finding ──────────────────────────────────────────────────────
@@ -1242,9 +1250,42 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Full simulation result including PV windows and derived predicates.</summary>
     public SimulationResult? SimulationState => _simulationResult;
 
-    public void UpdatePredictions(bool all = false)
+    public void UpdatePredictions() => RunSimulation();
+
+    /// <summary>The load prediction's 48-h window doesn't start today (or is empty): after midnight
+    /// it still covers yesterday + today and has to be recalculated.</summary>
+    public static bool NeedsDayRollover(IReadOnlyDictionary<DateTime, int> window, DateTime now) =>
+      window.Count == 0 || window.Keys.Min().Date != now.Date;
+
+    private bool _loadRolloverFailed;
+    private DateTime _lastLoadRetry;
+
+    /// <summary>Recalculates the load prediction for the new day — the normal midnight step (logged
+    /// as information). Only a failed recalculation is an error, logged once until it works again;
+    /// the health sensor shows it too (load prediction invalid).</summary>
+    private void RollOverLoadPrediction(DateTime now)
     {
-      RunSimulation();
+      try
+      {
+        Prediction_Load.UpdateData(now);
+      }
+      catch (Exception ex)
+      {
+        if (!_loadRolloverFailed)
+          PVCC_Logger.LogError(ex, "Load prediction for {Date:yyyy-MM-dd} failed — retrying every cycle", now.Date);
+        _loadRolloverFailed = true;
+        return;
+      }
+      if (Prediction_Load.DataOK && !NeedsDayRollover(Prediction_Load.TodayAndTomorrow, now))
+      {
+        PVCC_Logger.LogInformation("New day: load prediction recalculated for {Date:yyyy-MM-dd}", now.Date);
+        _loadRolloverFailed = false;
+      }
+      else if (!_loadRolloverFailed)
+      {
+        PVCC_Logger.LogError("Load prediction for {Date:yyyy-MM-dd} invalid after recalculation — retrying every cycle", now.Date);
+        _loadRolloverFailed = true;
+      }
     }
 
     private readonly LoadDeviationTracker _loadDeviation = new();
