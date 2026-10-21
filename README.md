@@ -1,6 +1,6 @@
 # NetDeamonApps
 
-NetDaemon4 home automation apps for Home Assistant, written in C# (.NET 10.0).
+NetDaemon 6 home automation apps for Home Assistant, written in C# (.NET 10.0).
 
 > Developed with assistance from [Claude Code](https://claude.ai/code) (Anthropic) — used throughout for architecture decisions, bug diagnosis, code generation, and test authoring.
 
@@ -253,7 +253,7 @@ dotnet build -c Release       # Release build
 dotnet publish -c Release     # Publish for deployment
 ```
 
-Copy the published output to `/config/netdaemon4` on your Home Assistant instance (NetDaemon4 add-on) or your custom deployment folder.
+Copy the published output to `/config/netdaemon6` on your Home Assistant instance (NetDaemon 6 add-on) or your custom deployment folder.
 
 The build gets its version from git: `0.5.<commit count>+<short hash>`, with `.dirty` appended when it was built with uncommitted changes (e.g. `0.5.233+1bdea38`, `0.5.233+1bdea38.dirty`). After a deploy, `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' "Firmware" show it; their history shows every deploy. Building needs `git` on the path, otherwise the version is `1.0.0`.
 

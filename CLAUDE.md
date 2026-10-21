@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NetDaemon4 home automation apps written in C# (.NET 10.0) for Home Assistant. Four apps:
+NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant. Four apps:
 - **PVControl** — Solar/battery optimization with dynamic EPEX Spot pricing, load forecasting, and scheduling of extra loads (EV charger) and warm-water heating (heat pump one-time heatings)
 - **DataLogger** — Logs energy sensor history to SQLite for ML training
 - **HeatingTest** — Automated step test of the heat pump's heating-curve level (test/reference nights) with its own SQLite log; independent of PVControl, `Enabled: false` in its YAML switches it off completely
@@ -15,7 +15,7 @@ NetDaemon4 home automation apps written in C# (.NET 10.0) for Home Assistant. Fo
 ```bash
 dotnet build                   # Debug build
 dotnet build -c Release        # Release build
-dotnet publish -c Release      # Publish; copy output to /config/netdaemon4 on HA
+dotnet publish -c Release      # Publish; copy output to /config/netdaemon6 on HA
 dotnet test NetDeamonApps.Tests/     # Run unit tests (from repo root)
 ```
 
