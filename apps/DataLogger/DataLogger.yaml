@@ -37,3 +37,22 @@ PVControl.DataLoggerConfig:
   # counters that reset a moment apart at midnight — counted as a reset plus 2.98 kWh on 2026-10-20.
   HeatPumpEnergyEntity: sensor.wp_energy_lifetime_total
   WarmwaterEnergyEntity: sensor.ww_energy_consumption_day
+  # Heat pump operation and the house's state (since 2026-10-22) for the load and heating models:
+  # mode, minutes heating/compressor/eco, flow/return, wind, presence, room valves and setpoints.
+  HeatPumpModeEntity: select.warmepumpe_modus
+  HeatingActiveEntity: binary_sensor.wp_heizung_aktiv
+  CompressorActiveEntity: binary_sensor.wp_verdichter_1_stufe_aktiv
+  EcoModeEntity: binary_sensor.wp_sparbetrieb_aktiv
+  # What eco mode (Sparbetrieb) actually changes: the heat pump's current target temperature.
+  TargetTemperatureEntity: sensor.wp_aktuelle_solltemperatur
+  FlowTemperatureEntity: sensor.wp_vorlauftemperatur_sekundar
+  ReturnTemperatureEntity: sensor.wp_rucklauftemperatur_sekundar
+  WindSpeedEntity: sensor.wind_geschwindigkeit
+  PresenceEntity: person.gipsy
+  # Heated living rooms (the cellar is on standby and only logged by HeatingTest).
+  RoomClimateEntities:
+    - climate.wohnen_kuche
+    - climate.bad
+    - climate.arbeit_gang
+    - climate.gast
+    - climate.schlafen

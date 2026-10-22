@@ -40,6 +40,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`TankModelTests`**, **`WarmWaterPlannerTests`**, **`WarmWaterControlTests`** — warm-water tank model fit (real history in `Data/`), the dynamic-program plan and heating prices, the control decision (`WarmWaterController`'s HA calls aren't unit tested)
 - **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion
+- **`DataLoggerOperationTests`** — DataLogger schema v6: minutes in a state, time-weighted means, prevailing mode, the v6 migration
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`AppVersionTests`** — build version from git (`NetDeamonApps.csproj` target `GitVersion`, `apps/AppVersion.cs`), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware

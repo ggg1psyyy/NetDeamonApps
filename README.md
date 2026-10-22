@@ -227,6 +227,18 @@ YAML (`PVControl.yaml` → `WarmWater`): the heat pump entities (temperature, he
 ### DataLogger
 Logs energy sensor history to a local SQLite database at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
 
+One row per hour (`hourly`, stamped hh:59:59) and per day (`daily`): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases — resets and glitches handled), SoCs and prices. Since schema v6 (2026-10-22) also the heat pump's operation and the house's state, which history can't give back later:
+
+| Column | Source (`DataLogger.yaml`) | Value |
+|---|---|---|
+| `heatingmode` | `HeatPumpModeEntity` | mode held longest in the period |
+| `heatingminutes`, `compressorminutes`, `ecominutes` | `HeatingActiveEntity`, `CompressorActiveEntity`, `EcoModeEntity` | minutes on |
+| `hptargettemperature` | `TargetTemperatureEntity` | time-weighted mean of the heat pump's current target temperature (what eco mode lowers) |
+| `flowtemperature`, `returntemperature`, `windspeed` | `FlowTemperatureEntity`, `ReturnTemperatureEntity`, `WindSpeedEntity` | time-weighted mean |
+| `athomeminutes` | `PresenceEntity` | minutes `home` |
+| `roomsheating` | `RoomClimateEntities` (`hvac_action`) | mean number of rooms with an open valve |
+| `roomsetpoint` | `RoomClimateEntities` (setpoint) | mean room setpoint |
+
 ---
 
 ### HeatingTest
@@ -304,6 +316,7 @@ dotnet test NetDeamonApps.Tests/
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
+| `DataLoggerOperationTests` | DataLogger v6 columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts (live 2026-10-21 13:28), stale after 2 min → normal mode |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |

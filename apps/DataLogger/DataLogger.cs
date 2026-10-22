@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using System.Threading;
 using NetDaemon.HassModel.Entities;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Reactive.Concurrency;
 using NetDaemon.Extensions.Scheduler;
@@ -80,6 +81,18 @@ namespace PVControl
     public Entity? HeatPumpEnergyEntity { get; set; }
     public Entity? WarmwaterEnergyEntity { get; set; }
     public Entity? CarSoCEntity { get; set; }
+    // Heat pump operation and the house's state (schema v6, since 2026-10-22) — the load and
+    // heating models need what history can't give back: mode, timing, valves, presence.
+    public Entity? HeatPumpModeEntity { get; set; }
+    public Entity? HeatingActiveEntity { get; set; }
+    public Entity? CompressorActiveEntity { get; set; }
+    public Entity? EcoModeEntity { get; set; }
+    public Entity? TargetTemperatureEntity { get; set; }
+    public Entity? FlowTemperatureEntity { get; set; }
+    public Entity? ReturnTemperatureEntity { get; set; }
+    public Entity? WindSpeedEntity { get; set; }
+    public Entity? PresenceEntity { get; set; }
+    public List<Entity> RoomClimateEntities { get; set; } = [];
   }
 
   [NetDaemonApp]
@@ -160,6 +173,16 @@ namespace PVControl
         (nameof(_config.CarDischargeEntity), _config.CarDischargeEntity),
         (nameof(_config.HeatPumpEnergyEntity), _config.HeatPumpEnergyEntity),
         (nameof(_config.WarmwaterEnergyEntity), _config.WarmwaterEnergyEntity),
+        (nameof(_config.HeatPumpModeEntity), _config.HeatPumpModeEntity),
+        (nameof(_config.HeatingActiveEntity), _config.HeatingActiveEntity),
+        (nameof(_config.CompressorActiveEntity), _config.CompressorActiveEntity),
+        (nameof(_config.EcoModeEntity), _config.EcoModeEntity),
+        (nameof(_config.TargetTemperatureEntity), _config.TargetTemperatureEntity),
+        (nameof(_config.FlowTemperatureEntity), _config.FlowTemperatureEntity),
+        (nameof(_config.ReturnTemperatureEntity), _config.ReturnTemperatureEntity),
+        (nameof(_config.WindSpeedEntity), _config.WindSpeedEntity),
+        (nameof(_config.PresenceEntity), _config.PresenceEntity),
+        .. _config.RoomClimateEntities.Select(e => ((string, Entity?))(nameof(_config.RoomClimateEntities), e)),
       ];
 
       // Fallback lists resolve to null when none of their entities has a value — that's a
@@ -304,6 +327,51 @@ namespace PVControl
       return total;
     }
 
+    /// <summary>
+    /// Minutes in [<paramref name="from"/>, <paramref name="to"/>) during which the state matched.
+    /// <paramref name="changes"/> are (time, state) in time order; the first one is the state at
+    /// the period start (HA history starts with it, stamped earlier or at the start).
+    /// </summary>
+    public static double MinutesInState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to, Func<string, bool> match)
+    {
+      double minutes = 0;
+      for (int i = 0; i < changes.Count; i++)
+      {
+        var start = changes[i].Time < from ? from : changes[i].Time;
+        var end = i + 1 < changes.Count ? changes[i + 1].Time : to;
+        if (end > to) end = to;
+        if (end > start && match(changes[i].State))
+          minutes += (end - start).TotalMinutes;
+      }
+      return minutes;
+    }
+
+    /// <summary>Time-weighted mean of a value over [<paramref name="from"/>, <paramref name="to"/>)
+    /// (each value holds until the next change); null without any value.</summary>
+    public static double? TimeWeightedAverage(IReadOnlyList<(DateTime Time, double? Value)> changes, DateTime from, DateTime to)
+    {
+      double sum = 0, weight = 0;
+      for (int i = 0; i < changes.Count; i++)
+      {
+        if (changes[i].Value is not { } v) continue;
+        var start = changes[i].Time < from ? from : changes[i].Time;
+        var end = i + 1 < changes.Count ? changes[i + 1].Time : to;
+        if (end > to) end = to;
+        if (end <= start) continue;
+        double w = (end - start).TotalMinutes;
+        sum += v * w;
+        weight += w;
+      }
+      return weight > 0 ? sum / weight : null;
+    }
+
+    /// <summary>The state held longest in the period (e.g. the heat pump mode of an hour).</summary>
+    public static string? PrevailingState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to) =>
+      changes.Select(c => c.State).Where(s => s is not "unknown" and not "unavailable").Distinct()
+        .Select(s => (State: s, Minutes: MinutesInState(changes, from, to, x => x == s)))
+        .Where(x => x.Minutes > 0)
+        .OrderByDescending(x => x.Minutes).Select(x => x.State).FirstOrDefault();
+
     /// <summary>Readings after a big drop checked for a return to the old level (glitch, not reset).</summary>
     public const int GlitchLookahead = 5;
 
@@ -375,7 +443,9 @@ namespace PVControl
         AddFloatTask(averageTasks, _config.CarDischargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.HeatPumpEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.WarmwaterEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        var operation = GetOperationValuesAsync(historyStart, historyEnd);
         await Task.WhenAll(averageTasks);
+        var op = await operation;
         float? tempOutside = GetFloatTaskResult(averageTasks, _config.TemperatureOutsideEntity);
         float? tempInside = GetFloatTaskResult(averageTasks, _config.TemperatureInsideEntity);
         float? atmopressure = GetFloatTaskResult(averageTasks, _config.AtmoPressureEntity);
@@ -399,41 +469,90 @@ namespace PVControl
         int? warmwaterEnergy = (int?)(GetFloatTaskResult(averageTasks, _config.WarmwaterEnergyEntity) * 1000);
 
 
+        (string Column, object? Value)[] values =
+        [
+          ("timestamp", historyEnd.ToISO8601()),
+          ("temperatureoutside", tempOutside), ("temperatureinside", tempInside), ("atmopressure", atmopressure),
+          ("temperaturewarmwater", tempWarmwater), ("cloudcover", cloudCover), ("humidity", humidity), ("batterysoc", batterySoC),
+          ("priceenergyimport", priceEnergyImport), ("priceenergyexport", priceEnergyExport), ("pvyield", pvYield),
+          ("houseenergy", houseEnergyUsed), ("importenergy", energyImport), ("exportenergy", energyExport),
+          ("batterycharge", batteryCharge), ("batterydischarge", batteryDischarge), ("carsoc", carSoC), ("carcharge", carCharge),
+          ("cardischarge", carDischarge), ("heatpumpenergy", heatpumpEnergy), ("warmwaterenergy", warmwaterEnergy),
+          ("heatingmode", op.HeatingMode), ("heatingminutes", op.HeatingMinutes), ("compressorminutes", op.CompressorMinutes),
+          ("ecominutes", op.EcoMinutes), ("hptargettemperature", op.TargetTemperature), ("flowtemperature", op.FlowTemperature), ("returntemperature", op.ReturnTemperature),
+          ("windspeed", op.WindSpeed), ("athomeminutes", op.AtHomeMinutes), ("roomsheating", op.RoomsHeating), ("roomsetpoint", op.RoomSetpoint),
+        ];
         var insertCommand = con.CreateCommand();
-        insertCommand.CommandText = String.Format(
-          @"
-          INSERT OR IGNORE INTO {0} 
-          (timestamp, temperatureoutside, temperatureinside, atmopressure, temperaturewarmwater, cloudcover, humidity, batterysoc, priceenergyimport, priceenergyexport, pvyield, houseenergy, importenergy, exportenergy, batterycharge, batterydischarge, carsoc, carcharge, cardischarge, heatpumpenergy, warmwaterenergy) 
-          Values ('{1}',{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19}, {20}, {21});
-          ",
-          hours == 1 ? "hourly" : "daily",
-          historyEnd.ToISO8601(),
-          (tempOutside is not null) ? tempOutside?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (tempInside is not null) ? tempInside?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (atmopressure is not null) ? atmopressure?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (tempWarmwater is not null) ? tempWarmwater?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (cloudCover is not null) ? cloudCover?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (humidity is not null) ? humidity?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (batterySoC is not null) ? batterySoC?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (priceEnergyImport is not null) ? priceEnergyImport?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (priceEnergyExport is not null) ? priceEnergyExport?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (pvYield is not null) ? pvYield?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (houseEnergyUsed is not null) ? houseEnergyUsed?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (energyImport is not null) ? energyImport?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (energyExport is not null) ? energyExport?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (batteryCharge is not null) ? batteryCharge?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (batteryDischarge is not null) ? batteryDischarge?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (carSoC is not null) ? carSoC?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (carCharge is not null) ? carCharge?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (carDischarge is not null) ? carDischarge?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (heatpumpEnergy is not null) ? heatpumpEnergy?.ToString(CultureInfo.InvariantCulture) : "NULL",
-          (warmwaterEnergy is not null) ? warmwaterEnergy?.ToString(CultureInfo.InvariantCulture) : "NULL"
-          );
+        insertCommand.CommandText = $"INSERT OR IGNORE INTO {(hours == 1 ? "hourly" : "daily")} ({string.Join(", ", values.Select(v => v.Column))}) " +
+                                    $"VALUES ({string.Join(", ", values.Select(v => "$" + v.Column))});";
+        foreach (var (column, value) in values)
+          insertCommand.Parameters.AddWithValue("$" + column, value ?? DBNull.Value);
         _ = await insertCommand.ExecuteNonQueryAsync();
         await con.CloseAsync();
       }
       _logger.LogTrace("Finished storing values");
     }
+    /// <summary>Heat pump operation and the house's state over a period (schema v6 columns).</summary>
+    private sealed record OperationValues(string? HeatingMode, double? HeatingMinutes, double? CompressorMinutes, double? EcoMinutes,
+      double? TargetTemperature, double? FlowTemperature, double? ReturnTemperature, double? WindSpeed, double? AtHomeMinutes, double? RoomsHeating, double? RoomSetpoint);
+
+    private async Task<OperationValues> GetOperationValuesAsync(DateTime from, DateTime to)
+    {
+      async Task<List<SensorData>?> History(Entity? entity, bool attributes = false)
+      {
+        if (entity is null) return null;
+        try
+        {
+          var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, getAttributes: attributes, endDateTime: to);
+          return history.Item1 ? history.Item2 : null;
+        }
+        catch (Exception ex)
+        {
+          _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
+          return null;
+        }
+      }
+      static List<(DateTime, string)> States(List<SensorData> h) => h.Select(s => (s.LastChanged, s.State ?? "")).ToList();
+      static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (s.LastChanged,
+        double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList();
+      static string? Attribute(SensorData s, string name) =>
+        s.Attributes is JsonElement { ValueKind: JsonValueKind.Object } a && a.TryGetProperty(name, out var p)
+          ? p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString()
+          : null;
+      double? Minutes(List<SensorData>? h, string on) => h is null ? null : MinutesInState(States(h), from, to, s => s == on);
+      double? Average(List<SensorData>? h) => h is null ? null : TimeWeightedAverage(Numbers(h), from, to);
+
+      var mode = History(_config.HeatPumpModeEntity);
+      var heating = History(_config.HeatingActiveEntity);
+      var compressor = History(_config.CompressorActiveEntity);
+      var eco = History(_config.EcoModeEntity);
+      var target = History(_config.TargetTemperatureEntity);
+      var flow = History(_config.FlowTemperatureEntity);
+      var ret = History(_config.ReturnTemperatureEntity);
+      var wind = History(_config.WindSpeedEntity);
+      var presence = History(_config.PresenceEntity);
+      var rooms = _config.RoomClimateEntities.Select(e => History(e, attributes: true)).ToList();
+      await Task.WhenAll(new Task[] { mode, heating, compressor, eco, target, flow, ret, wind, presence }.Concat(rooms));
+
+      double? roomsHeating = null, roomSetpoint = null;
+      var roomHistories = rooms.Select(r => r.Result).Where(h => h is not null).Select(h => h!).ToList();
+      if (roomHistories.Count > 0)
+      {
+        double periodMinutes = (to - from).TotalMinutes;
+        roomsHeating = roomHistories.Sum(h => MinutesInState(h.Select(s => (s.LastChanged, Attribute(s, "hvac_action") ?? "")).ToList(), from, to, a => a == "heating")) / periodMinutes;
+        var setpoints = roomHistories
+          .Select(h => TimeWeightedAverage(h.Select(s => (s.LastChanged,
+            double.TryParse(Attribute(s, "temperature"), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList(), from, to))
+          .Where(v => v is not null).Select(v => v!.Value).ToList();
+        roomSetpoint = setpoints.Count > 0 ? setpoints.Average() : null;
+      }
+      return new OperationValues(
+        mode.Result is { } m ? PrevailingState(States(m), from, to) : null,
+        Minutes(heating.Result, "on"), Minutes(compressor.Result, "on"), Minutes(eco.Result, "on"), Average(target.Result),
+        Average(flow.Result), Average(ret.Result), Average(wind.Result), Minutes(presence.Result, "home"),
+        roomsHeating, roomSetpoint);
+    }
+
     // Configured entities are always queried, whatever their state right now: a sensor that's
     // briefly unavailable at logging time still has history for the period.
     private static void AddFloatTask(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity, FloatTask op, DateTime historyStart, DateTime historyEnd, Func<Entity, FloatTask, DateTime, DateTime, Task<Tuple<string, float?>>> query)
@@ -524,8 +643,27 @@ namespace PVControl
         _logger.LogInformation("DataLogger DB migrated to v5: duplicates removed, unique timestamp index added ({rows} rows changed)", removed);
         await SetDbVersion(con, 5);
       }
+      if (actualDBVersion < 6)
+      {
+        var migrate = con.CreateCommand();
+        migrate.CommandText = OperationColumnsSql;
+        await migrate.ExecuteNonQueryAsync();
+        _logger.LogInformation("DataLogger DB migrated to v6: heat pump operation and house state columns added");
+        await SetDbVersion(con, 6);
+      }
       await con.CloseAsync();
     }
+
+    /// <summary>v6: heat pump operation and the house's state per hour/day — mode, minutes of
+    /// heating/compressor/eco, the heat pump's current target temperature (lowered in eco mode),
+    /// flow and return temperature, wind, minutes at home, rooms with an open valve (mean count),
+    /// mean room setpoint.</summary>
+    public static readonly string OperationColumnsSql = string.Concat(
+      new[] { "hourly", "daily" }.SelectMany(table => new[]
+      {
+        "heatingmode TEXT", "heatingminutes REAL", "compressorminutes REAL", "ecominutes REAL", "hptargettemperature REAL", "flowtemperature REAL",
+        "returntemperature REAL", "windspeed REAL", "athomeminutes REAL", "roomsheating REAL", "roomsetpoint REAL",
+      }.Select(column => $"ALTER TABLE {table} ADD COLUMN {column};\n")));
 
     /// <summary>Removes duplicate timestamps (keeping the first row) and adds unique indexes.</summary>
     public const string DedupeAndIndexSql = @"
