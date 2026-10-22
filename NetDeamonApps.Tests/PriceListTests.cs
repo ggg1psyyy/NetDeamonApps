@@ -262,4 +262,51 @@ public class PriceListTests
     var prices = Today(day, _ => 0.3f);
     Assert.Same(prices, prices.WithEstimatedPrices(day.AddDays(1)));
   }
+
+  // ── Risk premium on estimates ────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void WithEstimatedPrices_Premium_OnlyOnEstimates_NotCompounded()
+  {
+    var day = new DateTime(2026, 10, 22);
+    var est = Today(day, _ => 0.30f).WithEstimatedPrices(day.AddDays(3), 0.05f);
+    Assert.Equal(0.30f, est.GetPrice(day.AddHours(14)));                       // published: as is
+    Assert.Equal(0.315f, est.GetPrice(day.AddDays(1).AddHours(14)), 4);        // estimated: +5 %
+    Assert.Equal(0.315f, est.GetPrice(day.AddDays(2).AddHours(14)), 4);        // chained: still +5 %, not +10 %
+    Assert.Equal(0.285f, Today(day, _ => 0.30f).WithEstimatedPrices(day.AddDays(2), -0.05f).GetPrice(day.AddDays(1).AddHours(3)), 4); // export
+  }
+
+  /// <summary>
+  /// Live 2026-10-22 13:15, tomorrow not yet published: the NeedToCharge grid charge moved from
+  /// today 14:00 (0.3327 €/kWh, published) to tomorrow 02:00 (estimated 0.3202 from today 02:00,
+  /// 3.9 % cheaper). With the 5 % premium the published slot wins.
+  /// </summary>
+  [Theory]
+  [InlineData(0f, "23 02:00")]
+  [InlineData(0.05f, "22 14:00")]
+  public void EstimatedPricePremium_Live20261022_PublishedCheapSlotWins(float premium, string firstCharge)
+  {
+    float[] gross = [0.3299f, 0.3219f, 0.3202f, 0.3250f, 0.3325f, 0.3460f, 0.3997f, 0.4264f, 0.4368f, 0.4326f, 0.3900f, 0.3588f,
+      0.3480f, 0.3432f, 0.3327f, 0.3528f, 0.3660f, 0.4223f, 0.4411f, 0.4366f, 0.4059f, 0.3801f, 0.3764f, 0.3505f];
+    float[] export = [0.1552f, 0.1500f, 0.1488f, 0.1520f, 0.1481f, 0.1571f, 0.1929f, 0.2107f, 0.2176f, 0.2148f, 0.1865f, 0.1656f,
+      0.1584f, 0.1552f, 0.1483f, 0.1617f, 0.1705f, 0.2080f, 0.2206f, 0.2176f, 0.1970f, 0.1799f, 0.1863f, 0.1690f];
+    var start = new DateTime(2026, 10, 22, 13, 15, 0);
+    var day = start.Date;
+    PriceList Day(float[] p) => new(Enumerable.Range(0, 24).Select(h => new PriceTableEntry(day.AddHours(h), day.AddHours(h + 1), p[h])));
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = day; t < day.AddDays(3); t = t.AddMinutes(15)) { load[t] = 80; pv[t] = t.Hour is >= 9 and < 16 && t.Date > day ? 150 : 0; }
+    var input = new NetDeamon.apps.PVControl.Simulator.SimulationInput
+    {
+      StartTime = start, StartSocPercent = 30, BatteryCapacityWh = 11_520, AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20,
+      EnforcePreferredSoc = true, MaxChargePowerAmps = 30, InverterEfficiency = 0.95f,
+      ImportPrices = Day(gross).WithEstimatedPrices(day.AddDays(2), premium),
+      ExportPrices = Day(export).WithEstimatedPrices(day.AddDays(2), -premium),
+      PublishedPricesUntil = day.AddDays(1),
+      LoadPredictionWh = load, PVPredictionWh = pv, EnableCheapForceCharge = false, OpportunisticDischarge = false,
+      ForceChargeMaxPrice = 0.25f, ForceChargeTargetSocPercent = 100, CurrentMode = new InverterState(InverterModes.normal),
+    };
+    var first = NetDeamon.apps.PVControl.Simulator.EnergySimulator.Simulate(input).First(s => s.State.Mode == InverterModes.force_charge);
+    Assert.Equal(firstCharge, first.Time.ToString("dd HH:mm"));
+  }
 }

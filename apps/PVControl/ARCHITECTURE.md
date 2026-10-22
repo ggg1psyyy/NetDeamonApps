@@ -459,7 +459,10 @@ arrive ~13:00. Until then the simulator's price scans (NeedToCharge window, chea
 saw no tomorrow at all, and the cost comparisons (`NetGridCostVs`: warm-water heating prices, EV)
 priced it with the flat mean of the known prices. The simulation input therefore gets `PriceListImport/Export.WithEstimatedPrices(end of tomorrow)`:
 missing quarters take the price 24 h earlier (chained; the daily pattern repeats well enough),
-never below 0 (negative-price handling only follows published prices).
+never below 0 (negative-price handling only follows published prices), with a risk premium
+(`EstimatedPricePremium`, default 5 %: import ×1.05, export ×0.95; not compounded along the chain)
+— live 2026-10-22 13:15 a charge moved from today 14:00 (0.3327, published) to an estimated
+02:00 (0.3202, 3.9 % cheaper); with the premium the published slot wins.
 `SimulationInput.PublishedPricesUntil` keeps the real end: the EV session planner
 (`PriceHorizonEnd`) doesn't commit to estimated prices, and the health check reads the published
 lists directly.

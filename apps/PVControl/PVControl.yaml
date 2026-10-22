@@ -36,6 +36,10 @@ NetDeamon.apps.PVControl.PVConfig:
   #                    mean to all four slots (use this if your provider bills the
   #                    hourly EPEX average rather than the raw 1/4h price)
   ImportPriceResolution: Hourly
+  # Tomorrow's prices arrive ~13:00; until then the simulation estimates them from the same hour a
+  # day earlier. Risk premium on those estimates: import × 1.05, export × 0.95 — an estimated slot
+  # only wins over a published one when it's clearly better.
+  EstimatedPricePremium: 0.05
   # How to determine the export (feed-in) price, checked in order:
   #   1. ExportPriceSameAsImport: true  -> reuse the resolved import netto price (scaled below)
   #   2. ExportPriceFixed: true         -> use a fixed feed-in tariff (entity takes priority over value)

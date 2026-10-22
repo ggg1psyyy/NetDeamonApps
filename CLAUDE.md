@@ -25,6 +25,11 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 
 **Every new or changed feature/function must be accompanied by a corresponding test.** If the logic is testable without HA (pure computation, data transformation, decision logic), add or update a test in `NetDeamonApps.Tests`. If HA integration makes unit testing impractical, document why in a comment near the test class.
 
+## Documentation
+
+- **`README.md`** describes only how things work **now** — no history, no dated incidents, no "before / used to" (that's what the commit log is for).
+- **`apps/PVControl/ARCHITECTURE.md`** explains **why** things are the way they are — incidents, measurements and dates that led to a design belong there.
+
 ## Tests
 
 `NetDeamonApps.Tests` (xUnit) covers pure-logic components that don't need HA:

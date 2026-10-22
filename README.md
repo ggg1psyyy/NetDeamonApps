@@ -43,8 +43,7 @@ Design details live in [`apps/PVControl/ARCHITECTURE.md`](apps/PVControl/ARCHITE
 Whether PV surplus may currently be exported is a separate, orthogonal decision — see
 `binary_sensor.pv_control_export_allowed` below. It's independent of `sensor.pv_control_mode`
 so a cheap grid-charge or safety-net top-up can still run even while export is suppressed
-(e.g. during a negative export price window) — the two used to be conflated under a single
-`house_only` mode value, which silently blocked grid-charging any time export was suppressed.
+(e.g. during a negative export price window).
 
 #### Control entities
 
@@ -104,7 +103,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 | `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (€/kWh) |
 | `sensor.pv_control_best_export_price_today` | Highest export price slot today (€/kWh) |
 
-The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive ~13:00. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative) — before, the plans saw no tomorrow at all or priced it with the flat mean. Price-driven commitments — EV session starts — still only use published prices.
+The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive ~13:00. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 
 #### Cost tracking entities
 
@@ -238,7 +237,7 @@ YAML (`PVControl.yaml` → `WarmWater`): the heat pump entities (temperature, he
 ### DataLogger
 Logs energy sensor history to a local SQLite database at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
 
-One row per hour (`hourly`, stamped hh:59:59) and per day (`daily`): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases — resets and glitches handled), SoCs and prices. Since schema v6 (2026-10-22) also the heat pump's operation and the house's state, which history can't give back later:
+One row per hour (`hourly`, stamped hh:59:59) and per day (`daily`): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases — resets and glitches handled), SoCs and prices. Also the heat pump's operation and the house's state:
 
 | Column | Source (`DataLogger.yaml`) | Value |
 |---|---|---|
@@ -317,19 +316,19 @@ dotnet test NetDeamonApps.Tests/
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
-| `MorningTopUpTests` | Grid charge with the real 2026-10-22 night: night charge with forecast margin, no top-up at 0.43 €/kWh before PV (grid_only holds the floor) |
+| `MorningTopUpTests` | Grid charge on a real night (prices, load forecast): night charge with forecast margin, no top-up at peak price before PV (grid_only holds the floor) |
 | `TankModelTests` | Warm-water tank model fit on 10 days of real history, history helpers |
 | `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation, outside-temperature efficiency |
 | `HeatingTestTests` | Heating step test: start/skip/alternation, end/abort/disarm, SQLite log incl. restart recovery |
 | `WarmWaterControlTests` | Starting, never stopping mid-run, raising the setpoint, off-time and minimum run of the one-time heating, boost lifecycle, comfort windows |
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
-| `PriceListTests` | Hourly/quarter-hourly price normalization, hourly billing averages, estimates for unpublished hours (live 2026-10-22) |
+| `PriceListTests` | Hourly/quarter-hourly price normalization, hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
-| `DataLoggerOperationTests` | DataLogger v6 columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
-| `HeldReadingTests` | Battery SoC held through sensor dropouts (live 2026-10-21 13:28), stale after 2 min → normal mode |
+| `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
+| `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 

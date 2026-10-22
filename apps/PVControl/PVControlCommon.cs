@@ -137,6 +137,9 @@ namespace NetDeamon.apps.PVControl
     public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
     public PriceResolution ImportPriceResolution { get; set; } = PriceResolution.Hourly;
+    /// <summary>Risk premium on estimated (not yet published) prices in the simulation: import
+    /// × (1 + premium), export × (1 − premium) — an estimated slot must be clearly better to win.</summary>
+    public float EstimatedPricePremium { get; set; } = 0.05f;
     public bool ExportPriceSameAsImport { get; set; } = true;
     public bool ExportPriceFixed { get; set; } = default;
     public Entity? ExportPriceFixedEntity { get; set; }

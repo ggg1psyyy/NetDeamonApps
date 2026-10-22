@@ -82,7 +82,11 @@ namespace NetDeamon.apps.PVControl
     /// trigger special handling (keeping battery room, curtailing export) that should only follow
     /// published prices.
     /// </summary>
-    public PriceList WithEstimatedPrices(DateTime until)
+    /// <param name="premium">Risk premium on the estimates (import +0.05, export −0.05): an
+    /// estimated slot only wins over a published one when it's clearly better — waiting for an
+    /// estimate that turns out wrong can cost a cheap published slot (live 2026-10-22 13:00: a
+    /// grid charge moved from today 14:00 at 0.3327 to an estimated 02:00 at 0.3202, 3.9 % less).</param>
+    public PriceList WithEstimatedPrices(DateTime until, float premium = 0)
     {
       if (_entries.Count == 0 || End is not { } end || end >= until) return this;
       var quarters = NormalizeToQuarterHourly()._entries;
@@ -98,8 +102,8 @@ namespace NetDeamon.apps.PVControl
           : byHour.TryGetValue(t.Hour, out float hourMean) ? hourMean
           : overall;
         price = Math.Max(0, price);
-        byStart[t] = price;
-        result.Add(new PriceTableEntry(t, t.AddMinutes(15), price));
+        byStart[t] = price; // the chain continues from the plain estimate (premium not compounded)
+        result.Add(new PriceTableEntry(t, t.AddMinutes(15), price * (1 + premium)));
       }
       return new PriceList(result);
     }
