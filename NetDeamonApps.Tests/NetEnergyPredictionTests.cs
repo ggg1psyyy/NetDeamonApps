@@ -65,8 +65,8 @@ public class NetEnergyPredictionTests
     Assert.Equal(liveRunningAvgW / 4, corrected[now.RoundToNearestQuarterHour()]);
   }
 
-  /// <summary>Live 2026-10-22: forecast far too low (≈ 300 Wh per quarter in the afternoon),
-  /// actual PV 1.83× of it, live average ≈ 2.5 kW.</summary>
+  /// <summary>A day the forecast is far too low (synthetic: ≈ 300 Wh per quarter in the
+  /// afternoon, actual PV 1.83× of it, live average ≈ 2.5 kW) — where the boundary jump is largest.</summary>
   static (Dictionary<DateTime, int> Raw, Func<DateTime, int> Actual) Live20261022()
   {
     var today = new DateTime(2026, 10, 22);
@@ -88,9 +88,10 @@ public class NetEnergyPredictionTests
   [Fact]
   public void PVCorrection_Live20261022_NoJumpAtQuarterBoundary()
   {
-    // 14:12:15 the grid charge stopped (trough lifted enough); 14:15:15 the 14:15 slot counted
-    // fully as "until now" (actual ≈ 0 for it) and as past (raw, no correction): ≈ −600 Wh of PV
-    // in the simulation, 5.3 % SoC — more than the 5 % hysteresis, the charge started again.
+    // Before, the 14:15 slot counted fully as "until now" at 14:15:15 (actual ≈ 0 for it) and as
+    // past (raw, no correction): here ≈ −600 Wh of PV in the simulation. Live 2026-10-22 (forecast
+    // about right, ratio 0.90 → 0.85) it was −163 Wh — part of the jump that restarted a grid
+    // charge at 14:15:15; the larger part was the running slot (RunningSlotTests).
     var (raw, actual) = Live20261022();
     var before = new DateTime(2026, 10, 22, 14, 12, 15);
     var after = new DateTime(2026, 10, 22, 14, 15, 15);
@@ -101,6 +102,53 @@ public class NetEnergyPredictionTests
 
     // What's left is the 4-slot live-average ramp moving on by one slot (≈ 75 Wh here, < 1 % SoC).
     Assert.InRange(pvAfter - pvBefore, -100, 100);
+  }
+
+  /// <summary>An October evening: forecast falling from 600 Wh per quarter at 16:00 to 0 at 18:00
+  /// (steep), the PV doing exactly what the forecast says.</summary>
+  static Dictionary<DateTime, int> SteepEvening()
+  {
+    var today = new DateTime(2026, 10, 20);
+    var raw = new Dictionary<DateTime, int>();
+    for (int i = 0; i < 96; i++)
+    {
+      var t = today.AddMinutes(15 * i);
+      raw[t] = t.Hour >= 10 && t.Hour < 16 ? 600 : 0;
+    }
+    for (var t = today.AddHours(16); t < today.AddHours(18); t = t.AddMinutes(15))
+      raw[t] = (int)(600 * (1 - (t - today.AddHours(16)).TotalHours / 2)); // 16:00 600 → 17:45 75
+    return raw;
+  }
+
+  [Fact]
+  public void PVCorrection_SteepEvening_KeepsTheForecastSlope()
+  {
+    // 17:00, the PV exactly on forecast: the last 15 min averaged 1.5 kW (forecast 375 Wh).
+    // The absolute ramp would carry those 375 Wh per quarter into 17:00–17:45, where the forecast
+    // falls from 300 to 75 Wh — too much PV every evening (10 days: evening error 154 → 77 Wh).
+    var raw = SteepEvening();
+    var now = new DateTime(2026, 10, 20, 17, 0, 0);
+    int actualToday = raw.Where(kv => kv.Key < now).Sum(kv => kv.Value);
+    int lastQuarterWh = raw[now.AddMinutes(-15)];
+    var corrected = NetEnergyPrediction.WithRunningAvgCorrection(raw, lastQuarterWh * 4, actualToday, now);
+    foreach (var minutes in new[] { 0, 15, 30, 45 })
+    {
+      var slot = now.AddMinutes(minutes);
+      Assert.InRange(corrected[slot], raw[slot] - 2, raw[slot] + 2); // on forecast → stays on forecast
+    }
+  }
+
+  [Fact]
+  public void PVCorrection_Dawn_TooLittleForecastForARatio_UsesTheLiveAverage()
+  {
+    // 08:10, the forecast in the last 15 min under NearTermRatioMinWh: the live average is used
+    // absolutely (the ratio of two tiny numbers is noise).
+    var today = new DateTime(2026, 10, 20);
+    var raw = new Dictionary<DateTime, int>();
+    for (int i = 0; i < 96; i++) raw[today.AddMinutes(15 * i)] = i >= 32 && i < 72 ? 40 * (i - 31) : 0; // 08:00 40 Wh, rising
+    var now = today.AddHours(8).AddMinutes(10);
+    var corrected = NetEnergyPrediction.WithRunningAvgCorrection(raw, 400, 30, now);
+    Assert.Equal(400 / 4, corrected[today.AddHours(8)]);
   }
 
   [Fact]

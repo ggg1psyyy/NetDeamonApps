@@ -59,10 +59,11 @@ public static class EnergySimulator
 
     for (var slotTime = startSlot; slotTime < endSlot; slotTime = slotTime.AddMinutes(SlotMinutes))
     {
-      // Energy values for this slot (Wh per 15-min period)
-      int pvWh = input.PVPredictionWh.GetValueOrDefault(slotTime, 0);
-      int loadWh = input.LoadPredictionWh.GetValueOrDefault(slotTime, 0);
-      int extraLoadWh = input.ExtraLoadWh(slotTime);
+      // Energy values for this slot (Wh per 15-min period; the running slot only its rest)
+      double fraction = input.SlotFraction(slotTime);
+      int pvWh = (int)(input.PVPredictionWh.GetValueOrDefault(slotTime, 0) * fraction);
+      int loadWh = (int)(input.LoadPredictionWh.GetValueOrDefault(slotTime, 0) * fraction);
+      int extraLoadWh = (int)(input.ExtraLoadWh(slotTime) * fraction);
       int totalLoadWh = loadWh + extraLoadWh;
 
       // --- Step 1: base look-ahead SoC (no charging) for this slot onward ---
@@ -89,7 +90,7 @@ public static class EnergySimulator
           (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
            newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input);
-      var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent);
+      var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, fraction);
 
       slots.Add(new SimulationSlot(slotTime, currentSoc, newMode, pvWh, loadWh, extraLoadWh, battChargeWh, battDischargeWh, gridImportWh, gridExportWh));
 
@@ -208,9 +209,10 @@ public static class EnergySimulator
 
     for (var t = startSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
     {
-      int pv = input.PVPredictionWh.GetValueOrDefault(t, 0);
-      int load = input.LoadPredictionWh.GetValueOrDefault(t, 0);
-      int extra = input.ExtraLoadWh(t);
+      double fraction = input.SlotFraction(t); // same rest-of-slot as the simulation itself
+      int pv = (int)(input.PVPredictionWh.GetValueOrDefault(t, 0) * fraction);
+      int load = (int)(input.LoadPredictionWh.GetValueOrDefault(t, 0) * fraction);
+      int extra = (int)(input.ExtraLoadWh(t) * fraction);
       // Store SoC at the START of the slot (before applying energy) so the base look-ahead
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
       // % can go negative here when clampAtZero is false — that's intentional, see call site.
@@ -570,13 +572,15 @@ public static class EnergySimulator
   // These drive the SoC update and are stored in the SimulationSlot for diagnostics.
 
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ComputeEnergyFlows(
-    InverterState state, int pvWh, int totalLoadWh, int currentEnergyWh, SimulationInput input, int chargeTargetSocPercent)
+    InverterState state, int pvWh, int totalLoadWh, int currentEnergyWh, SimulationInput input, int chargeTargetSocPercent,
+    double slotFraction = 1.0)
   {
     int availEnergy = currentEnergyWh;                              // Wh currently in battery (exact)
     int maxCapacity = input.BatteryCapacityWh;
     int minEnergy = input.AbsoluteMinSocPercent * maxCapacity / 100; // Wh at absolute minimum
     // Maximum charge or discharge energy per 15-min slot: amps × 240 V / 4 slots per hour
-    int maxChargeWh = input.MaxChargePowerAmps * ChargeVoltage / 4;
+    // (the running slot only for its rest, SimulationInput.SlotFraction)
+    int maxChargeWh = (int)(input.MaxChargePowerAmps * ChargeVoltage / 4 * slotFraction);
 
     return state.Mode switch
     {

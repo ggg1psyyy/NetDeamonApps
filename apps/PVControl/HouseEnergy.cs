@@ -50,7 +50,7 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentPVPowerEntity is null)
         throw new NullReferenceException("CurrentPVPowerEntity not available");
       if (PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
-        _pvRunningAverage.AddValue(pv);
+        AddPVPower(pv);
 
       _gridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
@@ -88,7 +88,7 @@ namespace NetDeamon.apps.PVControl
         throw new NullReferenceException("PV Forecast entities are not available");
       Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
 
-      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, true);
+      Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, true, ActualPVEnergyTodayWh);
 
       if (PVCC_Config.BatterySoCEntity is null)
         throw new NullReferenceException("BatterySoCEntity not available");
@@ -248,7 +248,7 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
-        _pvRunningAverage.AddValue(pv);
+        AddPVPower(pv);
       }
       if (entity.EntityId == PVCC_Config.DailyExportEnergyEntity?.EntityId && PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float export))
       {
@@ -1266,10 +1266,20 @@ namespace NetDeamon.apps.PVControl
 
     public int CurrentAveragePVPower => _pvRunningAverage.GetAverage();
 
+    private readonly CounterInterpolator _pvEnergyToday = new(100);
+
+    private void AddPVPower(int watts)
+    {
+      _pvRunningAverage.AddValue(watts);
+      _pvEnergyToday.AddPower(DateTime.Now, watts);
+    }
+
+    /// <summary>Today's PV energy (Wh): the inverter counter (0.1 kWh steps) made continuous with
+    /// the PV power since its last step (<see cref="CounterInterpolator"/>).</summary>
     private int ActualPVEnergyTodayWh()
     {
       if (PVCC_Config.TodayPVEnergyEntity.TryGetStateValue(out float wh))
-        return (int)wh;
+        return _pvEnergyToday.Value(DateTime.Now, (int)wh);
       return 0;
     }
 

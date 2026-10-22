@@ -77,6 +77,19 @@ public class SimulationInput
   public DateTime PriceHorizonEnd(DateTime fallback) =>
     PublishedPricesUntil ?? ImportPrices.End ?? fallback;
 
+  /// <summary>
+  /// Share of the slot starting at <paramref name="slotStart"/> that is still ahead: the running
+  /// slot (the simulation's first, <see cref="StartTime"/> floored) only from StartTime on, every
+  /// other slot in full. Simulating the running slot in full from the current SoC added energy
+  /// that had already flowed — 12 min into a quarter with 2 kW PV surplus ≈ +4 % SoC that vanished
+  /// at the next quarter: 2026-10-22 14:15:15 that restarted a grid charge stopped at 14:12.
+  /// </summary>
+  internal double SlotFraction(DateTime slotStart)
+  {
+    var first = StartTime.RoundToNearestQuarterHour();
+    return slotStart == first ? (first.AddMinutes(15) - StartTime).TotalMinutes / 15.0 : 1.0;
+  }
+
   private Dictionary<DateTime, int>? _extraLoadWhBySlot;
   /// <summary>Total ExtraLoads energy (Wh) in the 15-min slot starting at <paramref name="slotStart"/>, computed once per input.</summary>
   internal int ExtraLoadWh(DateTime slotStart) =>

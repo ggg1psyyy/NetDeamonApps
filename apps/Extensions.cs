@@ -546,6 +546,51 @@ namespace NetDeamon.apps
     }
   }
   /// <summary>
+  /// An energy counter with coarse steps (the inverter's "today's solar energy": 0.1 kWh) made
+  /// continuous: the last counter value plus the power integrated since the counter last changed,
+  /// at most one step (<paramref name="resolutionWh"/>) — the next step brings it back in line.
+  /// The PV day-scale correction divides by it: with the raw steps every 0.1 kWh moved the whole
+  /// remaining day's PV (p95 change of the PV ahead per 15-s cycle 102 → 55 Wh, live 2026-10-22).
+  /// </summary>
+  public sealed class CounterInterpolator(int resolutionWh)
+  {
+    private int? _counter;
+    private double _sinceStepWh;
+    private DateTime? _powerAt;
+    private int _powerW;
+
+    /// <summary>A new power reading (W) at <paramref name="at"/>; negative counts as 0.</summary>
+    public void AddPower(DateTime at, int watts)
+    {
+      Accumulate(at);
+      _powerW = Math.Max(0, watts);
+      _powerAt = at;
+    }
+
+    /// <summary>The counter (Wh) as read at <paramref name="now"/>, plus what flowed since its last step.</summary>
+    public int Value(DateTime now, int counterWh)
+    {
+      if (counterWh != _counter)
+      {
+        _counter = counterWh;
+        _sinceStepWh = 0;
+        if (_powerAt is not null) _powerAt = now;
+      }
+      Accumulate(now);
+      return counterWh + (int)Math.Min(_sinceStepWh, resolutionWh);
+    }
+
+    private void Accumulate(DateTime at)
+    {
+      if (_powerAt is { } p && at > p)
+      {
+        _sinceStepWh += _powerW * (at - p).TotalHours;
+        _powerAt = at;
+      }
+    }
+  }
+
+  /// <summary>
   /// Average of the values of the last <c>window</c>. Values also expire when nothing new
   /// arrives — except the latest one, which is still the sensor's current state: HA sensors that
   /// only report on change (e.g. a CT clamp going to 0 W and staying there) otherwise kept the

@@ -137,19 +137,48 @@ Applied to the PV forecast both when computing `Prediction_NetEnergy` and when b
    Corrects for persistent over/under-prediction (e.g. cloudy day).
    Skipped when forecast sum < 50 Wh (night/dawn/dusk). Clamped to [0.0, 2.0]. Tomorrow untouched.
 
-2. **Near-term 4-slot ramp** (slot 0 = the running slot, applied after day-scale):
-   Blends from the 15-minute PV running average down to the day-scaled forecast.
-   `slot[i] = scaled[i] + (shortAvgPerSlot − scaled[i]) × (4 − i) / 4`
+2. **Near-term 4-slot ramp** (slot 0 = the running slot, applied after day-scale): the live
+   15-minute PV average as a ratio to the forecast energy of those same 15 minutes, ramping to the
+   day ratio: `slot[i] = forecast[i] × (dayRatio + (shortRatio − dayRatio) × (4 − i) / 4)`.
+   With less than `NearTermRatioMinWh` (150 Wh) forecast in the window (dawn) the absolute
+   average instead: `slot[i] = scaled[i] + (shortAvgPerSlot − scaled[i]) × (4 − i) / 4`.
+
+"Actual PV energy today" is the inverter counter (0.1 kWh steps) made continuous with the PV
+power since its last step (`CounterInterpolator`).
 
 Load uses only the near-term ramp (no day-scale — load follows historical patterns, not weather).
 
-Why "running slot pro rata" and "slot 0 = running slot": the simulation starts with the running
-quarter (`RoundToNearestQuarterHour` floors). Before, the running slot counted in full into the
-forecast sum as soon as it began (its actual energy ≈ 0 yet) and was itself left raw, with the
-live average going to the slot after. Every quarter boundary therefore cut the simulated PV —
-2026-10-22 14:15:15 by ~600 Wh (ratio 1.83 → 1.71 on a day the forecast was 45 % low), 5.3 %
-SoC, more than the 5 % hysteresis band of the time: a NeedToCharge grid charge stopped at 14:12 started
-again at 14:15:15.
+**Why — quarter-boundary jumps and noise (2026-10-22).** A NeedToCharge grid charge stopped at
+14:12 started again at 14:15:15: the trough moved ~5 % across a quarter boundary, more than the
+5 % hysteresis band of the time. Two causes:
+- The simulation starts with the running quarter (`RoundToNearestQuarterHour` floors) and
+  simulated it in full from the current SoC — 12 min into a quarter with ~2 kW PV surplus that's
+  ~+4 % SoC that had already flowed, gone at the next boundary. Now the running slot only counts
+  its rest (`SimulationInput.SlotFraction`, in the slot loop and the baseline trajectory alike).
+- The day-scale ratio counted the just-started quarter in full against ~0 actual energy, and that
+  quarter itself got the raw forecast (the live average went to the slot after): ratio
+  0.90 → 0.85, −163 Wh PV. Now pro rata, and slot 0 is the running slot.
+
+The counter interpolation halved the 15-s noise of the PV ahead that afternoon (p95 102 → 55 Wh).
+
+**Why the near-term ramp is a ratio.** In October PV goes from full to 0 in ~2 h; a trailing
+average of the absolute power lags that slope — too much PV ahead in the evening, too little in
+the morning. Backtest over 10 full days (2026-10-12…22, every minute of daylight, the forecast
+as it was at that minute, real PV), mean error of the next hour's PV (Wh):
+
+| Near-term variant | Morning (first 2 h) | Midday | Evening (last 2 h) | All | PV rest of day |
+|---|---|---|---|---|---|
+| Absolute 15-min average (before) | 111 | 239 | 154 | 198 | 859 |
+| Absolute 30-min average | 124 | 256 | 190 | 218 | 873 |
+| No ramp | 156 | 236 | 112 | 198 | 860 |
+| Ratio live/forecast, absolute under 50 Wh in the window | 130 | 214 | 76 | 173 | 836 |
+| **Ratio, absolute under 150 Wh forecast in the window** | **106** | **214** | **77** | **168** | **827** |
+
+Reproducible with `tools/PVNearTermBacktest` (Node, reads HA history).
+
+The 30-min average had first been chosen from a single afternoon (11:00–15:05, no steep edges)
+— over full days it was worse everywhere. Remaining swings are real: a cloud cutting PV from 1.9
+to 0.4 kW for 15 min still moves the PV ahead by ~1 kWh — information, not noise.
 
 `RunningIntAverage` also expires values when nothing new arrives (keeping the latest one, the
 current state). Sensors that only report on change kept old values otherwise: the EV CT went to

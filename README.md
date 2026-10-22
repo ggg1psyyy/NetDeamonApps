@@ -15,7 +15,7 @@ Every 15 seconds the app runs a forward simulation in 15-minute slots (now → e
 
 **How it works:**
 - Forecasts house load from historical SQLite data (weighted average)
-- Fetches PV forecast from OpenMeteo HA entities, corrected by the live PV running average
+- Fetches PV forecast from OpenMeteo HA entities, corrected by today's actual PV (day ratio) and, for the next hour, by the live PV relative to what the forecast expected in the last 15 min (`tools/PVNearTermBacktest`)
 - Runs a slot-by-slot simulation (`EnergySimulator`) to find when the battery will drop below the minimum SoC
 - If grid charging is needed, charges just enough to clear the coming trough, in the cheapest quarter-hour plus the cheapest quarters under the max force-charge price — so a larger need moves earlier into a cheap band instead of spilling into expensive slots after it
 - Optionally discharges to the grid opportunistically during high-price periods
@@ -335,6 +335,7 @@ dotnet test NetDeamonApps.Tests/
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
+| `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 
