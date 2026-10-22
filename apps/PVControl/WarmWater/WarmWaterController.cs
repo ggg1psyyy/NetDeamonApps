@@ -97,6 +97,12 @@ public sealed class WarmWaterController
     return null;
   }
 
+  /// <summary>PVControl's hourly weather forecast (outside temperature → heat pump efficiency); null if not configured.</summary>
+  public LoadModel.WeatherForecast? Weather { get; set; }
+  /// <summary>End of the published prices at the last plan; slots after it use estimated prices.</summary>
+  public DateTime? PricesKnownUntil { get; private set; }
+  public bool OutsideEfficiencyUsed { get; private set; }
+
   /// <summary>Plans against the house simulation <paramref name="baseline"/> (made without warm-water heating).</summary>
   public void Replan(SimulationInput baseInput, SimulationResult baseline, DateTime now, string reason)
   {
@@ -114,6 +120,11 @@ public sealed class WarmWaterController
     var slots = baseline.Slots.Select(s => s.Time).ToList();
     var horizonEnd = slots[^1].AddMinutes(15);
     var prices = WarmWaterPlanner.HeatingPricesPerKwh(baseInput, baseline, slots, now, (int)Math.Round(Model.PowerW(45)));
+    PricesKnownUntil = baseInput.ImportPrices.Count > 0 ? baseInput.ImportPrices.Max(p => p.EndTime) : now;
+    prices = WarmWaterPlanner.EstimateUnpublishedPrices(prices, slots, PricesKnownUntil.Value);
+    OutsideEfficiencyUsed = Weather is { } weather && !weather.IsStale(now) && Config.EfficiencyChangePerK > 0;
+    if (OutsideEfficiencyUsed)
+      prices = WarmWaterPlanner.WithOutsideEfficiency(prices, slots.Select(s => Weather!.Temperature(s)).ToList(), Config.EfficiencyChangePerK);
     var periods = _periods
       .Where(p => IsOn(p.Enabled) && SchedulableLoadRuntime.TryParseReadyBy(p.Time.State, out _))
       .Select(p => (SchedulableLoadRuntime.TryParseReadyBy(p.Time.State, out var t) ? t : default, p.Config.DurationMinutes));
@@ -393,6 +404,8 @@ public sealed class WarmWaterController
       comfort_temp = ComfortTemp,
       boost = BoostOn,
       boost_since = _boostSince?.ToISO8601(),
+      prices_known_until = PricesKnownUntil?.ToISO8601(),
+      outside_efficiency = OutsideEfficiencyUsed,
       plan_cost_eur = Math.Round(Plan.CostEur, 3),
       automatic_cost_eur = Math.Round(Automatic.CostEur, 3),
       comfort_deficit_k = Math.Round(Plan.ComfortDeficitK, 1),

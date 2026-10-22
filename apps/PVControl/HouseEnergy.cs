@@ -115,7 +115,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.InverterStatusEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.InverterStatusEntity));
 
       if (PVCC_Config.WarmWater is { } wwConfig)
-        WarmWater = new WarmWaterController(wwConfig);
+        WarmWater = new WarmWaterController(wwConfig) { Weather = Weather };
 
       // Initialize runtime objects for each schedulable load and wire up their power averages.
       SchedulableLoads = PVCC_Config.SchedulableLoads

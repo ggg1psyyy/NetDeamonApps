@@ -197,4 +197,60 @@ public class WarmWaterPlannerTests : TestBase
     float price = PriceAt(input, new DateTime(2026, 10, 20, 21, 0, 0));
     Assert.InRange(price, 0.25f, 0.40f);
   }
+
+  // ── Unpublished prices, outside temperature (2026-10-22) ───────────────────────────────────
+
+  [Fact]
+  public void UnpublishedPrices_Live20261022_EstimatedFromTheDayBefore()
+  {
+    // 12:45: today's prices are published, tomorrow's not yet (~13:00) — the house simulation
+    // read 0 there, the plan heated "tomorrow 14:45 → 49.7 °C" for free.
+    var now = new DateTime(2026, 10, 22, 12, 45, 0);
+    var slots = Enumerable.Range(0, 141).Select(i => now.AddMinutes(15 * i)).ToList(); // → tomorrow 23:45
+    var raw = slots.Select(s => s.Date == now.Date ? (s.Hour == 14 ? 0.20f : 0.30f) : 0f).ToArray();
+    var est = WarmWaterPlanner.EstimateUnpublishedPrices(raw, slots, now.Date.AddDays(1));
+
+    float At(DateTime t) => est[slots.IndexOf(t)];
+    Assert.Equal(0.20f, At(now.Date.AddDays(1).AddHours(14.75)));        // same slot a day before
+    Assert.Equal(0.30f, At(now.Date.AddDays(1).AddHours(20)));
+    Assert.True(At(now.Date.AddDays(1).AddHours(3)) > 0.29f);            // no slot a day before: mean
+    Assert.Equal(raw[0], est[0]);                                        // published prices unchanged
+  }
+
+  [Fact]
+  public void UnpublishedPrices_AllPublished_Unchanged()
+  {
+    var slots = Enumerable.Range(0, 8).Select(i => Start.AddMinutes(15 * i)).ToList();
+    float[] prices = [0.1f, 0.2f, 0.3f, 0.4f, 0.1f, 0.2f, 0.3f, 0.4f];
+    Assert.Equal(prices, WarmWaterPlanner.EstimateUnpublishedPrices(prices, slots, Start.AddDays(1)));
+  }
+
+  [Fact]
+  public void OutsideEfficiency_WarmerSlotsCheaper_LevelKept()
+  {
+    double?[] temps = [15, 5, null, 10];
+    float[] prices = [0.30f, 0.30f, 0.30f, 0.30f];
+    var p = WarmWaterPlanner.WithOutsideEfficiency(prices, temps, 0.03);
+    Assert.Equal(0.30f * 0.85f, p[0], 4); // 5 K above the mean (10 °C): −15 %
+    Assert.Equal(0.30f * 1.15f, p[1], 4);
+    Assert.Equal(0.30f, p[2]);            // no forecast: unchanged
+    Assert.Equal(0.30f, p[3], 4);
+    Assert.Equal(prices, WarmWaterPlanner.WithOutsideEfficiency(prices, temps, 0)); // off
+  }
+
+  [Fact]
+  public void OutsideEfficiency_WarmAfternoon_HeatsEarlierThanWithout()
+  {
+    // Flat price, 15 °C until 15:00, then 0 °C: without the efficiency the run ends right before
+    // 18:00; with it the warm afternoon is cheaper than the extra standby loss.
+    var request = Request(38, _ => 0.30f, EveningWindow);
+    var temps = request.Slots.Select(s => (double?)(s.Hour < 15 ? 15 : 0)).ToList();
+    var withEff = request with { PricePerKwh = WarmWaterPlanner.WithOutsideEfficiency([.. request.PricePerKwh], temps, 0.03) };
+
+    var start = WarmWaterPlanner.Plan(request).Runs[0].Start;
+    var startEff = WarmWaterPlanner.Plan(withEff).Runs[0].Start;
+    Assert.True(startEff < start, $"with efficiency {startEff:HH:mm}, without {start:HH:mm}");
+    Assert.True(startEff.Hour < 15, $"{startEff:HH:mm}");
+    AssertWindowMet(WarmWaterPlanner.Plan(withEff), EveningWindow[0]);
+  }
 }

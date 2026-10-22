@@ -81,6 +81,47 @@ public static class WarmWaterPlanner
     return prices;
   }
 
+  /// <summary>
+  /// Slots at or after <paramref name="pricesKnownUntil"/> have no published price yet — the house
+  /// simulation reads 0 there (tomorrow's EPEX prices arrive ~13:00), which made heating tomorrow
+  /// look free (live 2026-10-22 12:48: "tomorrow 14:45 → 49.7 °C"). They get the heating price of
+  /// the same slot a day earlier, else the mean of the same hour, else of all published slots.
+  /// </summary>
+  public static float[] EstimateUnpublishedPrices(float[] prices, IReadOnlyList<DateTime> slots, DateTime pricesKnownUntil)
+  {
+    var result = (float[])prices.Clone();
+    var known = Enumerable.Range(0, slots.Count).Where(i => slots[i] < pricesKnownUntil).ToList();
+    if (known.Count == 0 || known.Count == slots.Count) return result;
+    var bySlot = known.ToDictionary(i => slots[i], i => prices[i]);
+    var byHour = known.GroupBy(i => slots[i].Hour).ToDictionary(g => g.Key, g => g.Average(i => prices[i]));
+    float overall = known.Average(i => prices[i]);
+    for (int i = 0; i < slots.Count; i++)
+    {
+      if (slots[i] < pricesKnownUntil) continue;
+      result[i] = bySlot.TryGetValue(slots[i].AddDays(-1), out float dayBefore) ? dayBefore
+        : byHour.TryGetValue(slots[i].Hour, out float hourMean) ? hourMean
+        : overall;
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// The heat pump's efficiency depends on the outside temperature (air/water): each slot's heating
+  /// price × (1 + <paramref name="changePerK"/> · (mean − outside)), mean = the mean forecast
+  /// temperature of the horizon — so a warmer afternoon gets cheaper than a cold night and the cost
+  /// level stays the same. Slots without a forecast temperature are unchanged; factor 0.5…1.5.
+  /// </summary>
+  public static float[] WithOutsideEfficiency(float[] prices, IReadOnlyList<double?> outsideTemps, double changePerK)
+  {
+    var known = outsideTemps.Where(t => t is not null).Select(t => t!.Value).ToList();
+    if (known.Count == 0 || changePerK <= 0) return (float[])prices.Clone();
+    double mean = known.Average();
+    var result = new float[prices.Length];
+    for (int i = 0; i < prices.Length; i++)
+      result[i] = outsideTemps[i] is { } t ? prices[i] * (float)Math.Clamp(1 + changePerK * (mean - t), 0.5, 1.5) : prices[i];
+    return result;
+  }
+
   /// <summary>The cheapest heating plan that meets the comfort windows (see class summary).</summary>
   public static WarmWaterPlan Plan(PlanRequest r)
   {

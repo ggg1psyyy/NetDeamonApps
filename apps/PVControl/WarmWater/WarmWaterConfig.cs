@@ -51,6 +51,12 @@ namespace NetDeamon.apps.PVControl.WarmWater
     /// <summary>Cost added per run start in the plan, so it prefers one longer run over several short ones.</summary>
     public float RunStartCostEur { get; set; } = 0.02f;
     /// <summary>
+    /// Relative change of the heat pump's electrical energy per K of outside temperature (air/water:
+    /// colder air → lower COP). Measured for space heating: COP 3.9 at −8…−5 °C → 6.3 at +7…+10 °C,
+    /// ~3 % per K. Needs PVControl's weather forecast (LoadForecast.WeatherEntity); 0 = off.
+    /// </summary>
+    public double EfficiencyChangePerK { get; set; } = 0.03;
+    /// <summary>
     /// Max minutes between two plans (also replans on every quarter-hour, setting change, price
     /// update, heating start/stop). A plan takes ~1 s (96 house simulations for the prices).
     /// </summary>

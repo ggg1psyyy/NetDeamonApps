@@ -175,6 +175,9 @@ NetDeamon.apps.PVControl.PVConfig:
     ComfortTempDefault: 42
     ComfortMarginK: 1
     BoostTempDefault: 45
+    # Heat pump efficiency vs outside temperature (from LoadForecast.WeatherEntity): electrical
+    # energy −3 % per K warmer (measured COP 3.9 → 6.3 over 15 K). 0 = off.
+    EfficiencyChangePerK: 0.03
     ComfortPeriods:
       - Name: Morning
         DefaultTime: "06:30"

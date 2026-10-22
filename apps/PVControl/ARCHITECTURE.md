@@ -358,6 +358,12 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   the heat pump drawing in just that slot vs the baseline, by `NetGridCostVs` (lost export for PV
   surplus, refill cost for battery energy, import price otherwise). Probed per 30 min (96
   simulations, ~0.6 s).
+- `EstimateUnpublishedPrices` — slots after the last published price (tomorrow, before ~13:00)
+  read 0 in the house simulation (`PriceList.GetPrice` without an entry), so heating tomorrow
+  looked free; they get the same slot's price a day earlier (else the hour's / overall mean).
+- `WithOutsideEfficiency` — × (1 + `EfficiencyChangePerK` · (mean − outside temperature)), from
+  PVControl's weather forecast (default 3 %/K, measured COP 3.9 → 6.3 over 15 K): a warm
+  afternoon beats a cold evening; relative to the horizon's mean, so the cost level stays.
 - `Plan` — dynamic program over the 15-min slots × tank temperature (0.1 K buckets) × "heated
   the whole last slot". Per slot: off, or heat for 1/10 … 10/10 of it (so a run can stop between
   slot boundaries). Cost = heating energy × slot price + `RunStartCostEur` per run start + 10 €/K
