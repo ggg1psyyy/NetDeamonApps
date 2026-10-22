@@ -77,6 +77,23 @@ public static class HealthChecks
       yield return new HealthIssue("warm_water", HealthLevel.degraded, "Heat pump entities unavailable — warm-water control paused");
   }
 
+  /// <summary>Weather forecast for the load model: none yet or older than its maximum age.</summary>
+  public static IEnumerable<HealthIssue> WeatherForecast(bool configured, DateTime? lastUpdate, DateTime now, TimeSpan maxAge)
+  {
+    if (!configured) yield break;
+    if (lastUpdate is not { } t)
+      yield return new HealthIssue("weather", HealthLevel.degraded, "No weather forecast yet");
+    else if (now - t > maxAge)
+      yield return new HealthIssue("weather", HealthLevel.degraded, $"Weather forecast from {t:dd.MM. HH:mm} is too old");
+  }
+
+  /// <summary>Weather load forecast in use (Mode: Model) but falling back to the average.</summary>
+  public static IEnumerable<HealthIssue> LoadForecast(bool inUse, string? source)
+  {
+    if (inUse && source is not null && source != "model")
+      yield return new HealthIssue("load_forecast", HealthLevel.degraded, $"Load forecast model not used: {source}");
+  }
+
   /// <summary>DataLogger writes an hourly row at the end of each hour (timestamp hh:59:59); older
   /// than 2 h means at least one row is missing.</summary>
   public static IEnumerable<HealthIssue> DataLogger(DateTime now, DateTime? lastHourlyRow)

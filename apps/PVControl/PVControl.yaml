@@ -139,6 +139,20 @@ NetDeamon.apps.PVControl.PVConfig:
       ReplanIntervalMinutes: 5
       # Mode and TargetLevel omitted — HA entities auto-created
 
+  # Weather-aware load forecast (base load + heat pump heating by outside temperature).
+  # Mode: Average (off) | Shadow (computed and published in sensor.pv_control_load_forecast,
+  # PVControl keeps using the hour-of-day average) | Model (PVControl uses it; falls back to the
+  # average without weather forecast or history).
+  LoadForecast:
+    Mode: Shadow
+    # The heat pump heats the house only in these modes; otherwise only its standby is forecast.
+    HeatPumpModeEntity: select.warmepumpe_modus
+    HeatingModes:
+      - "Warmwasser & Heizung"
+    # Hourly forecast via weather.get_forecasts (Pirate Weather: 168 h).
+    WeatherEntity: weather.pirateweather
+    WeatherRefreshMinutes: 60
+
   # Warm-water tank planner: heats with one-time heatings at the cheapest times that keep the
   # comfort periods warm. Creates select.pv_control_warm_water_mode (Off / PlanOnly / Auto),
   # comfort and boost temperature numbers, button.pv_control_warm_water_boost, a time + enable

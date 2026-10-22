@@ -416,6 +416,92 @@ namespace NetDeamon.apps.PVControl
     }
     private bool _socUnavailableLogged;
 
+    #region Load forecast (weather model, shadow comparison)
+    private Entity? _loadForecastEntity;
+    private readonly LoadModel.NightForecastTracker _nightTracker = new();
+    private DateTime _loadForecastPublished, _lastNightEvaluation;
+
+    /// <summary>The scored nights survive a restart in the sensor's "nights" attribute.</summary>
+    private void RestoreNights()
+    {
+      try
+      {
+        if (_loadForecastEntity is null || !_loadForecastEntity.TryGetJsonAttribute("nights", out System.Text.Json.JsonElement nights)
+            || nights.ValueKind != System.Text.Json.JsonValueKind.Array)
+          return;
+        _nightTracker.Restore(nights.EnumerateArray().Select(n => new LoadModel.NightResult(
+          DateTime.Parse(n.GetProperty("night").GetString()!, CultureInfo.InvariantCulture),
+          n.GetProperty("model_kwh").GetDouble() * 1000, n.GetProperty("average_kwh").GetDouble() * 1000,
+          n.TryGetProperty("actual_kwh", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.Number ? a.GetDouble() * 1000 : null)));
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Load forecast: previous night results not restored");
+      }
+    }
+
+    /// <summary>
+    /// sensor.pv_control_load_forecast: the coming night's (22:00–08:00) load by the weather model —
+    /// next to the hour-of-day average, the heat pump part, the next 24 h of both and the nights
+    /// scored so far (shadow mode: is the model really better?).
+    /// </summary>
+    private async Task PublishLoadForecastAsync(DateTime now)
+    {
+      if (_loadForecastEntity is null || _house.WeatherLoad is not { } weatherLoad)
+        return;
+      var night = LoadModel.NightForecastTracker.NightOf(now);
+      double model = LoadModel.NightForecastTracker.NightSum(weatherLoad.TodayAndTomorrow, night);
+      double average = LoadModel.NightForecastTracker.NightSum(_house.AverageLoad.TodayAndTomorrow, night);
+      bool changed = weatherLoad.Source == "model" && _nightTracker.TakeSnapshot(now, model, average);
+      if (now.Hour >= 8 && now - _lastNightEvaluation >= TimeSpan.FromMinutes(15)
+          && _nightTracker.Nights.Any(n => n.Actual is null && now >= n.Night.AddDays(1).AddHours(8)))
+      {
+        _lastNightEvaluation = now;
+        changed |= _nightTracker.Evaluate(now, n => weatherLoad.ActualNightSum(n, now));
+      }
+      if (!changed && now - _loadForecastPublished < TimeSpan.FromMinutes(5))
+        return;
+      _loadForecastPublished = now;
+
+      var nightHours = weatherLoad.Hours.Where(h => h.Hour >= night.AddHours(22) && h.Hour < night.AddHours(32)).ToList();
+      var averageSlots = _house.AverageLoad.TodayAndTomorrow;
+      var (maeModel, maeAverage, scored) = _nightTracker.MeanAbsoluteError();
+      static double Kwh(double wh) => Math.Round(wh / 1000, 2);
+      await PVCC_EntityManager.SetStateAsync(_loadForecastEntity.EntityId, Kwh(model).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetAttributesAsync(_loadForecastEntity.EntityId, new
+      {
+        night = night.ToString("yyyy-MM-dd"),
+        source = weatherLoad.Source,
+        used_by_pvcontrol = ReferenceEquals(_house.Prediction_Load, weatherLoad),
+        average_kwh = Kwh(average),
+        night_base_kwh = Kwh(nightHours.Sum(h => h.Base)),
+        night_heat_pump_kwh = Kwh(nightHours.Sum(h => h.HeatPump)),
+        night_temp24 = nightHours.Count > 0 ? Math.Round(nightHours.Average(h => h.Temp24), 1) : (double?)null,
+        heating_on = weatherLoad.HeatingOn,
+        heat_pump_scale = weatherLoad.Model is { } m ? Math.Round(m.HeatDemand.Scale, 2) : (double?)null,
+        weather_forecast = _house.Weather?.LastUpdate?.ToISO8601(),
+        next_24h = weatherLoad.Hours.Where(h => h.Hour >= now.AddHours(-1) && h.Hour < now.AddHours(24)).Select(h => new
+        {
+          hour = h.Hour.ToString("HH:mm"),
+          model_wh = (int)Math.Round(h.Base + h.HeatPump),
+          average_wh = Enumerable.Range(0, 4).Sum(q => averageSlots.GetValueOrDefault(h.Hour.AddMinutes(15 * q))),
+          heat_pump_wh = (int)Math.Round(h.HeatPump),
+          temp24 = Math.Round(h.Temp24, 1),
+        }).ToList(),
+        scored_nights = scored,
+        model_mae_kwh = Kwh(maeModel),
+        average_mae_kwh = Kwh(maeAverage),
+        nights = _nightTracker.Nights.Select(n => new
+        {
+          night = n.Night.ToString("yyyy-MM-dd"),
+          model_kwh = Kwh(n.Model),
+          average_kwh = Kwh(n.Average),
+          actual_kwh = n.Actual is { } a ? Kwh(a) : (double?)null,
+        }).ToList(),
+      });
+    }
+    #endregion
+
     #region Health
     private Entity _healthEntity = null!;
     // A problem counts after 30 s (two cycles — a single 15-s sensor blip doesn't), and keeps
@@ -450,6 +536,8 @@ namespace NetDeamon.apps.PVControl
 
       issues.AddRange(HealthChecks.Cycle(_cycleFailures, _lastCycleError));
       issues.AddRange(HealthChecks.WarmWater(_house.WarmWater is not null, _house.WarmWater?.HeatPumpAvailable ?? true));
+      issues.AddRange(HealthChecks.WeatherForecast(_house.Weather is not null, _house.Weather?.LastUpdate, now, LoadModel.WeatherForecast.MaxAge));
+      issues.AddRange(HealthChecks.LoadForecast(_house.WeatherLoad is not null && ReferenceEquals(_house.Prediction_Load, _house.WeatherLoad), _house.WeatherLoad?.Source));
 
       if (now - _lastHourlyRowCheck >= TimeSpan.FromMinutes(5))
       {
@@ -542,10 +630,13 @@ namespace NetDeamon.apps.PVControl
         PVCC_Logger.LogInformation("Battery SoC available again ({SoC}%), resuming control", _house.Battery.BatterySoc);
         _socUnavailableLogged = false;
       }
+      if (_house.Weather is { } weather)
+        await weather.RefreshIfDueAsync(now);
       PVCC_Logger.LogTrace("Updating Predictions");
       // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
+      await PublishLoadForecastAsync(now);
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _house.AddAverageGridPowerValue(grid);
@@ -953,6 +1044,12 @@ namespace NetDeamon.apps.PVControl
         addConfig: new { options = Enum.GetNames<HealthLevel>() },
         defaultValue: HealthLevel.ok.ToString(),
         reRegister: reset);
+      if (_house.WeatherLoad is not null)
+      {
+        _loadForecastEntity = await RegisterSensor("sensor.pv_control_load_forecast", "Load forecast (night)", "energy", "mdi:home-thermometer-outline",
+          addConfig: new { unit_of_measurement = "kWh" }, reRegister: reset);
+        RestoreNights();
+      }
 
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },

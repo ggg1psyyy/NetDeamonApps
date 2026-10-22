@@ -69,6 +69,13 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
 | `sensor.pv_control_version` | Deployed build (see [Build & Deploy](#build--deploy)), also the "Firmware" of the PV Control device |
 | `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
+| `sensor.pv_control_load_forecast` | Coming night's load (22:00–08:00, kWh) by the weather-aware model — see [Load forecast](#load-forecast) |
+
+#### Load forecast
+
+The house load forecast is the hour-of-day average of the last days (recent days weighted more). With `LoadForecast:` in `PVControl.yaml` a weather-aware model is added: base load (that average without the heat pump, plus half of its deviation over the last 48 h) plus the heat pump's space heating from the outside temperature forecast (Pirate Weather hourly) — learned from DataLogger's history as an energy signature (Wh per heating degree below 13 °C, per hour of the day). The heat pump mode decides whether it heats at all. In the backtest over the last year it missed the night load 15 % less than the average, in winter 20 % less (`tools/LoadBacktest/README.md`).
+
+`Mode: Shadow` (default) computes it next to the average without using it; `Mode: Model` makes PVControl use it (with the average as fallback when the weather forecast or history is missing). `sensor.pv_control_load_forecast` shows tonight's forecast and its parts (`average_kwh`, `night_base_kwh`, `night_heat_pump_kwh`, `night_temp24`, `heating_on`, `heat_pump_scale`, `source`, `used_by_pvcontrol`), the next 24 h of both forecasts (`next_24h`), and the nights scored so far (`nights`, `model_mae_kwh` vs `average_mae_kwh`) — switch to `Model` once the model is clearly better there.
 
 #### Health
 
@@ -83,6 +90,8 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | 15-s cycle | one failed | 3+ failed in a row |
 | Warm water | heat pump entities unavailable (control paused) | — |
 | DataLogger | newest hourly row older than 2 h | — |
+| Weather forecast (load model) | none yet or older than 3 h | — |
+| Load forecast (`Mode: Model`) | fell back to the average | — |
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on a level change, when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (replace `notify.notify` with your notify action).
 
@@ -316,6 +325,7 @@ dotnet test NetDeamonApps.Tests/
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
+| `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `DataLoggerOperationTests` | DataLogger v6 columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts (live 2026-10-21 13:28), stale after 2 min → normal mode |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |

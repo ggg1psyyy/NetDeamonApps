@@ -70,7 +70,19 @@ namespace NetDeamon.apps.PVControl
         .ToList();
       if (!string.IsNullOrEmpty(PVCC_Config.WarmWater?.HistoryDbColumn))
         excludeColumns.Add(PVCC_Config.WarmWater.HistoryDbColumn);
-      Prediction_Load = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBFullLocation, 10, excludeColumns: excludeColumns);
+      Prediction_Load = AverageLoad = new HourlyWeightedAverageLoadPrediction(PVCC_Config.DBFullLocation, 10, excludeColumns: excludeColumns);
+      // Weather-aware load forecast: in Shadow mode computed alongside (published, not used), in
+      // Model mode it replaces the average (which it wraps as its fallback).
+      if (PVCC_Config.LoadForecast is { WeatherEntity: not null } loadForecast)
+      {
+        Weather = new LoadModel.WeatherForecast(loadForecast);
+        if (loadForecast.Mode != LoadModel.LoadForecastMode.Average)
+        {
+          WeatherLoad = new LoadModel.WeatherLoadPrediction(AverageLoad, Weather, loadForecast, PVCC_Config.DBFullLocation, excludeColumns);
+          if (loadForecast.Mode == LoadModel.LoadForecastMode.Model)
+            Prediction_Load = WeatherLoad;
+        }
+      }
 
       if (PVCC_Config.ForecastPVEnergyTodayEntities is null || PVCC_Config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
@@ -170,6 +182,13 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>Warm-water tank planner; null when not configured.</summary>
     public WarmWaterController? WarmWater { get; }
+    /// <summary>Hourly weather forecast for the load model (LoadForecast.WeatherEntity), null if not configured.</summary>
+    public LoadModel.WeatherForecast? Weather { get; }
+    /// <summary>The hour-of-day average load forecast (always computed).</summary>
+    public Prediction AverageLoad { get; }
+    /// <summary>The weather-aware load forecast (LoadForecast.Mode Shadow or Model), else null.</summary>
+    public LoadModel.WeatherLoadPrediction? WeatherLoad { get; }
+    private DateTime _weatherLoadUpdated;
 
     /// <summary>
     /// Updates the load's learned typical power from an instantaneous reading (see
@@ -379,6 +398,15 @@ namespace NetDeamon.apps.PVControl
       {
         _lastLoadRetry = now;
         RollOverLoadPrediction(now);
+        _weatherLoadUpdated = now;
+      }
+      // The weather load forecast follows the weather forecast and the last hours: hourly, and
+      // right after a new weather forecast arrived.
+      if (WeatherLoad is not null
+          && (now - _weatherLoadUpdated >= TimeSpan.FromHours(1) || Weather?.LastUpdate > _weatherLoadUpdated))
+      {
+        _weatherLoadUpdated = now;
+        WeatherLoad.UpdateData(now);
       }
       Prediction_PV.UpdateData(now);
       Prediction_NetEnergy.UpdateData(now);

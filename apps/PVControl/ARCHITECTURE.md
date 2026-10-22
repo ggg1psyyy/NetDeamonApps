@@ -85,6 +85,32 @@ Values are in **Wh per 15-min slot**.
 (`excludeScheduledLoads: true`) so scheduled loads can be added back as `ExtraLoad` without
 double-counting.
 
+### Weather-aware load forecast (`LoadModel/`, `PVControl.yaml` → `LoadForecast`)
+
+Chosen by backtest (`tools/LoadBacktest`, 376 nights 2025-09 → 2026-10): −15 % night error
+(22:00–08:00, which sizes the grid charge) against the hour-of-day average, −20 % in winter.
+- `WeatherForecast` — hourly forecast via `weather.get_forecasts` (Pirate Weather, 168 h), fetched
+  every `WeatherRefreshMinutes`, kept when a fetch fails; health `degraded` after 3 h.
+- `HeatDemandModel` — the house's heat demand (reusable, e.g. for a heating planner): heat pump
+  energy without warm water per local hour = a_h + s·b_h·HDH, HDH = max(0, 13 °C − 24-h mean
+  outside temperature), weighted least squares (half-life ~130 days). s scales the heating part to
+  the last 48 h (curve changes, heating winding down) — not within 48 h after heating was switched
+  on. Heat pump mode not in `HeatingModes` → only the recent standby level.
+- `WeatherLoadModel` — base load (hour-of-day average of the load without the heat pump, exp(−days/10))
+  + half its mean deviation over the last 48 h (±25 %) + `HeatDemandModel`. Identical to the
+  backtested M2 (the tool compiles `LoadModels.cs` itself).
+- `LoadHour.FromRow` — DataLogger rows → load hours; structurally impossible rows (negative energies,
+  warm water above the heat pump, …) are skipped.
+- `WeatherLoadPrediction` — the `Prediction`: fits on 400 days of DataLogger history, measured
+  temperatures for past hours and the forecast after, recomputed hourly and after a new weather
+  forecast. Without weather forecast or history it delivers the average it wraps (`Source`).
+- `LoadForecast.Mode`: `Average` (off), `Shadow` (default: computed, published in
+  `sensor.pv_control_load_forecast`, not used), `Model` (becomes `Prediction_Load`, so simulation,
+  net energy and charge sizing use it; a fallback to the average is a health issue).
+- `NightForecastTracker` — shadow comparison: at 21:00 both night forecasts are noted, after 08:00
+  scored against DataLogger's rows; the last 30 nights in the sensor's `nights` attribute (restored
+  after a restart).
+
 ### PV running-average correction (`NetEnergyPrediction.WithRunningAvgCorrection`)
 
 Applied to the PV forecast both when computing `Prediction_NetEnergy` and when building
