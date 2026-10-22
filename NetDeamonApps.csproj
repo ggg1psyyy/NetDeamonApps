@@ -26,6 +26,10 @@
         <EmbeddedResource Remove="NetDeamonApps.Tests\**" />
         <Compile Remove="HA\**" />
         <None Remove="HA\**" />
+        <Compile Remove="tools\**" />
+        <None Remove="tools\**" />
+        <Content Remove="tools\**" />
+        <EmbeddedResource Remove="tools\**" />
     </ItemGroup>
     <!-- Version from git (see apps/AppVersion.cs): 0.5.<commit count>+<short hash>[.dirty] -->
     <PropertyGroup>
