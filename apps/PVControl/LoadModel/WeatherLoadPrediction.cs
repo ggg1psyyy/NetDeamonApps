@@ -31,7 +31,45 @@ public sealed class WeatherLoadPrediction : Prediction
     _config = config;
     _dbLocation = dbLocation;
     _excludeColumns = excludeColumns;
+    _mode = new HeatPumpModeTracker(config.HeatingModes);
+    SeedModeFromHistory();
     Initialize("Weather Load Forecast");
+  }
+
+  readonly HeatPumpModeTracker _mode;
+
+  /// <summary>Follows the heat pump mode every cycle (a switch shows up within 15 s, not only at
+  /// the hourly recalculation); unavailable keeps the last known mode.</summary>
+  public void ObserveMode(DateTime now) => _mode.Observe(now, _config.HeatPumpModeEntity?.State);
+
+  /// <summary>The heat pump mode changed since the last calculation (recompute now, not in up to an hour).</summary>
+  public bool ModeChanged => _config.HeatPumpModeEntity is not null && _mode.HeatingOn is { } on && on != HeatingOn && Model is not null;
+
+  /// <summary>DataLogger's hourly heat pump mode of the last 3 days (column heatingmode), so a
+  /// restart still knows when heating was switched on. Missing column/DB: unknown.</summary>
+  void SeedModeFromHistory()
+  {
+    if (_config.HeatPumpModeEntity is null) return;
+    try
+    {
+      using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_dbLocation};Mode=ReadOnly;Pooling=False");
+      connection.Open();
+      using var command = connection.CreateCommand();
+      command.CommandText = "SELECT timestamp, heatingmode FROM hourly WHERE heatingmode IS NOT NULL ORDER BY timestamp DESC LIMIT 72";
+      using var reader = command.ExecuteReader();
+      var rows = new List<(DateTime, string?)>();
+      while (reader.Read())
+      {
+        var end = DateTimeOffset.Parse(reader.GetString(0), System.Globalization.CultureInfo.InvariantCulture).LocalDateTime;
+        rows.Add((new DateTime(end.Year, end.Month, end.Day, end.Hour, 0, 0), reader.GetString(1)));
+      }
+      rows.Reverse();
+      _mode.Seed(rows);
+    }
+    catch (Exception ex)
+    {
+      PVCC_Logger.LogInformation("Weather load forecast: heat pump mode history not available ({Error})", ex.Message);
+    }
   }
 
   /// <summary>"model" or why the average is used.</summary>
@@ -85,10 +123,11 @@ public sealed class WeatherLoadPrediction : Prediction
     double Temp24At(DateTime hour) => temp24[(int)(hour - start).TotalHours];
 
     var historyTemp24 = history.Select(h => Temp24At(h.Local)).ToList();
-    string? mode = _config.HeatPumpModeEntity?.State;
-    HeatingOn = _config.HeatPumpModeEntity is null || (mode is not null && _config.HeatingModes.Contains(mode));
-    DateTime? heatingOnSince = HeatingOn && _config.HeatPumpModeEntity?.EntityState?.LastChanged is { } changed
-      ? changed.ToLocalTime() : null;
+    // Without a mode entity (or never known yet) heating counts as on — the 48-h scaling then
+    // follows what the heat pump really does (backtest model M2).
+    ObserveMode(now);
+    HeatingOn = _config.HeatPumpModeEntity is null || (_mode.HeatingOn ?? true);
+    DateTime? heatingOnSince = HeatingOn ? _mode.HeatingOnSince : null;
     var model = WeatherLoadModel.Fit(history, historyTemp24, now, heatingOnSince);
 
     var hours = new List<(DateTime, double, double, double)>();
@@ -109,12 +148,19 @@ public sealed class WeatherLoadPrediction : Prediction
 
   /// <summary>The load really used in the night 22:00–08:00 starting on <paramref name="night"/>
   /// (Wh, same definition as the forecast); null until DataLogger has all 10 hours.</summary>
-  public double? ActualNightSum(DateTime night, DateTime now)
+  public double? ActualNightSum(DateTime night, DateTime now) => NightTotal(LoadHistory(now), night, TimeZoneInfo.Local);
+
+  /// <summary>
+  /// The load of the night 22:00–08:00 (local) from logged hours; null unless every hour that
+  /// exists that night is there. DST: the repeated hour in October is two real hours and both
+  /// count; the skipped hour in March doesn't exist and isn't missing.
+  /// </summary>
+  public static double? NightTotal(IEnumerable<LoadHour> hours, DateTime night, TimeZoneInfo zone)
   {
     var from = night.AddHours(22);
-    var hours = LoadHistory(now).Where(h => h.Local >= from && h.Local < from.AddHours(10))
-      .GroupBy(h => h.Local).Select(g => g.First()).ToList();
-    return hours.Count == 10 ? hours.Sum(h => h.Total) : null;
+    var inNight = hours.Where(h => h.Local >= from && h.Local < from.AddHours(10)).ToList();
+    var expected = Enumerable.Range(0, 10).Select(k => from.AddHours(k)).Where(h => !zone.IsInvalidTime(h));
+    return expected.All(h => inNight.Any(x => x.Local == h)) ? inNight.Sum(h => h.Total) : null;
   }
 
   /// <summary>DataLogger's hourly rows of the last <see cref="HistoryDays"/> days as load hours

@@ -645,9 +645,21 @@ namespace PVControl
       }
       if (actualDBVersion < 6)
       {
-        var migrate = con.CreateCommand();
-        migrate.CommandText = OperationColumnsSql;
-        await migrate.ExecuteNonQueryAsync();
+        // Only the missing columns: an interrupted migration (columns added, version not saved)
+        // must not fail with "duplicate column" on the next start and stop all logging.
+        foreach (var table in new[] { "hourly", "daily" })
+        {
+          var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+          var info = con.CreateCommand();
+          info.CommandText = $"SELECT name FROM pragma_table_info('{table}')";
+          using (var reader = await info.ExecuteReaderAsync())
+            while (await reader.ReadAsync()) existing.Add(reader.GetString(0));
+          string sql = AddOperationColumnsSql(table, existing);
+          if (sql.Length == 0) continue;
+          var migrate = con.CreateCommand();
+          migrate.CommandText = sql;
+          await migrate.ExecuteNonQueryAsync();
+        }
         _logger.LogInformation("DataLogger DB migrated to v6: heat pump operation and house state columns added");
         await SetDbVersion(con, 6);
       }
@@ -658,12 +670,16 @@ namespace PVControl
     /// heating/compressor/eco, the heat pump's current target temperature (lowered in eco mode),
     /// flow and return temperature, wind, minutes at home, rooms with an open valve (mean count),
     /// mean room setpoint.</summary>
-    public static readonly string OperationColumnsSql = string.Concat(
-      new[] { "hourly", "daily" }.SelectMany(table => new[]
-      {
-        "heatingmode TEXT", "heatingminutes REAL", "compressorminutes REAL", "ecominutes REAL", "hptargettemperature REAL", "flowtemperature REAL",
-        "returntemperature REAL", "windspeed REAL", "athomeminutes REAL", "roomsheating REAL", "roomsetpoint REAL",
-      }.Select(column => $"ALTER TABLE {table} ADD COLUMN {column};\n")));
+    public static readonly string[] OperationColumns =
+    [
+      "heatingmode TEXT", "heatingminutes REAL", "compressorminutes REAL", "ecominutes REAL", "hptargettemperature REAL", "flowtemperature REAL",
+      "returntemperature REAL", "windspeed REAL", "athomeminutes REAL", "roomsheating REAL", "roomsetpoint REAL",
+    ];
+
+    /// <summary>ALTER TABLE statements for the v6 columns <paramref name="table"/> doesn't have yet (empty if none).</summary>
+    public static string AddOperationColumnsSql(string table, IReadOnlySet<string> existing) =>
+      string.Concat(OperationColumns.Where(c => !existing.Contains(c.Split(' ')[0]))
+        .Select(c => $"ALTER TABLE {table} ADD COLUMN {c};\n"));
 
     /// <summary>Removes duplicate timestamps (keeping the first row) and adds unique indexes.</summary>
     public const string DedupeAndIndexSql = @"

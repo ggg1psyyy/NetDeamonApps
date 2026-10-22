@@ -398,12 +398,16 @@ namespace NetDeamon.apps.PVControl
       {
         _lastLoadRetry = now;
         RollOverLoadPrediction(now);
-        _weatherLoadUpdated = now;
+        if (ReferenceEquals(Prediction_Load, WeatherLoad))
+          _weatherLoadUpdated = now; // Model mode: the rollover just recomputed it
       }
-      // The weather load forecast follows the weather forecast and the last hours: hourly, and
-      // right after a new weather forecast arrived.
+      // The weather load forecast follows the weather forecast and the last hours: hourly, right
+      // after a new weather forecast arrived, and at midnight (in Shadow mode the rollover above
+      // only rolls the average over).
+      WeatherLoad?.ObserveMode(now);
       if (WeatherLoad is not null
-          && (now - _weatherLoadUpdated >= TimeSpan.FromHours(1) || Weather?.LastUpdate > _weatherLoadUpdated))
+          && (now - _weatherLoadUpdated >= TimeSpan.FromHours(1) || Weather?.LastUpdate > _weatherLoadUpdated
+              || NeedsDayRollover(WeatherLoad.TodayAndTomorrow, now) || WeatherLoad.ModeChanged))
       {
         _weatherLoadUpdated = now;
         WeatherLoad.UpdateData(now);

@@ -44,25 +44,47 @@ public class DataLoggerOperationTests
     Assert.Equal("Nur Warmwasser", DataLogger.PrevailingState(changes, From, To));
   }
 
+  static string[] Columns(Microsoft.Data.Sqlite.SqliteCommand c, string table)
+  {
+    c.CommandText = $"SELECT group_concat(name) FROM pragma_table_info('{table}')";
+    return ((string)c.ExecuteScalar()!).Split(',');
+  }
+
+  static void Migrate(Microsoft.Data.Sqlite.SqliteCommand c, string table)
+  {
+    var sql = DataLogger.AddOperationColumnsSql(table, Columns(c, table).ToHashSet(StringComparer.OrdinalIgnoreCase));
+    if (sql.Length == 0) return;
+    c.CommandText = sql;
+    c.ExecuteNonQuery();
+  }
+
   [Fact]
-  public void MigrationV6_AddsTheColumnsToBothTables()
+  public void MigrationV6_AddsTheColumns()
   {
     using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
     con.Open();
     var c = con.CreateCommand();
-    c.CommandText = "CREATE TABLE hourly (timestamp TEXT, houseenergy INTEGER); CREATE TABLE daily (timestamp TEXT, houseenergy INTEGER);";
+    c.CommandText = "CREATE TABLE hourly (timestamp TEXT, houseenergy INTEGER)";
     c.ExecuteNonQuery();
-    c.CommandText = DataLogger.OperationColumnsSql;
+    Migrate(c, "hourly");
+    var columns = Columns(c, "hourly");
+    Assert.Contains("heatingmode", columns);
+    Assert.Contains("hptargettemperature", columns);
+    Assert.Equal(13, columns.Length);
+  }
+
+  [Fact]
+  public void MigrationV6_Interrupted_RunsAgainWithoutDuplicateColumn()
+  {
+    // Columns partly added, version not saved: the next start only adds what's missing.
+    using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+    con.Open();
+    var c = con.CreateCommand();
+    c.CommandText = "CREATE TABLE hourly (timestamp TEXT, houseenergy INTEGER, heatingmode TEXT, heatingminutes REAL)";
     c.ExecuteNonQuery();
-    foreach (var table in new[] { "hourly", "daily" })
-    {
-      c.CommandText = $"SELECT group_concat(name) FROM pragma_table_info('{table}')";
-      var columns = ((string)c.ExecuteScalar()!).Split(',');
-      Assert.Contains("heatingmode", columns);
-      Assert.Contains("roomsheating", columns);
-      Assert.Contains("athomeminutes", columns);
-      Assert.Contains("hptargettemperature", columns);
-      Assert.Equal(13, columns.Length);
-    }
+    Migrate(c, "hourly");
+    Migrate(c, "hourly"); // and once more: nothing left to add
+    Assert.Equal(13, Columns(c, "hourly").Length);
+    Assert.Equal("", DataLogger.AddOperationColumnsSql("hourly", Columns(c, "hourly").ToHashSet()));
   }
 }

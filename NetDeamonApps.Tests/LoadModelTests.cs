@@ -208,4 +208,102 @@ public class LoadModelTests : TestBase
     }
     finally { SqliteConnection.ClearAllPools(); File.Delete(db); }
   }
+
+  // ── Heat pump mode (unavailable keeps the last known one) ──────────────────────────────────
+
+  static readonly string[] HeatingModes = ["Warmwasser & Heizung"];
+
+  [Fact]
+  public void ModeTracker_KnxDropout_NotSwitchedOn()
+  {
+    // Heating on, KNX drops out for a minute, back to the same mode: no "just switched on".
+    var m = new HeatPumpModeTracker(HeatingModes);
+    m.Seed([(Now.AddDays(-3), "Warmwasser & Heizung")]);
+    m.Observe(Now.AddMinutes(-2), "unavailable");
+    Assert.True(m.HeatingOn);
+    m.Observe(Now, "Warmwasser & Heizung");
+    Assert.True(m.HeatingOn);
+    Assert.Null(m.HeatingOnSince);
+  }
+
+  [Fact]
+  public void ModeTracker_RealSwitch_SinceThen()
+  {
+    var m = new HeatPumpModeTracker(HeatingModes);
+    m.Observe(Now.AddHours(-5), "Nur Warmwasser");
+    Assert.False(m.HeatingOn);
+    m.Observe(Now.AddHours(-1), "unavailable");                 // dropout while off: still off
+    Assert.False(m.HeatingOn);
+    m.Observe(Now, "Warmwasser & Heizung");
+    Assert.Equal(Now, m.HeatingOnSince);
+    m.Observe(Now.AddHours(1), "Nur Warmwasser");
+    Assert.Null(m.HeatingOnSince);
+  }
+
+  [Fact]
+  public void ModeTracker_SeededFromDataLogger_KnowsTheSwitchAfterARestart()
+  {
+    var m = new HeatPumpModeTracker(HeatingModes);
+    m.Seed([(Now.AddHours(-30), "Nur Warmwasser"), (Now.AddHours(-29), null), (Now.AddHours(-28), "Warmwasser & Heizung"), (Now.AddHours(-1), "Warmwasser & Heizung")]);
+    Assert.True(m.HeatingOn);
+    Assert.Equal(Now.AddHours(-28), m.HeatingOnSince);
+  }
+
+  [Fact]
+  public void HeatDemand_DropoutDoesNotDisableTheScaling()
+  {
+    // With HeatingOnSince left null by the dropout, the 48-h scaling stays on (lowered curve: ~0.6).
+    var (h, t) = Synthetic(time => Now - time <= TimeSpan.FromHours(48) ? 0.6 : 1);
+    var m = new HeatPumpModeTracker(HeatingModes);
+    m.Seed([(Now.AddDays(-3), "Warmwasser & Heizung")]);
+    m.Observe(Now.AddMinutes(-1), "unavailable");
+    m.Observe(Now, "Warmwasser & Heizung");
+    Assert.InRange(HeatDemandModel.Fit(h, t, Now, m.HeatingOnSince).Scale, 0.55, 0.7);
+    // Before: HA's LastChanged (= the end of the dropout) was taken as the switch-on time.
+    Assert.Equal(1, HeatDemandModel.Fit(h, t, Now, heatingOnSince: Now).Scale);
+  }
+
+  // ── Weather forecast retry ─────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void WeatherForecast_AfterAFailure_RetriesEvery5MinNotEveryCycle()
+  {
+    var refresh = TimeSpan.FromMinutes(60);
+    var lastSuccess = Now.AddHours(-2);
+    Assert.True(WeatherForecast.IsDue(Now, lastSuccess, null, false, refresh));
+    Assert.False(WeatherForecast.IsDue(Now, lastSuccess, Now.AddSeconds(-15), true, refresh)); // failed 15 s ago
+    Assert.True(WeatherForecast.IsDue(Now, lastSuccess, Now.AddMinutes(-5), true, refresh));
+    Assert.False(WeatherForecast.IsDue(Now, Now.AddMinutes(-30), null, false, refresh));        // fresh enough
+  }
+
+  // ── Night total across DST ─────────────────────────────────────────────────────────────────
+
+  static readonly TimeZoneInfo Vienna = TimeZoneInfo.FindSystemTimeZoneById("Europe/Vienna");
+
+  [Fact]
+  public void NightTotal_OctoberDst_BothRepeatedHoursCount()
+  {
+    // 2026-10-25 03:00 → 02:00: the night 24.→25.10. has 11 real hours, 02:00 twice.
+    var night = new DateTime(2026, 10, 24);
+    var hours = Enumerable.Range(0, 10).Select(k => new LoadHour(night.AddHours(22 + k), 300, 40, 5)).ToList();
+    hours.Add(new LoadHour(night.AddHours(26), 300, 40, 5)); // the second 02:00
+    Assert.Equal(11 * 300, WeatherLoadPrediction.NightTotal(hours, night, Vienna));
+  }
+
+  [Fact]
+  public void NightTotal_MarchDst_SkippedHourNotMissing()
+  {
+    // 2027-03-28 02:00 → 03:00: the hour 02:00 doesn't exist.
+    var night = new DateTime(2027, 3, 27);
+    var hours = Enumerable.Range(0, 10).Where(k => k != 4).Select(k => new LoadHour(night.AddHours(22 + k), 300, 40, 5)).ToList();
+    Assert.Equal(9 * 300, WeatherLoadPrediction.NightTotal(hours, night, Vienna));
+  }
+
+  [Fact]
+  public void NightTotal_HourMissing_NotScored()
+  {
+    var night = new DateTime(2026, 10, 22);
+    var hours = Enumerable.Range(0, 10).Where(k => k != 3).Select(k => new LoadHour(night.AddHours(22 + k), 300, 40, 5)).ToList();
+    Assert.Null(WeatherLoadPrediction.NightTotal(hours, night, Vienna));
+  }
 }

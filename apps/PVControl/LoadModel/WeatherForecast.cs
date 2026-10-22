@@ -48,11 +48,22 @@ public sealed class WeatherForecast(LoadForecastConfig config)
     LastUpdate = at;
   }
 
+  /// <summary>Wait after a failed fetch before the next try (otherwise every 15-s cycle tries again).</summary>
+  public static readonly TimeSpan RetryAfterFailure = TimeSpan.FromMinutes(5);
+  DateTime? _lastAttempt;
+
+  /// <summary>A fetch is due: refresh interval passed since the last success, and after a failure
+  /// <see cref="RetryAfterFailure"/> since the last try.</summary>
+  public static bool IsDue(DateTime now, DateTime? lastSuccess, DateTime? lastAttempt, bool lastFailed, TimeSpan refresh) =>
+    (lastSuccess is not { } s || now - s >= refresh)
+    && (!lastFailed || lastAttempt is not { } a || now - a >= RetryAfterFailure);
+
   public async Task RefreshIfDueAsync(DateTime now)
   {
     if (config.WeatherEntity is not { } entity
-        || (LastUpdate is { } last && now - last < TimeSpan.FromMinutes(config.WeatherRefreshMinutes)))
+        || !IsDue(now, LastUpdate, _lastAttempt, _lastError is not null, TimeSpan.FromMinutes(config.WeatherRefreshMinutes)))
       return;
+    _lastAttempt = now;
     try
     {
       var response = await entity.CallServiceWithResponseAsync("get_forecasts", new { type = "hourly" });

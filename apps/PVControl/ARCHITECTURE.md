@@ -107,9 +107,17 @@ Chosen by backtest (`tools/LoadBacktest`, 376 nights 2025-09 → 2026-10): −15
 - `LoadForecast.Mode`: `Average` (off), `Shadow` (default: computed, published in
   `sensor.pv_control_load_forecast`, not used), `Model` (becomes `Prediction_Load`, so simulation,
   net energy and charge sizing use it; a fallback to the average is a health issue).
+- `HeatPumpModeTracker` — heating on/off and since when: an unavailable mode (KNX dropouts) keeps
+  the last known one, and only a real change to a heating mode is "switched on" — HA's
+  LastChanged also moves on "unavailable → heating", which would have switched the 48-h scaling
+  off for two days after every dropout (audit 2026-10-22). Seeded at start from DataLogger's
+  `heatingmode` column (last 72 h), so a restart keeps the switch time. A mode change triggers an
+  immediate recalculation.
+- Weather fetch failures are retried after 5 min, not every 15-s cycle.
 - `NightForecastTracker` — shadow comparison: at 21:00 both night forecasts are noted, after 08:00
   scored against DataLogger's rows; the last 30 nights in the sensor's `nights` attribute (restored
-  after a restart).
+  after a restart). The actual night total (`WeatherLoadPrediction.NightTotal`) counts real hours:
+  the repeated hour at the end of DST twice, the skipped one in March not as missing.
 
 ### PV running-average correction (`NetEnergyPrediction.WithRunningAvgCorrection`)
 
