@@ -115,4 +115,33 @@ public class ReplanPolicyTests
     d.Observe(T0, actual, predicted);
     Assert.False(d.Observe(T0.AddMinutes(10), actual, predicted));
   }
+
+  // Between searches the latch counter in the reason is counted live for display.
+  // Live 2026-10-22: "Latched (EV Charger: 1/15 min min-on)" stayed from 15:15 until the next search.
+
+  [Fact]
+  public void LatchMinutes_MinOn_CountedFromSessionStart()
+  {
+    var start = new DateTime(2026, 10, 22, 15, 14, 30);
+    var reason = "Latched (EV Charger: 1/15 min min-on)";
+    Assert.Equal("Latched (EV Charger: 4/15 min min-on)", SchedulableLoadRuntime.WithLiveLatchMinutes(reason, start.AddMinutes(4), start, null));
+    Assert.Equal("Latched (EV Charger: 15/15 min min-on)", SchedulableLoadRuntime.WithLiveLatchMinutes(reason, start.AddMinutes(40), start, null)); // capped
+  }
+
+  [Fact]
+  public void LatchMinutes_MinOff_CountedFromStop_RestOfTheTextKept()
+  {
+    var stop = new DateTime(2026, 10, 22, 15, 0, 0);
+    var reason = "Off-latched (EV Charger: 2/10 min min-off) — Charging (Priority EV Charger)";
+    Assert.Equal("Off-latched (EV Charger: 7/10 min min-off) — Charging (Priority EV Charger)",
+      SchedulableLoadRuntime.WithLiveLatchMinutes(reason, stop.AddMinutes(7), null, stop));
+  }
+
+  [Fact]
+  public void LatchMinutes_NoLatchOrNoTime_Unchanged()
+  {
+    var now = new DateTime(2026, 10, 22, 15, 0, 0);
+    Assert.Equal("No valid window (Priority EV Charger: 29%)", SchedulableLoadRuntime.WithLiveLatchMinutes("No valid window (Priority EV Charger: 29%)", now, now, now));
+    Assert.Equal("Latched (EV Charger: 1/15 min min-on)", SchedulableLoadRuntime.WithLiveLatchMinutes("Latched (EV Charger: 1/15 min min-on)", now, null, null));
+  }
 }

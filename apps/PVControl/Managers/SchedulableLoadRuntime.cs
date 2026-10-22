@@ -179,6 +179,28 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>Human-readable explanation of the current ChargeNow decision.</summary>
     public string ChargeReason { get; internal set; } = "Not initialized";
 
+    /// <summary><see cref="ChargeReason"/> as of <paramref name="now"/>, for display.</summary>
+    public string ChargeReasonAt(DateTime now) => WithLiveLatchMinutes(ChargeReason, now, SessionStartTime, SessionStopTime);
+
+    static readonly System.Text.RegularExpressions.Regex LatchMinutes =
+      new(@"(\d+)/(\d+) min min-(on|off)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// The reason text is built when the schedule search runs, which is only when it's due
+    /// (ReplanPolicy) — a latch's "x/15 min min-on" stayed at the minute of that search between
+    /// searches ("1/15", then "6/15"). This counts x live: min-on since the session start, min-off
+    /// since the stop, at most the latch length.
+    /// </summary>
+    public static string WithLiveLatchMinutes(string reason, DateTime now, DateTime? sessionStart, DateTime? sessionStop) =>
+      LatchMinutes.Replace(reason, m =>
+      {
+        var since = m.Groups[3].Value == "on" ? sessionStart : sessionStop;
+        if (since is not { } t) return m.Value;
+        int length = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+        double elapsed = Math.Clamp((now - t).TotalMinutes, 0, length);
+        return $"{elapsed.ToString("F0", CultureInfo.InvariantCulture)}/{length} min min-{m.Groups[3].Value}";
+      });
+
     /// <summary>Predicted end of the current active session. Null when not running.</summary>
     public DateTime? PredictedEnd { get; internal set; }
 

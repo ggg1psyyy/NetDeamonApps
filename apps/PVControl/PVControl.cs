@@ -735,7 +735,7 @@ namespace NetDeamon.apps.PVControl
         var chargeEndPredicted = load.PlannedSessions.Count > 0 ? load.PlannedSessions[^1].EndTime : load.PredictedEnd;
         var attr_load = new
         {
-          charge_status_reason = load.ChargeReason,
+          charge_status_reason = load.ChargeReasonAt(now),
           mode = load.Mode.ToString(),
           target_level = load.TargetLevel,
           current_level = load.CurrentLevel,
