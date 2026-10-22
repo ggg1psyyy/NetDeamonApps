@@ -416,6 +416,51 @@ namespace NetDeamon.apps.PVControl
     }
     private bool _socUnavailableLogged;
 
+    #region Price publication
+    private Entity? _pricePublicationEntity;
+    private readonly PricePublicationTracker _pricePublication = new();
+    private DateTime _pricePublicationPublished;
+
+    private void RestorePricePublications()
+    {
+      try
+      {
+        if (_pricePublicationEntity is null || !_pricePublicationEntity.TryGetJsonAttribute("days", out System.Text.Json.JsonElement days)
+            || days.ValueKind != System.Text.Json.JsonValueKind.Array)
+          return;
+        _pricePublication.Restore(days.EnumerateArray().Select(d => new PricePublication(
+          DateTime.Parse(d.GetProperty("day").GetString()!, CultureInfo.InvariantCulture),
+          DateTime.Parse(d.GetProperty("published_at").GetString()!, CultureInfo.InvariantCulture))));
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Price publication: previous days not restored");
+      }
+    }
+
+    /// <summary>sensor.pv_control_price_publication: when tomorrow's prices arrived today (HH:mm,
+    /// or "pending"), the last 14 days, and how far the published prices reach.</summary>
+    private async Task PublishPricePublicationAsync(DateTime now)
+    {
+      if (_pricePublicationEntity is null) return;
+      var until = _house.Prices.PriceListImport.End;
+      bool changed = _pricePublication.Observe(now, until);
+      if (changed)
+        PVCC_Logger.LogInformation("Tomorrow's prices published (in PVControl's price list at {Time:HH:mm:ss})", now);
+      if (!changed && now - _pricePublicationPublished < TimeSpan.FromMinutes(5))
+        return;
+      _pricePublicationPublished = now;
+      var today = _pricePublication.PublishedToday(now);
+      await PVCC_EntityManager.SetStateAsync(_pricePublicationEntity.EntityId,
+        today?.ToString("HH:mm") ?? (until >= now.Date.AddDays(2) ? "published" : "pending"));
+      await PVCC_EntityManager.SetAttributesAsync(_pricePublicationEntity.EntityId, new
+      {
+        prices_until = until?.ToISO8601(),
+        days = _pricePublication.Days.Select(d => new { day = d.Day.ToString("yyyy-MM-dd"), published_at = d.PublishedAt.ToISO8601() }).ToList(),
+      });
+    }
+    #endregion
+
     #region Load forecast (weather model, shadow comparison)
     private Entity? _loadForecastEntity;
     private readonly LoadModel.NightForecastTracker _nightTracker = new();
@@ -637,6 +682,7 @@ namespace NetDeamon.apps.PVControl
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       await PublishLoadForecastAsync(now);
+      await PublishPricePublicationAsync(now);
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _house.AddAverageGridPowerValue(grid);
@@ -1044,6 +1090,9 @@ namespace NetDeamon.apps.PVControl
         addConfig: new { options = Enum.GetNames<HealthLevel>() },
         defaultValue: HealthLevel.ok.ToString(),
         reRegister: reset);
+      _pricePublicationEntity = await RegisterSensor("sensor.pv_control_price_publication", "Price publication (tomorrow)", null, "mdi:clock-check-outline",
+        reRegister: reset);
+      RestorePricePublications();
       if (_house.WeatherLoad is not null)
       {
         _loadForecastEntity = await RegisterSensor("sensor.pv_control_load_forecast", "Load forecast (night)", "energy", "mdi:home-thermometer-outline",

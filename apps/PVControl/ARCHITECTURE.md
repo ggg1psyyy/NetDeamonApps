@@ -467,6 +467,13 @@ never below 0 (negative-price handling only follows published prices), with a ri
 (`PriceHorizonEnd`) doesn't commit to estimated prices, and the health check reads the published
 lists directly.
 
+`sensor.pv_control_price_publication` records when tomorrow's prices first show up
+(`PricePublicationTracker`, last 14 days): HA's recorder drops the price sensors' attributes
+(the price list is too large), so the publication times weren't recorded anywhere (2026-10-22: at
+13:24 none of the three sources had tomorrow yet, against an assumed ~13:00–13:30). A time is only
+noted after "not published" was seen the same day — not the time of a restart. PVControl reloads
+the price list on any change of the price entities (`StateAllChanges`), attributes included.
+
 ---
 
 ## HA entity auto-creation

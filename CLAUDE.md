@@ -47,6 +47,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion
 - **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`apps/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
 - **`DataLoggerOperationTests`** — DataLogger schema v6: minutes in a state, time-weighted means, prevailing mode, the v6 migration
+- **`PricePublicationTrackerTests`** — when tomorrow's prices first appear (`sensor.pv_control_price_publication`)
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`AppVersionTests`** — build version from git (`NetDeamonApps.csproj` target `GitVersion`, `apps/AppVersion.cs`), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware

@@ -102,6 +102,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 | `sensor.pv_control_current_export_price_brutto` | Current gross export/feed-in price (€/kWh); `data` attribute holds the full price list |
 | `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (€/kWh) |
 | `sensor.pv_control_best_export_price_today` | Highest export price slot today (€/kWh) |
+| `sensor.pv_control_price_publication` | When tomorrow's prices arrived today (`HH:mm`, `pending`, or `published` after a restart); attributes `prices_until` and `days` (the last 14 days' publication times) |
 
 The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive ~13:00. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 
@@ -322,6 +323,7 @@ dotnet test NetDeamonApps.Tests/
 | `HeatingTestTests` | Heating step test: start/skip/alternation, end/abort/disarm, SQLite log incl. restart recovery |
 | `WarmWaterControlTests` | Starting, never stopping mid-run, raising the setpoint, off-time and minimum run of the one-time heating, boost lifecycle, comfort windows |
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
+| `PricePublicationTrackerTests` | When tomorrow's prices first appear (once per day, not after a restart) |
 | `PriceListTests` | Hourly/quarter-hourly price normalization, hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
