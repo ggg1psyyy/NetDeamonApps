@@ -95,9 +95,12 @@ public class MorningTopUpTests
     var night = slots.Where(s => s.Time < Day.AddHours(6)).ToList();
     Assert.Contains(night, s => s.State.Mode == InverterModes.force_charge);
     Assert.True(night.Where(s => s.State.Mode == InverterModes.force_charge).All(s => Gross(s.Time.Hour) < 0.33f), Modes(night));
-    // Morning low: floor 12 + hysteresis 5 + forecast margin (low ~09:15, charge ~02:00–04:00 → +3).
+    // Morning low: floor 12 + forecast margin (low ~09:15, charge from ~01:30 → +3 to +4) + 1 %
+    // target buffer (+1 rounding) — not more (until 2026-10-22 the 5 % hysteresis band was in the
+    // target too: the low was ~21 %).
     int morningLow = slots.Where(s => s.Time >= Day.AddHours(6) && s.Time < Day.AddHours(10)).Min(s => s.SoC);
-    Assert.True(morningLow >= 19, $"morning low {morningLow}%: {Modes(slots.Take(40))}");
+    Assert.InRange(morningLow, 12 + 3 + EnergySimulator.ChargeTargetBufferPct - 1,
+      12 + EnergySimulator.MaxForecastMarginPct + EnergySimulator.ChargeTargetBufferPct + 1);
   }
 
   [Theory]

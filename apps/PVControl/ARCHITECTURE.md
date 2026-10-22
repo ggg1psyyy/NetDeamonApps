@@ -47,12 +47,20 @@ Each slot contains:
 The simulator decides slot by slot: should the inverter force-charge from grid, export,
 or run normally? All price/forecast data is baked into `SimulationInput` upfront.
 
-**NeedToCharge grid charge:** starts when the no-charging trajectory's trough (before PV
-recovers) reaches the SoC floor; once charging it continues until that trough is
-`NeedToChargeHysteresisPct` (5 %) above the floor, and the charge target lifts the trough to
-exactly that level. The band must clearly exceed the live SoC's 1 % resolution — with 1 % every
-SoC tick restarted the charge (28 bursts of 30–60 s on 2026-10-19). The charge goes into the
+**NeedToCharge grid charge:** the charge target lifts the no-charging trajectory's trough
+(before PV recovers) to floor + forecast margin + `ChargeTargetBufferPct` (1 %); a running charge
+stops there. A charge starts when the trough reaches floor + margin − `StartBelowPct` (1 %),
+never below the floor itself — a 2 % band between start and stop. The charge goes into the
 cheapest quarter plus the cheapest quarters under `ForceChargeMaxPrice` needed for the deficit.
+
+Why the band sits around the target: with a 1 % band every SoC tick restarted the charge (28
+bursts of 30–60 s on 2026-10-19). A 5 % band fixed that, but it was added on top of the start
+level and was also the charge target (so the simulated charge and the live stop agreed): every
+charge bought ~0.6 kWh extra, and on 2026-10-22 the morning low was planned at 29 % with a 20 %
+floor (20 + 5 + 4 margin). Now the band costs no energy: a stopped charge only restarts after a
+real 2 % drop of the trough. A time lock against restarts was considered and dropped — 15-min
+prices can differ wildly from one quarter to the next, and a lock could push a needed top-up out
+of the cheap running quarter into a more expensive one.
 
 Two additions since 2026-10-22 (the 02:00 charge fell ~3 % short — the night used ~340 W instead
 of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
@@ -140,7 +148,7 @@ quarter (`RoundToNearestQuarterHour` floors). Before, the running slot counted i
 forecast sum as soon as it began (its actual energy ≈ 0 yet) and was itself left raw, with the
 live average going to the slot after. Every quarter boundary therefore cut the simulated PV —
 2026-10-22 14:15:15 by ~600 Wh (ratio 1.83 → 1.71 on a day the forecast was 45 % low), 5.3 %
-SoC, more than `NeedToChargeHysteresisPct`: a NeedToCharge grid charge stopped at 14:12 started
+SoC, more than the 5 % hysteresis band of the time: a NeedToCharge grid charge stopped at 14:12 started
 again at 14:15:15.
 
 `RunningIntAverage` also expires values when nothing new arrives (keeping the latest one, the

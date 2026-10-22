@@ -70,6 +70,8 @@ so a cheap grid-charge or safety-net top-up can still run even while export is s
 | `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
 | `sensor.pv_control_load_forecast` | Coming night's load (22:00–08:00, kWh) by the weather-aware model — see [Load forecast](#load-forecast) |
 
+Grid charge for the minimum (`need_to_charge_from_grid_today`): the target for the low before PV takes over is the minimum SoC + a forecast margin (+1 % per 2 h until that low, at most 4 %) + 1 % — e.g. minimum 20 %, low 17 h away: 25 %. A charge starts when the low would fall 2 % below that target (never below the minimum itself) and charges just up to it, in the cheapest quarters before the low — or the minimum is held with `grid_only` when charging isn't cheaper than buying the load. `sensor.pv_control_mode` has the reason in `charge_Reason`, the running or next charge quarter in `next_charge_window_start/end`.
+
 #### Load forecast
 
 The house load forecast is the hour-of-day average of the last days (recent days weighted more). With `LoadForecast:` in `PVControl.yaml` a weather-aware model is added: base load (that average without the heat pump, plus half of its deviation over the last 48 h) plus the heat pump's space heating from the outside temperature forecast (Pirate Weather hourly) — learned from DataLogger's history as an energy signature (Wh per heating degree below 13 °C, per hour of the day). The heat pump mode decides whether it heats at all. In the backtest over the last year it missed the night load 15 % less than the average, in winter 20 % less (`tools/LoadBacktest/README.md`).

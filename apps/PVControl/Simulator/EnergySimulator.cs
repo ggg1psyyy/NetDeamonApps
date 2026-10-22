@@ -136,21 +136,30 @@ public static class EnergySimulator
       .FirstMinOrDefault();
     int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : need.EstimatedSoc;
     var troughTime = unclampedTrough.Key != default ? unclampedTrough.Key : need.LatestChargeTime;
-    // Lift the trough to exactly floor + hysteresis + forecast margin: the same level at which
+    // Lift the trough to floor + forecast margin + ChargeTargetBufferPct: the level at which
     // ComputeNeedToCharge stops an ongoing charge, so the simulated charge and the live stop
     // condition agree.
-    int deficit = Math.Max(0, floorSoc + NeedToChargeHysteresisPct + ForecastMarginPct(troughTime - slotTime) - baseTrough);
+    int deficit = Math.Max(0, floorSoc + ForecastMarginPct(troughTime - slotTime) + ChargeTargetBufferPct - baseTrough);
     return Math.Min(100, currentSoc + deficit);
   }
 
   /// <summary>
-  /// Hysteresis band (SoC %) of the NeedToCharge grid charge: it starts when the base trough
-  /// reaches the floor, but once charging continues until the trough is this far above it.
-  /// Must clearly exceed the live SoC's 1 % resolution: with 1 % (and a 2 % charge buffer) every
-  /// SoC tick moved the trough across the threshold — on 2026-10-19 that gave 28 grid charges of
-  /// 30–60 s between 03:20 and 04:37 instead of one charge.
+  /// A NeedToCharge grid charge lifts the trough this far above floor + forecast margin (the
+  /// start level), so it ends clearly above it with the live SoC's 1 % resolution.
   /// </summary>
-  public const int NeedToChargeHysteresisPct = 5;
+  public const int ChargeTargetBufferPct = 1;
+
+  /// <summary>
+  /// A NeedToCharge grid charge starts only this far below floor + forecast margin (never below
+  /// the floor itself). With <see cref="ChargeTargetBufferPct"/> above it that's a 2 % band
+  /// between start and stop — a charge that ended needs a real 2 % drop of the trough to start
+  /// again, not a 1 % SoC tick (on 2026-10-19 a 1 % band gave 28 grid charges of 30–60 s between
+  /// 03:20 and 04:37). The band lies around the target, not on top of it: until 2026-10-22 a
+  /// 5 % band was added to the target, every charge bought ~0.6 kWh extra and the morning low
+  /// landed at floor + 9 % (29 % with a 20 % floor). No time lock: 15-min prices can differ
+  /// wildly, a restart may be needed in the cheap running quarter.
+  /// </summary>
+  public const int StartBelowPct = 1;
 
   /// <summary>
   /// Extra SoC (%) for forecast errors, growing with the time until the low the charge has to
@@ -224,10 +233,15 @@ public static class EnergySimulator
     InverterState currentMode, SimulationInput input, DateTime now)
   {
     int minSoC = input.GetEffectiveMinSoC();
-    // While already charging, keep going until the trough is NeedToChargeHysteresisPct above
-    // the floor ("<= minSoC" below, so floor + band − 1 ⇔ trough < floor + band).
-    if (currentMode.Mode == InverterModes.force_charge)
-      minSoC += NeedToChargeHysteresisPct - 1;
+    // Start when the trough is at most floor + forecast margin − StartBelowPct (not below the
+    // floor); while charging continue until it's floor + margin + ChargeTargetBufferPct, the
+    // target DeficitChargeTargetSoc lifts it to.
+    bool charging = currentMode.Mode == InverterModes.force_charge;
+    int Margin(DateTime t)
+    {
+      int margin = ForecastMarginPct(t - now);
+      return charging ? margin : Math.Max(0, margin - StartBelowPct);
+    }
 
     // When do we first drop to or below minSoC (+ the forecast margin for that point in time)?
     // If we're already below it (edge case after a settings change or offline period),
@@ -235,7 +249,7 @@ public static class EnergySimulator
     var minReached = currentSoc < minSoC
       ? new KeyValuePair<DateTime, int>(now, currentSoc)
       : baseFutureSoC.Where(s => s.Key >= now).OrderBy(s => s.Key)
-          .FirstOrDefault(s => s.Value <= minSoC + ForecastMarginPct(s.Key - now));
+          .FirstOrDefault(s => s.Value <= minSoC + Margin(s.Key));
 
     // If we never drop below minimum, just record the lowest point for diagnostics
     if (minReached.Key == default)
@@ -248,7 +262,7 @@ public static class EnergySimulator
     // full PV recovery, OR PV will never get us back to 100 % at all.
     // Note: FirstUnderOrDefault uses <= so minReached.Value can equal minSoC (just touching
     // the floor counts as needing a charge — one more slot of discharge would breach it).
-    bool needCharge = minReached.Value <= minSoC + ForecastMarginPct(minReached.Key - now)
+    bool needCharge = minReached.Value <= minSoC + Margin(minReached.Key)
       && (minReached.Key < maxReached.Key || maxReached.Value < 100);
 
     // Build in 10 % of lead time so we start charging slightly before the critical point

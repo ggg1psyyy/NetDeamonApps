@@ -64,17 +64,54 @@ public class NeedToChargeHysteresisTests : TestBase
   }
 
   [Fact]
-  public void TroughBelowFloor_OneChargeLiftsItByTheBand()
+  public void TroughBelowFloor_OneChargeLiftsItToFloorPlusMarginOnly()
   {
+    // Low ~07:45, 4.4 h ahead → margin 2 %: target = 12 + 2 + 1 = 15 %. Until 2026-10-22 the 5 %
+    // band was in the target too (here 20 %; live with a 20 % floor the low landed at 29 %).
     var sim = EnergySimulator.Simulate(Input(26, Normal));
-    var beforePv = sim.Slots.Where(s => s.Time < Night.Date.AddHours(8)).ToList();
+    var beforePv = sim.Slots.Where(s => s.Time <= Night.Date.AddHours(8)).ToList(); // low at 08:00
     var charging = beforePv.Select(s => s.State.Mode == InverterModes.force_charge).ToList();
     int blocks = charging.Where((c, i) => c && (i == 0 || !charging[i - 1])).Count();
 
     Assert.Equal(InverterModes.force_charge, sim.Slots[0].State.Mode);
     Assert.Equal(1, blocks);
-    // After the charge the battery stays at least the band above the floor (−1 for rounding).
-    Assert.True(beforePv.Min(s => s.SoC) >= 12 + EnergySimulator.NeedToChargeHysteresisPct - 1,
-      $"Night minimum {beforePv.Min(s => s.SoC)} %");
+    int nightMin = beforePv.Min(s => s.SoC);
+    Assert.InRange(nightMin, 12 + EnergySimulator.ChargeTargetBufferPct, 12 + 2 + EnergySimulator.ChargeTargetBufferPct + 1);
+  }
+
+  [Fact]
+  public void NotCharging_TroughAtFloorPlusMargin_DoesNotStart()
+  {
+    // 31 % → trough ≈ 14 % = floor + margin: a charge that just stopped at 15 % and lost a 1 %
+    // tick — no restart (that was the 2026-10-19 flapping).
+    var sim = EnergySimulator.Simulate(Input(31, Normal));
+    Assert.Equal(InverterModes.normal, sim.Slots[0].State.Mode);
+  }
+
+  [Fact]
+  public void NotCharging_TroughOneBelowFloorPlusMargin_Starts()
+  {
+    // 30 % → trough ≈ 13 % = floor + margin − 1: a real 2 % drop — starts, in whatever quarter
+    // the price logic picks (here: now, flat price).
+    var sim = EnergySimulator.Simulate(Input(30, Normal));
+    Assert.Equal(InverterModes.force_charge, sim.Slots[0].State.Mode);
+  }
+
+  [Fact]
+  public void LowImminent_NoMargin_StartsAtTheFloorNotBelow()
+  {
+    // 07:15, low at 08:00 (45 min → margin 0): 15 % → trough 12 % = the floor itself. Without
+    // the clamp the start level would be floor − 1 = 11 % and the battery would touch the floor.
+    var night = Input(15, Normal);
+    var at0715 = new SimulationInput
+    {
+      StartTime = Night.Date.AddHours(7).AddMinutes(15), StartSocPercent = 15, BatteryCapacityWh = night.BatteryCapacityWh,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 15, EnforcePreferredSoc = false,
+      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = night.ImportPrices, ExportPrices = night.ExportPrices,
+      LoadPredictionWh = night.LoadPredictionWh, PVPredictionWh = night.PVPredictionWh, ExtraLoads = [],
+      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.34f,
+      ForceChargeTargetSocPercent = 95, CurrentMode = Normal,
+    };
+    Assert.Equal(InverterModes.force_charge, EnergySimulator.Simulate(at0715).Slots[0].State.Mode);
   }
 }
