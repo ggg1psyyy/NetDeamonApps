@@ -358,9 +358,8 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   the heat pump drawing in just that slot vs the baseline, by `NetGridCostVs` (lost export for PV
   surplus, refill cost for battery energy, import price otherwise). Probed per 30 min (96
   simulations, ~0.6 s).
-- `EstimateUnpublishedPrices` — slots after the last published price (tomorrow, before ~13:00)
-  read 0 in the house simulation (`PriceList.GetPrice` without an entry), so heating tomorrow
-  looked free; they get the same slot's price a day earlier (else the hour's / overall mean).
+- Unpublished hours (tomorrow before ~13:00) are priced from the simulation's estimated prices
+  (see Price pipeline); the plan sensor's `prices_known_until` shows where published prices end.
 - `WithOutsideEfficiency` — × (1 + `EfficiencyChangePerK` · (mean − outside temperature)), from
   PVControl's weather forecast (default 3 %/K, measured COP 3.9 → 6.3 over 15 K): a warm
   afternoon beats a cold evening; relative to the horizon's mean, so the cost level stays.
@@ -454,6 +453,16 @@ EPEX Spot (same or different entity)
 
 `ForceChargeMaxPrice` (set via HA number entity) is the threshold used in `PriorityPlus`
 and in force-charge decisions — grid import is allowed if the price is at or below this.
+
+**Unpublished hours.** The simulation runs to the end of tomorrow, but tomorrow's EPEX prices
+arrive ~13:00. Until then the simulator's price scans (NeedToCharge window, cheapest quarter, …)
+saw no tomorrow at all, and the cost comparisons (`NetGridCostVs`: warm-water heating prices, EV)
+priced it with the flat mean of the known prices. The simulation input therefore gets `PriceListImport/Export.WithEstimatedPrices(end of tomorrow)`:
+missing quarters take the price 24 h earlier (chained; the daily pattern repeats well enough),
+never below 0 (negative-price handling only follows published prices).
+`SimulationInput.PublishedPricesUntil` keeps the real end: the EV session planner
+(`PriceHorizonEnd`) doesn't commit to estimated prices, and the health check reads the published
+lists directly.
 
 ---
 

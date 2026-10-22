@@ -70,6 +70,40 @@ namespace NetDeamon.apps.PVControl
       return new PriceList(result);
     }
 
+    /// <summary>End of the last entry (the published horizon); null for an empty list.</summary>
+    public DateTime? End => _entries.Count > 0 ? _entries.Max(p => p.EndTime) : null;
+
+    /// <summary>
+    /// A copy extended to <paramref name="until"/> with estimates for the quarters nobody has
+    /// published yet: the price 24 h earlier (chained, so longer gaps fill too — the daily pattern
+    /// repeats well enough), else the mean of that hour, else of all prices. Without this, until
+    /// tomorrow's prices arrive (~13:00) the simulator's scans see no tomorrow at all and its cost
+    /// comparisons price tomorrow with the flat mean. Estimates are never negative: negative prices
+    /// trigger special handling (keeping battery room, curtailing export) that should only follow
+    /// published prices.
+    /// </summary>
+    public PriceList WithEstimatedPrices(DateTime until)
+    {
+      if (_entries.Count == 0 || End is not { } end || end >= until) return this;
+      var quarters = NormalizeToQuarterHourly()._entries;
+      var byStart = new Dictionary<DateTime, float>();
+      foreach (var q in quarters) byStart.TryAdd(q.StartTime, q.Price);
+      var byHour = quarters.GroupBy(q => q.StartTime.Hour).ToDictionary(g => g.Key, g => g.Average(q => q.Price));
+      float overall = quarters.Average(q => q.Price);
+
+      var result = new List<PriceTableEntry>(_entries);
+      for (var t = end; t < until; t = t.AddMinutes(15))
+      {
+        float price = byStart.TryGetValue(t.AddDays(-1), out float dayBefore) ? dayBefore
+          : byHour.TryGetValue(t.Hour, out float hourMean) ? hourMean
+          : overall;
+        price = Math.Max(0, price);
+        byStart[t] = price;
+        result.Add(new PriceTableEntry(t, t.AddMinutes(15), price));
+      }
+      return new PriceList(result);
+    }
+
     // ── Point-in-time queries ────────────────────────────────────────────────────────────────
 
     /// <summary>Price at the given time (0 if no matching entry).</summary>

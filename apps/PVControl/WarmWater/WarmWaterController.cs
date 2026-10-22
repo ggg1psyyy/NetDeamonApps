@@ -99,7 +99,7 @@ public sealed class WarmWaterController
 
   /// <summary>PVControl's hourly weather forecast (outside temperature → heat pump efficiency); null if not configured.</summary>
   public LoadModel.WeatherForecast? Weather { get; set; }
-  /// <summary>End of the published prices at the last plan; slots after it use estimated prices.</summary>
+  /// <summary>End of the published prices at the last plan; the simulation estimated the prices after it.</summary>
   public DateTime? PricesKnownUntil { get; private set; }
   public bool OutsideEfficiencyUsed { get; private set; }
 
@@ -120,8 +120,8 @@ public sealed class WarmWaterController
     var slots = baseline.Slots.Select(s => s.Time).ToList();
     var horizonEnd = slots[^1].AddMinutes(15);
     var prices = WarmWaterPlanner.HeatingPricesPerKwh(baseInput, baseline, slots, now, (int)Math.Round(Model.PowerW(45)));
-    PricesKnownUntil = baseInput.ImportPrices.Count > 0 ? baseInput.ImportPrices.Max(p => p.EndTime) : now;
-    prices = WarmWaterPlanner.EstimateUnpublishedPrices(prices, slots, PricesKnownUntil.Value);
+    // Unpublished hours are priced by the simulation from estimated prices (PriceList.WithEstimatedPrices).
+    PricesKnownUntil = baseInput.PriceHorizonEnd(now);
     OutsideEfficiencyUsed = Weather is { } weather && !weather.IsStale(now) && Config.EfficiencyChangePerK > 0;
     if (OutsideEfficiencyUsed)
       prices = WarmWaterPlanner.WithOutsideEfficiency(prices, slots.Select(s => Weather!.Temperature(s)).ToList(), Config.EfficiencyChangePerK);

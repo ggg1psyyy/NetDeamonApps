@@ -424,8 +424,11 @@ namespace NetDeamon.apps.PVControl
         EnforcePreferredSoc = Battery.EnforcePreferredSoC,
         MaxChargePowerAmps = PVCC_Config.MaxBatteryChargePower,
         InverterEfficiency = Battery.InverterEfficiency,
-        ImportPrices = Prices.PriceListImport,
-        ExportPrices = Prices.PriceListExport,
+        // Unpublished hours (tomorrow before ~13:00): estimated from the day before, so plans see
+        // tomorrow's daily pattern instead of nothing (scans) or the flat mean (cost comparisons).
+        ImportPrices = Prices.PriceListImport.WithEstimatedPrices(now.Date.AddDays(2)),
+        ExportPrices = Prices.PriceListExport.WithEstimatedPrices(now.Date.AddDays(2)),
+        PublishedPricesUntil = Prices.PriceListImport.End,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
         PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), ActualPVEnergyTodayWh(), now),
         ExtraLoads = extraLoads ?? [],
@@ -671,8 +674,9 @@ namespace NetDeamon.apps.PVControl
 
       // The published import-price horizon (today + tomorrow once published) — bounds
       // PriorityPlus's bonus ruleset's forward scan below: once prices run out there's nothing
-      // left to evaluate for a price-based decision.
-      var priceHorizonEnd = baseInput.ImportPrices.Select(p => p.EndTime).DefaultIfEmpty(currentSlot).Max();
+      // left to evaluate for a price-based decision. Published only: the simulation's prices
+      // beyond it are estimates, and a session shouldn't be committed to an estimated price.
+      var priceHorizonEnd = baseInput.PriceHorizonEnd(currentSlot);
 
       // Optional "ready by" deadline — only PriorityPlus's price scan uses it (it may then exceed
       // the price threshold to finish in time); Optimal/Priority keep their own rules.

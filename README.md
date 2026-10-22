@@ -104,6 +104,8 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 | `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (€/kWh) |
 | `sensor.pv_control_best_export_price_today` | Highest export price slot today (€/kWh) |
 
+The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive ~13:00. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative) — before, the plans saw no tomorrow at all or priced it with the flat mean. Price-driven commitments — EV session starts — still only use published prices.
+
 #### Cost tracking entities
 
 | Entity | Description |
@@ -198,7 +200,7 @@ The house battery minimum follows `switch.pv_control_enforce_preferred_soc` in e
 
 The heat pump heats the warm-water tank with one-time heatings at the cheapest times that keep the comfort periods warm (e.g. ≥ 42 °C from 06:30 for 1 h and from 19:00 for 2 h); outside them the tank may cool down. In `Auto`, PVControl switches the one-time heating on, and off again once the heat pump has reached the setpoint (its switch stays on otherwise). A heating that runs is never stopped — compressor starts wear the heat pump — the plan may only raise its setpoint; a new planned run needs ≥ 3 K of rise and 60 min since the last heating ended. Set the heat pump's own warm-water setpoint low (e.g. 20 °C) as a safety net before switching to `Auto`.
 
-How it decides: a tank model learned daily from 10 days of HA history (heating ~17 K/h, standby loss growing with the temperature, ~1.7 kW) and what a kWh of heating costs in every 15-min slot according to the house simulation (PV surplus = lost export, battery energy = what refilling it costs, otherwise the import price). A dynamic program picks the cheapest heating slots. Heating early to a higher temperature (up to 57 °C) only wins when the price difference beats the extra heat loss — measured, a tank at 57 °C loses about twice as much per hour as one at 42 °C. The heat pump's efficiency follows the outside temperature (air/water, ~3 % per K, `EfficiencyChangePerK`, from the weather forecast of `LoadForecast`), so a warm afternoon counts cheaper than a cold evening. Hours without a published price yet (tomorrow, before ~13:00) use the same hour's price a day earlier instead of reading as free; the plan sensor shows `prices_known_until` and `outside_efficiency`.
+How it decides: a tank model learned daily from 10 days of HA history (heating ~17 K/h, standby loss growing with the temperature, ~1.7 kW) and what a kWh of heating costs in every 15-min slot according to the house simulation (PV surplus = lost export, battery energy = what refilling it costs, otherwise the import price). A dynamic program picks the cheapest heating slots. Heating early to a higher temperature (up to 57 °C) only wins when the price difference beats the extra heat loss — measured, a tank at 57 °C loses about twice as much per hour as one at 42 °C. The heat pump's efficiency follows the outside temperature (air/water, ~3 % per K, `EfficiencyChangePerK`, from the weather forecast of `LoadForecast`), so a warm afternoon counts cheaper than a cold evening. Hours without a published price yet (tomorrow, before ~13:00) are priced with estimates (see "Price entities"); the plan sensor shows `prices_known_until` and `outside_efficiency`.
 
 | Entity | Description |
 |---|---|
@@ -317,11 +319,11 @@ dotnet test NetDeamonApps.Tests/
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
 | `MorningTopUpTests` | Grid charge with the real 2026-10-22 night: night charge with forecast margin, no top-up at 0.43 €/kWh before PV (grid_only holds the floor) |
 | `TankModelTests` | Warm-water tank model fit on 10 days of real history, history helpers |
-| `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation, unpublished prices estimated (live 2026-10-22), outside-temperature efficiency |
+| `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation, outside-temperature efficiency |
 | `HeatingTestTests` | Heating step test: start/skip/alternation, end/abort/disarm, SQLite log incl. restart recovery |
 | `WarmWaterControlTests` | Starting, never stopping mid-run, raising the setpoint, off-time and minimum run of the one-time heating, boost lifecycle, comfort windows |
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
-| `PriceListTests` | Hourly/quarter-hourly price normalization and hourly billing averages |
+| `PriceListTests` | Hourly/quarter-hourly price normalization, hourly billing averages, estimates for unpublished hours (live 2026-10-22) |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |

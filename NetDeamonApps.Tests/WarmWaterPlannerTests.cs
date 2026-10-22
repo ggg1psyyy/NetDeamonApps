@@ -181,6 +181,28 @@ public class WarmWaterPlannerTests : TestBase
   }
 
   [Fact]
+  public void HeatingPrice_TomorrowNotPublishedYet_DailyPatternInsteadOfMean()
+  {
+    // Before ~13:00 tomorrow's prices are missing; the cost comparison (NetGridCostVs) priced them
+    // with the mean of the known prices. With the estimates (as HouseEnergy builds the input)
+    // tomorrow follows today's pattern: a cheap afternoon stays cheap.
+    var start = new DateTime(2026, 10, 20, 12, 45, 0);
+    var day = start.Date;
+    var full = House(start, 12, _ => 0);
+    PriceList Pattern(int days) => new(Enumerable.Range(0, 24 * days).Select(h =>
+      new PriceTableEntry(day.AddHours(h), day.AddHours(h + 1), h % 24 is >= 13 and < 16 ? 0.20f : 0.40f)));
+    var export = new PriceList(full.ExportPrices.Where(p => p.StartTime < day.AddDays(1)));
+    var published = full.WithPrices(Pattern(2), full.ExportPrices);
+    var raw = full.WithPrices(Pattern(1), export);
+    var estimated = full.WithPrices(Pattern(1).WithEstimatedPrices(day.AddDays(2)), export.WithEstimatedPrices(day.AddDays(2)));
+    var tomorrow = day.AddDays(1).AddHours(14.5);
+
+    float real = PriceAt(published, tomorrow), mean = PriceAt(raw, tomorrow), est = PriceAt(estimated, tomorrow);
+    Assert.True(mean > real + 0.1f, $"mean {mean:F3} vs real {real:F3}");
+    Assert.Equal(real, est, 2);
+  }
+
+  [Fact]
   public void HeatingPrice_PvSurplusWithFullBattery_CostsTheLostExport()
   {
     // Full battery and 3 kW PV at noon: the heating only takes energy that would be exported.
@@ -198,32 +220,7 @@ public class WarmWaterPlannerTests : TestBase
     Assert.InRange(price, 0.25f, 0.40f);
   }
 
-  // ── Unpublished prices, outside temperature (2026-10-22) ───────────────────────────────────
-
-  [Fact]
-  public void UnpublishedPrices_Live20261022_EstimatedFromTheDayBefore()
-  {
-    // 12:45: today's prices are published, tomorrow's not yet (~13:00) — the house simulation
-    // read 0 there, the plan heated "tomorrow 14:45 → 49.7 °C" for free.
-    var now = new DateTime(2026, 10, 22, 12, 45, 0);
-    var slots = Enumerable.Range(0, 141).Select(i => now.AddMinutes(15 * i)).ToList(); // → tomorrow 23:45
-    var raw = slots.Select(s => s.Date == now.Date ? (s.Hour == 14 ? 0.20f : 0.30f) : 0f).ToArray();
-    var est = WarmWaterPlanner.EstimateUnpublishedPrices(raw, slots, now.Date.AddDays(1));
-
-    float At(DateTime t) => est[slots.IndexOf(t)];
-    Assert.Equal(0.20f, At(now.Date.AddDays(1).AddHours(14.75)));        // same slot a day before
-    Assert.Equal(0.30f, At(now.Date.AddDays(1).AddHours(20)));
-    Assert.True(At(now.Date.AddDays(1).AddHours(3)) > 0.29f);            // no slot a day before: mean
-    Assert.Equal(raw[0], est[0]);                                        // published prices unchanged
-  }
-
-  [Fact]
-  public void UnpublishedPrices_AllPublished_Unchanged()
-  {
-    var slots = Enumerable.Range(0, 8).Select(i => Start.AddMinutes(15 * i)).ToList();
-    float[] prices = [0.1f, 0.2f, 0.3f, 0.4f, 0.1f, 0.2f, 0.3f, 0.4f];
-    Assert.Equal(prices, WarmWaterPlanner.EstimateUnpublishedPrices(prices, slots, Start.AddDays(1)));
-  }
+  // ── Outside temperature (2026-10-22) ───────────────────────────────────────────────────────
 
   [Fact]
   public void OutsideEfficiency_WarmerSlotsCheaper_LevelKept()

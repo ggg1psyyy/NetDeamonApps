@@ -212,4 +212,54 @@ public class PriceListTests
     Assert.True(result.StartTime <= now && result.EndTime > now,
       $"now={now:HH:mm} should fall within the returned window [{result.StartTime:HH:mm}, {result.EndTime:HH:mm})");
   }
+
+  // ── WithEstimatedPrices (unpublished hours, live 2026-10-22) ──────────────────────────────
+
+  static PriceList Today(DateTime day, Func<int, float> priceOfHour) =>
+    new(Enumerable.Range(0, 24).Select(h => new PriceTableEntry(day.AddHours(h), day.AddHours(h + 1), priceOfHour(h))));
+
+  [Fact]
+  public void WithEstimatedPrices_TomorrowNotPublished_SameHourOfToday()
+  {
+    // 12:48: today published, tomorrow not (arrives ~13:00) — GetPrice read 0 there.
+    var day = new DateTime(2026, 10, 22);
+    var prices = Today(day, h => h == 14 ? 0.32f : 0.42f);
+    Assert.Equal(0f, prices.GetPrice(day.AddDays(1).AddHours(14.75)));
+
+    var est = prices.WithEstimatedPrices(day.AddDays(2));
+    Assert.Equal(0.32f, est.GetPrice(day.AddDays(1).AddHours(14.75)));
+    Assert.Equal(0.42f, est.GetPrice(day.AddDays(1).AddHours(3)));
+    Assert.Equal(day.AddDays(2), est.End);
+    Assert.Equal(day.AddDays(1), prices.End); // the published list stays as it is
+  }
+
+  [Fact]
+  public void WithEstimatedPrices_GapLongerThanADay_Chained()
+  {
+    // Only today's first 12 hours: today 12–23 h from the hour means (none) → overall mean, and
+    // tomorrow repeats today.
+    var day = new DateTime(2026, 10, 22);
+    var prices = new PriceList(Today(day, h => h).Where(p => p.StartTime.Hour < 12));
+    var est = prices.WithEstimatedPrices(day.AddDays(2));
+    Assert.Equal(6f, est.GetPrice(day.AddDays(1).AddHours(6)));      // = today 06:00
+    Assert.Equal(5.5f, est.GetPrice(day.AddHours(18)));              // mean of 0…11
+    Assert.Equal(5.5f, est.GetPrice(day.AddDays(1).AddHours(18)));   // = today's estimate
+  }
+
+  [Fact]
+  public void WithEstimatedPrices_NegativePrices_NotEstimatedNegative()
+  {
+    var day = new DateTime(2026, 10, 22);
+    var est = Today(day, h => h == 13 ? -0.05f : 0.20f).WithEstimatedPrices(day.AddDays(2));
+    Assert.Equal(0f, est.GetPrice(day.AddDays(1).AddHours(13)));
+    Assert.Equal(-0.05f, est.GetPrice(day.AddHours(13))); // published: kept
+  }
+
+  [Fact]
+  public void WithEstimatedPrices_AlreadyComplete_Unchanged()
+  {
+    var day = new DateTime(2026, 10, 22);
+    var prices = Today(day, _ => 0.3f);
+    Assert.Same(prices, prices.WithEstimatedPrices(day.AddDays(1)));
+  }
 }

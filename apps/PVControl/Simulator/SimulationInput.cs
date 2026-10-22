@@ -60,9 +60,22 @@ public class SimulationInput
 
   /// <summary>
   /// Hourly import price table (EPEX Spot + taxes + network fees), in ct/kWh.
-  /// Covers today and — once EPEX publishes them around 13:00 — tomorrow's prices.
+  /// Covers today and — once EPEX publishes them around 13:00 — tomorrow's prices. Live
+  /// (HouseEnergy) the rest up to the end of tomorrow is estimated (PriceList.WithEstimatedPrices);
+  /// <see cref="PublishedPricesUntil"/> is where the published prices end.
   /// </summary>
   public required PriceList ImportPrices { get; init; }
+
+  /// <summary>
+  /// End of the published prices (later prices in <see cref="ImportPrices"/>/<see cref="ExportPrices"/>
+  /// are estimates). Price-driven plans that commit to a slot (EV sessions) don't plan beyond it.
+  /// Null: all prices are published (e.g. tests).
+  /// </summary>
+  public DateTime? PublishedPricesUntil { get; init; }
+
+  /// <summary>Where price-driven plans may look: <see cref="PublishedPricesUntil"/>, else the end of the prices.</summary>
+  public DateTime PriceHorizonEnd(DateTime fallback) =>
+    PublishedPricesUntil ?? ImportPrices.End ?? fallback;
 
   private Dictionary<DateTime, int>? _extraLoadWhBySlot;
   /// <summary>Total ExtraLoads energy (Wh) in the 15-min slot starting at <paramref name="slotStart"/>, computed once per input.</summary>
@@ -194,7 +207,13 @@ public class SimulationInput
   }
 
   /// <summary>Returns a copy of this input with only the ExtraLoads list replaced.</summary>
-  public SimulationInput WithExtraLoads(List<ExtraLoad> loads) => new()
+  public SimulationInput WithExtraLoads(List<ExtraLoad> loads) => Copy(loads, ImportPrices, ExportPrices, PublishedPricesUntil);
+
+  /// <summary>Returns a copy of this input with other price lists (and their published end).</summary>
+  public SimulationInput WithPrices(PriceList import, PriceList export, DateTime? publishedUntil = null) =>
+    Copy(ExtraLoads, import, export, publishedUntil);
+
+  private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil) => new()
   {
     StartTime = StartTime,
     StartSocPercent = StartSocPercent,
@@ -204,8 +223,9 @@ public class SimulationInput
     EnforcePreferredSoc = EnforcePreferredSoc,
     MaxChargePowerAmps = MaxChargePowerAmps,
     InverterEfficiency = InverterEfficiency,
-    ImportPrices = ImportPrices,
-    ExportPrices = ExportPrices,
+    ImportPrices = import,
+    ExportPrices = export,
+    PublishedPricesUntil = publishedUntil,
     LoadPredictionWh = LoadPredictionWh,
     PVPredictionWh = PVPredictionWh,
     ExtraLoads = loads,
