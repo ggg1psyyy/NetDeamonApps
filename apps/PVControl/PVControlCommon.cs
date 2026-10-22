@@ -3,6 +3,7 @@ using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
 using System.Collections.Generic;
+using System.Linq;
 using System.Dynamic;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -170,35 +171,18 @@ namespace NetDeamon.apps.PVControl
     public int MaxBatteryChargeCurrrentValue { get; set; }
     public Entity MinBatterySoCEntity { get; set; } = null!;
     public int MinBatterySoCValue { get; set; } = default;
-    public Entity CurrentImportPriceEntity
-    {
-      get
-      {
-        foreach (var entity in CurrentImportPriceEntities)
-        {
-          if (entity.TryGetJsonAttribute("data", out _))
-            return entity;
-        }
-        return null!;
-      }
-    }
-    /// <summary>First entity in <see cref="CurrentExportPriceEntities"/> with a valid "data"
-    /// attribute, mirroring <see cref="CurrentImportPriceEntity"/>. Only used for the
-    /// independent-variable export price case (neither <see cref="ExportPriceSameAsImport"/>
-    /// nor <see cref="ExportPriceFixed"/>).</summary>
-    public Entity? CurrentExportPriceEntity
-    {
-      get
-      {
-        if (CurrentExportPriceEntities is null) return null;
-        foreach (var entity in CurrentExportPriceEntities)
-        {
-          if (entity.TryGetJsonAttribute("data", out _))
-            return entity;
-        }
-        return null;
-      }
-    }
+    /// <summary>The entity in <see cref="CurrentImportPriceEntities"/> whose price data reaches
+    /// furthest — all sources are equal, the first to publish tomorrow wins (see
+    /// <see cref="PriceManager.FurthestSource"/>).</summary>
+    public Entity CurrentImportPriceEntity => FurthestPriceEntity(CurrentImportPriceEntities)!;
+    /// <summary>Same as <see cref="CurrentImportPriceEntity"/> for <see cref="CurrentExportPriceEntities"/>.
+    /// Only used for the independent-variable export price case (neither
+    /// <see cref="ExportPriceSameAsImport"/> nor <see cref="ExportPriceFixed"/>).</summary>
+    public Entity? CurrentExportPriceEntity => FurthestPriceEntity(CurrentExportPriceEntities);
+
+    static Entity? FurthestPriceEntity(List<Entity>? entities) =>
+      entities is null ? null
+      : PriceManager.FurthestSource(entities.Select(PriceManager.DataEnd).ToList()) is { } i ? entities[i] : null;
     public int MaxBatteryChargePower
     {
       get

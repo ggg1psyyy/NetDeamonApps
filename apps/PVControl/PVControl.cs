@@ -572,7 +572,8 @@ namespace NetDeamon.apps.PVControl
         .Where(e => e is not null && Unavailable(e)).Select(e => e!.EntityId).ToList()));
 
       var prices = _house.Prices.PriceListImport;
-      issues.AddRange(HealthChecks.ImportPrices(now, PVCC_Config.CurrentImportPriceEntities.Select(e => e.EntityId).ToList(),
+      issues.AddRange(HealthChecks.ImportPrices(now,
+        PVCC_Config.CurrentImportPriceEntities.Where(e => PriceManager.DataEnd(e) is null).Select(e => e.EntityId).ToList(),
         PVCC_Config.CurrentImportPriceEntity?.EntityId, prices.Count > 0 ? prices.Max(p => p.EndTime) : null));
 
       issues.AddRange(HealthChecks.Forecasts(_house.Prediction_Load.DataOK, _house.Prediction_PV.DataOK,

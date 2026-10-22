@@ -88,29 +88,33 @@ public class HealthTests
     Assert.Equal(HealthLevel.error, HealthChecks.BatterySoC(false, true, T0).Single().Level);
   }
 
-  static readonly string[] PriceSources =
-    ["sensor.epex_spot_data_market_price_3", "sensor.epex_spot_data_market_price", "sensor.epex_spot_data_market_price_2"];
+  const string Used = "sensor.epex_spot_data_market_price";
 
   [Fact]
-  public void Prices_Live20261021_PrimarySourceDisabled_Degraded()
+  public void Prices_Live20261021_SourceDisabled_Degraded()
   {
-    // _3 belongs to the disabled ENTSO-E entry; PVControl runs on the second source.
-    var issue = HealthChecks.ImportPrices(T0, PriceSources, "sensor.epex_spot_data_market_price", new DateTime(2026, 10, 22, 0, 0, 0)).Single();
+    // _3 belonged to the disabled ENTSO-E entry: no data at all.
+    var issue = HealthChecks.ImportPrices(T0, ["sensor.epex_spot_data_market_price_3"], Used, new DateTime(2026, 10, 22, 0, 0, 0)).Single();
     Assert.Equal("price_source", issue.Key);
     Assert.Equal(HealthLevel.degraded, issue.Level);
   }
 
   [Fact]
+  public void Prices_OtherSourceThanFirstUsed_NoIssue() =>
+    // All sources have data, the used one isn't the first in the list (it reaches further): fine.
+    Assert.Empty(HealthChecks.ImportPrices(T0, [], "sensor.epex_spot_data_market_price_4", new DateTime(2026, 10, 23, 0, 0, 0)));
+
+  [Fact]
   public void Prices_NoneForNow_Error() =>
-    Assert.Equal(HealthLevel.error, HealthChecks.ImportPrices(T0, PriceSources, PriceSources[0], T0.Date.AddHours(13)).Single().Level);
+    Assert.Equal(HealthLevel.error, HealthChecks.ImportPrices(T0, [], Used, T0.Date.AddHours(13)).Single().Level);
 
   [Fact]
   public void Prices_TomorrowMissingAfter16()
   {
     var todayOnly = new DateTime(2026, 10, 22, 0, 0, 0);
-    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(15.9), PriceSources, PriceSources[0], todayOnly));
-    Assert.Equal("prices_tomorrow", HealthChecks.ImportPrices(T0.Date.AddHours(16), PriceSources, PriceSources[0], todayOnly).Single().Key);
-    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(16), PriceSources, PriceSources[0], todayOnly.AddDays(1)));
+    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(15.9), [], Used, todayOnly));
+    Assert.Equal("prices_tomorrow", HealthChecks.ImportPrices(T0.Date.AddHours(16), [], Used, todayOnly).Single().Key);
+    Assert.Empty(HealthChecks.ImportPrices(T0.Date.AddHours(16), [], Used, todayOnly.AddDays(1)));
   }
 
   [Fact]

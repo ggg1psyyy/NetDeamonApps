@@ -482,6 +482,22 @@ lists directly.
 noted after "not published" was seen the same day — not the time of a restart. PVControl reloads
 the price list on any change of the price entities (`StateAllChanges`), attributes included.
 
+When ha_epex_spot's data shows up (v4.1.0, `__init__.py`): each entry fetches once an hour at
+hh:50 + a random 0–9 min, but the entities only take the fetched data at the next refresh —
+hh:00 for an hourly source, also :15/:30/:45 for a 15-min one. The action `epex_spot.fetch_data`
+fetches and refreshes at once (2026-10-22 13:59 was such a manual call). So an hourly source
+always shows tomorrow on a full hour.
+
+Price source choice: the sources used to be a priority list (first with data wins). On
+2026-10-22 at 14:11 Awattar (hourly) and Energy-Charts (15 min, not configured then) had
+tomorrow, smartENERGY didn't — a source that has tomorrow should win, whichever it is and
+wherever it's listed. Now the source whose data reaches furthest is used (`PriceManager.FurthestSource`,
+tie → list order). This is safe because the sources carry the same EPEX prices: hour means of
+Energy-Charts' quarters vs Awattar's hours differed by at most 0.001 ct over 48 h, and the
+provider bills hourly (`ImportPriceResolution: Hourly`), so a 15-min source never brings finer
+prices. The health check's `price_source` now means "a source has no data at all" instead of
+"not the first one is used".
+
 ---
 
 ## HA entity auto-creation

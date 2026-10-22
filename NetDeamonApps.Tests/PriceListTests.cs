@@ -309,4 +309,36 @@ public class PriceListTests
     var first = NetDeamon.apps.PVControl.Simulator.EnergySimulator.Simulate(input).First(s => s.State.Mode == InverterModes.force_charge);
     Assert.Equal(firstCharge, first.Time.ToString("dd HH:mm"));
   }
+
+  // ── Price source selection (PriceManager.FurthestSource) ──────────────────
+
+  [Fact]
+  public void FurthestSource_Live20261022_FirstToPublishTomorrowWins()
+  {
+    // 14:11: Awattar (hourly) and Energy-Charts (15 min) already had tomorrow, smartENERGY not.
+    var today = new DateTime(2026, 10, 23, 0, 0, 0);
+    var tomorrow = today.AddDays(1);
+    // [smartENERGY, Awattar, Energy-Charts]
+    Assert.Equal(1, PriceManager.FurthestSource([today, tomorrow, tomorrow]));   // tie → earlier in the list
+    Assert.Equal(2, PriceManager.FurthestSource([today, today, tomorrow]));      // only Energy-Charts has tomorrow
+    Assert.Equal(0, PriceManager.FurthestSource([today, null, today]));          // no data counts as nothing, tie → first
+    Assert.Null(PriceManager.FurthestSource([null, null]));
+    Assert.Null(PriceManager.FurthestSource([]));
+  }
+
+  [Fact]
+  public void WithResolution_Hourly_QuarterSourceEqualsHourlySource()
+  {
+    // Same EPEX hour from two sources: hourly (Awattar) and four quarters (Energy-Charts) —
+    // with Hourly billing both give the same price in every slot, so switching sources changes nothing.
+    var h = new DateTime(2026, 10, 23, 4, 0, 0);
+    var hourly = new PriceList([new PriceTableEntry(h, h.AddHours(1), 0.26598f)]);
+    var quarters = new PriceList([
+      new PriceTableEntry(h, h.AddMinutes(15), 0.25000f), new PriceTableEntry(h.AddMinutes(15), h.AddMinutes(30), 0.26000f),
+      new PriceTableEntry(h.AddMinutes(30), h.AddMinutes(45), 0.27000f), new PriceTableEntry(h.AddMinutes(45), h.AddHours(1), 0.28392f)]);
+    var a = hourly.NormalizeToQuarterHourly().WithResolution(PriceResolution.Hourly).Select(p => p.Price).ToList();
+    var b = quarters.NormalizeToQuarterHourly().WithResolution(PriceResolution.Hourly).Select(p => p.Price).ToList();
+    Assert.Equal(4, b.Count);
+    for (int i = 0; i < 4; i++) Assert.Equal(a[i], b[i], 5);
+  }
 }

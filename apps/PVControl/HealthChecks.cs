@@ -36,18 +36,20 @@ public static class HealthChecks
         $"Inverter data unavailable: {string.Join(", ", unavailableEntities)}", InverterDataErrorAfter);
   }
 
-  /// <param name="configured">The configured import price entities, in priority order.</param>
-  /// <param name="used">The one PVControl uses (first with data), null if none has data.</param>
+  /// <param name="withoutData">Configured import price entities without any price data.</param>
+  /// <param name="used">The one PVControl uses (data reaching furthest), null if none has data.</param>
   /// <param name="pricesEnd">End of the last price slot PVControl has.</param>
-  public static IEnumerable<HealthIssue> ImportPrices(DateTime now, IReadOnlyList<string> configured, string? used, DateTime? pricesEnd)
+  public static IEnumerable<HealthIssue> ImportPrices(DateTime now, IReadOnlyList<string> withoutData, string? used, DateTime? pricesEnd)
   {
     if (used is null || pricesEnd is not { } end || end <= now)
     {
       yield return new HealthIssue("prices", HealthLevel.error, "No import price for now");
       yield break;
     }
-    if (configured.Count > 0 && used != configured[0])
-      yield return new HealthIssue("price_source", HealthLevel.degraded, $"Price source {configured[0]} has no data, using {used}");
+    // All sources are equal (the furthest wins), so which one is used isn't an issue — one
+    // without any data is (failed integration, disabled entry), there's one fallback less.
+    if (withoutData.Count > 0)
+      yield return new HealthIssue("price_source", HealthLevel.degraded, $"Price source {string.Join(", ", withoutData)} has no data, using {used}");
     if (now.TimeOfDay >= TomorrowPricesBy && end < now.Date.AddDays(2))
       yield return new HealthIssue("prices_tomorrow", HealthLevel.degraded, $"Tomorrow's prices not published yet (prices until {end:dd.MM. HH:mm})");
   }

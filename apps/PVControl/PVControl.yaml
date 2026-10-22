@@ -3,10 +3,13 @@ NetDeamon.apps.PVControl.PVConfig:
 
   # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
-  # since these fail sometimes you can have multiple different sources, order = priority
-  CurrentImportPriceEntities: 
-    - sensor.epex_spot_data_market_price
-    - sensor.epex_spot_data_market_price_2
+  # Several sources (they fail sometimes, and publish tomorrow at different times): all are equal,
+  # the one whose data reaches furthest is used — whichever publishes tomorrow first wins; on a tie
+  # the earlier one in the list. ImportPriceResolution below applies to every source.
+  CurrentImportPriceEntities:
+    - sensor.epex_spot_data_market_price     # Awattar, 60 min
+    - sensor.epex_spot_data_market_price_2   # smartENERGY, 15 min
+    - sensor.epex_spot_data_market_price_4   # Energy-Charts, 15 min
   ImportPriceMultiplier: 1.0
   ImportPriceAddition: 0.012
   ImportPriceNetwork: 0.07992

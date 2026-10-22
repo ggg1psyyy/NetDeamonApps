@@ -41,6 +41,27 @@ namespace NetDeamon.apps.PVControl
       return new PriceList();
     }
 
+    /// <summary>End of the price data in a source's "data" attribute; null without valid data.</summary>
+    public static System.DateTime? DataEnd(Entity? sourceEntity) =>
+      sourceEntity is not null && sourceEntity.TryGetJsonAttribute("data", out JsonElement data)
+        && data.Deserialize<System.Collections.Generic.List<PriceTableEntry>>() is { Count: > 0 } list
+        ? list.Max(p => p.EndTime) : null;
+
+    /// <summary>
+    /// Which price source to use: the one whose data reaches furthest, so whichever source
+    /// publishes tomorrow first wins; on a tie the earlier one in the list. Null if no source has
+    /// data. The sources carry the same EPEX prices (with the configured resolution applied they
+    /// agree to 0.001 ct), only their interval and publication time differ.
+    /// </summary>
+    public static int? FurthestSource(System.Collections.Generic.IReadOnlyList<System.DateTime?> dataEnds)
+    {
+      int? best = null;
+      for (int i = 0; i < dataEnds.Count; i++)
+        if (dataEnds[i] is { } end && (best is null || end > dataEnds[best.Value]!.Value))
+          best = i;
+      return best;
+    }
+
     /// <summary>Raw EPEX Spot netto import prices (€/kWh), lazily fetched and cached.</summary>
     public PriceList PriceListNetto
     {
