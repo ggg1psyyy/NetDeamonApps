@@ -231,3 +231,26 @@ public sealed class BoostedTrees : IModel
     _trainedFor = c.OriginUtc;
   }
 }
+
+/// <summary>The production model (apps/PVControl/LoadModel/LoadModels.cs), heating assumed on
+/// (the live model reads the heat pump mode; history has no mode before DataLogger v6).</summary>
+public sealed class AppModel : IModel
+{
+  public string Name => "App WeatherLoadModel";
+
+  public double[] Forecast(Context c)
+  {
+    var hours = new List<NetDeamon.apps.PVControl.LoadModel.LoadHour>();
+    var temps = new List<double>();
+    for (int i = 0; i < c.OriginIndex; i++)
+    {
+      var h = c.History.Hours[i];
+      if (double.IsNaN(h.Total)) continue;
+      hours.Add(new(h.Local, h.Total, h.HpHeat, h.Temp));
+      temps.Add(c.MeasuredTemp24[i]);
+    }
+    var model = NetDeamon.apps.PVControl.LoadModel.WeatherLoadModel.Fit(hours, temps, c.LocalAt(0));
+    return Enumerable.Range(0, c.Horizon)
+      .Select(k => model.Forecast(c.LocalAt(k).Hour, c.Weather.Temp24(c.OriginUtc.AddHours(k)), heatingOn: true)).ToArray();
+  }
+}

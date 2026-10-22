@@ -43,6 +43,8 @@ var variants = new List<(string Name, IModel Model, double ErrorScale)>
   ("M2 17° base 48h ×0.5", new TemperatureModel(17, 48, 0.5), 0),
   ("M2 15° 48h ×0.5, forecast err", new TemperatureModel(15, 48, 0.5), 1),
   ("M3 FastTree", new BoostedTrees(), 0),
+  ("App WeatherLoadModel", new AppModel(), 0),
+  ("App, forecast error", new AppModel(), 1),
 };
 var scores = variants.ToDictionary(v => v.Name, _ => new Dictionary<string, Score>());
 
