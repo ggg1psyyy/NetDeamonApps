@@ -80,7 +80,10 @@ public class SimulatorTests : TestBase
   }
 
   [Theory]
-  [InlineData(0, true)]   // SoC sensor unknown read as 0 % (before the fix)
+  // 0 %: what the unknown SoC read as before 5cc1a78 — that gave force_charge here until
+  // 2026-10-22; since then a grid charge must also beat holding the floor (same price here,
+  // and PV covers the load), so not even 0 % charges from the grid in this scenario.
+  [InlineData(0, false)]
   [InlineData(39, false)] // last good SoC held through the dropout
   public void SoCDropout_Live20261021_ZeroPercentForcesAGridCharge(int startSoc, bool forceChargeNow)
   {

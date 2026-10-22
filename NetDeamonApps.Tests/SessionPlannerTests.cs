@@ -184,7 +184,9 @@ public class SessionPlannerTests : TestBase
     var p = Best(t => t >= laterBand && t < CheapTo ? 0.20f : t >= CheapFrom && t < laterBand ? 0.29f : 0.30f, preferred: CheapFrom);
 
     Assert.NotNull(p);
-    Assert.Equal(laterBand, p.Value.Start);
+    // Somewhere in the cheaper band (the house battery, at its floor, charges in the same band
+    // with its forecast margin since 2026-10-22, so the EV may start a little later than 02:00).
+    Assert.InRange(p.Value.Start, laterBand, CheapTo.AddMinutes(-60));
   }
 
   [Fact]

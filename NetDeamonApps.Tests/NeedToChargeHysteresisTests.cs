@@ -57,7 +57,9 @@ public class NeedToChargeHysteresisTests : TestBase
   [Fact]
   public void NotCharging_TroughJustAboveFloor_DoesNotStart()
   {
-    var sim = EnergySimulator.Simulate(Input(31, Normal));
+    // Starts once the trough reaches floor + forecast margin (trough ~07:45, 4.4 h ahead → +2 %,
+    // since 2026-10-22): 35 % → trough ≈ 18 %, above 14 %.
+    var sim = EnergySimulator.Simulate(Input(35, Normal));
     Assert.Equal(InverterModes.normal, sim.Slots[0].State.Mode);
   }
 

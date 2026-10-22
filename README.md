@@ -294,6 +294,7 @@ dotnet test NetDeamonApps.Tests/
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
+| `MorningTopUpTests` | Grid charge with the real 2026-10-22 night: night charge with forecast margin, no top-up at 0.43 €/kWh before PV (grid_only holds the floor) |
 | `TankModelTests` | Warm-water tank model fit on 10 days of real history, history helpers |
 | `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation |
 | `HeatingTestTests` | Heating step test: start/skip/alternation, end/abort/disarm, SQLite log incl. restart recovery |

@@ -54,6 +54,16 @@ exactly that level. The band must clearly exceed the live SoC's 1 % resolution �
 SoC tick restarted the charge (28 bursts of 30–60 s on 2026-10-19). The charge goes into the
 cheapest quarter plus the cheapest quarters under `ForceChargeMaxPrice` needed for the deficit.
 
+Two additions since 2026-10-22 (the 02:00 charge fell ~3 % short — the night used ~340 W instead
+of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
+- **Forecast margin** (`ForecastMarginPct`): floor and target are raised by +1 % per 2 h until
+  the low (max 4 %), in the start/stop condition and the charge target alike — a night charge
+  ~7 h before the low aims ~4 % higher; a low an hour away gets none.
+- **Charge vs hold** (`ChargingBeatsHolding`): the cheapest quarter is only charged in if it's
+  cheaper than the hours to bridge (latest charge time → PV takeover), round trip (efficiency²)
+  included — or under `ForceChargeMaxPrice`. Otherwise the floor is held with `grid_only`,
+  which buys only the load.
+
 **This same function is called many times per cycle** — once as a baseline, then once per
 schedulable load candidate window, then once more for the final combined result.
 

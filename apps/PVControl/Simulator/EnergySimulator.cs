@@ -135,9 +135,11 @@ public static class EnergySimulator
     var unclampedTrough = ComputeBaseFutureSoC(currentSoc, slotTime, cappedTroughWindowEnd, input, clampAtZero: false)
       .FirstMinOrDefault();
     int baseTrough = unclampedTrough.Key != default ? unclampedTrough.Value : need.EstimatedSoc;
-    // Lift the trough to exactly floor + hysteresis: the same level at which ComputeNeedToCharge
-    // stops an ongoing charge, so the simulated charge and the live stop condition agree.
-    int deficit = Math.Max(0, floorSoc + NeedToChargeHysteresisPct - baseTrough);
+    var troughTime = unclampedTrough.Key != default ? unclampedTrough.Key : need.LatestChargeTime;
+    // Lift the trough to exactly floor + hysteresis + forecast margin: the same level at which
+    // ComputeNeedToCharge stops an ongoing charge, so the simulated charge and the live stop
+    // condition agree.
+    int deficit = Math.Max(0, floorSoc + NeedToChargeHysteresisPct + ForecastMarginPct(troughTime - slotTime) - baseTrough);
     return Math.Min(100, currentSoc + deficit);
   }
 
@@ -149,6 +151,37 @@ public static class EnergySimulator
   /// 30–60 s between 03:20 and 04:37 instead of one charge.
   /// </summary>
   public const int NeedToChargeHysteresisPct = 5;
+
+  /// <summary>
+  /// Extra SoC (%) for forecast errors, growing with the time until the low the charge has to
+  /// cover: +1 % per 2 h, at most <see cref="MaxForecastMarginPct"/>. On 2026-10-22 the night used
+  /// ~340 W instead of the forecast ~260 W; the 02:00 charge (floor + 5 % at 09:00) fell ~3 % short
+  /// and was topped up at 07:45 for 0.426 €/kWh instead of 0.32.
+  /// </summary>
+  public static int ForecastMarginPct(TimeSpan untilLow) =>
+    Math.Clamp((int)Math.Round(untilLow.TotalHours / 2, MidpointRounding.AwayFromZero), 0, MaxForecastMarginPct);
+
+  public const int MaxForecastMarginPct = 4;
+
+  /// <summary>
+  /// A NeedToCharge grid charge only pays off when the window's cheapest quarter is cheaper than
+  /// the hours the battery would otherwise have to bridge (from the latest charge time until PV
+  /// takes over), round-trip losses included. Otherwise the floor is held with grid_only, which
+  /// buys only the load in those hours. Live 2026-10-22 07:45: only 07:xx (0.426 €/kWh) was left
+  /// before PV, the hours to bridge cost 0.43 — a 7.4 kW charge bought energy no cheaper than
+  /// the load it replaced.
+  /// </summary>
+  private static bool ChargingBeatsHolding(List<PriceTableEntry> window, List<PriceTableEntry> upcoming,
+    NeedToChargeResult need, DateTime pvTakeover, SimulationInput input)
+  {
+    var bridgeEnd = need.LatestChargeTime <= pvTakeover ? pvTakeover : need.LatestChargeTime.AddHours(1);
+    var bridged = upcoming.Where(p => p.StartTime >= need.LatestChargeTime && p.StartTime < bridgeEnd).ToList();
+    if (window.Count == 0 || bridged.Count == 0)
+      return true;
+    float holdPrice = bridged.Average(p => p.Price);
+    float roundTrip = input.InverterEfficiency * input.InverterEfficiency;
+    return window.Min(p => p.Price) < holdPrice - Math.Abs(holdPrice) * (1 - roundTrip);
+  }
 
   // ── Base future SoC ─────────────────────────────────────────────────────────────────────
   // Integrates PV – totalLoad (including extra loads) from fromSlot onward without applying
@@ -196,12 +229,13 @@ public static class EnergySimulator
     if (currentMode.Mode == InverterModes.force_charge)
       minSoC += NeedToChargeHysteresisPct - 1;
 
-    // When do we first drop to or below minSoC?
+    // When do we first drop to or below minSoC (+ the forecast margin for that point in time)?
     // If we're already below it (edge case after a settings change or offline period),
     // treat "now" as the critical moment.
     var minReached = currentSoc < minSoC
       ? new KeyValuePair<DateTime, int>(now, currentSoc)
-      : baseFutureSoC.FirstUnderOrDefault(minSoC, start: now);
+      : baseFutureSoC.Where(s => s.Key >= now).OrderBy(s => s.Key)
+          .FirstOrDefault(s => s.Value <= minSoC + ForecastMarginPct(s.Key - now));
 
     // If we never drop below minimum, just record the lowest point for diagnostics
     if (minReached.Key == default)
@@ -214,7 +248,7 @@ public static class EnergySimulator
     // full PV recovery, OR PV will never get us back to 100 % at all.
     // Note: FirstUnderOrDefault uses <= so minReached.Value can equal minSoC (just touching
     // the floor counts as needing a charge — one more slot of discharge would breach it).
-    bool needCharge = minReached.Value <= minSoC
+    bool needCharge = minReached.Value <= minSoC + ForecastMarginPct(minReached.Key - now)
       && (minReached.Key < maxReached.Key || maxReached.Value < 100);
 
     // Build in 10 % of lead time so we start charging slightly before the critical point
@@ -469,7 +503,7 @@ public static class EnergySimulator
             if (window[i].Price <= input.ForceChargeMaxPrice) cheaperUnderMax++;
           }
 
-        inWindow = cheaperCount == 0;
+        inWindow = cheaperCount == 0 && ChargingBeatsHolding(window, upcoming, need, pvTakeover, input);
         if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
