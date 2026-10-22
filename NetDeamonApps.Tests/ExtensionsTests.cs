@@ -255,4 +255,31 @@ public class DictionaryTimeSeriesExtensionsTests
     Assert.True(ok);
     Assert.Equal([3, 5], numbers);
   }
+
+  [Fact]
+  public void RunningIntAverage_Live20261022_SilentSensorDoesNotKeepOldValues()
+  {
+    // The carport CT (reports on change only) went 1950 → 170 → 0 W at 14:13:46 and then stayed
+    // silent. The EV's 2-min average must become 0 after the window, not stay at ~1.7 kW (which
+    // was subtracted from the house load until the next restart).
+    var t = new DateTime(2026, 10, 22, 12, 13, 0, DateTimeKind.Utc);
+    var avg = new RunningIntAverage(TimeSpan.FromMinutes(2), () => t);
+    foreach (var w in new[] { 1950, 1980, 1990, 1760, 170, 132 }) { avg.AddValue(w); t = t.AddSeconds(4); }
+    avg.AddValue(0);
+    Assert.True(avg.GetAverage() > 1000);
+
+    t = t.AddMinutes(3); // nothing new from the sensor
+    Assert.Equal(0, avg.GetAverage()); // only the latest value (the current state) is left
+  }
+
+  [Fact]
+  public void RunningIntAverage_LatestValueStaysWhenAllExpired()
+  {
+    var t = new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc);
+    var avg = new RunningIntAverage(TimeSpan.FromMinutes(1), () => t);
+    avg.AddValue(500);
+    t = t.AddHours(1);
+    Assert.Equal(500, avg.GetAverage());
+    Assert.Equal(1, avg.Count);
+  }
 }

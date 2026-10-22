@@ -545,20 +545,31 @@ namespace NetDeamon.apps
       base.Enqueue(item);
     }
   }
-  public class RunningIntAverage(TimeSpan window)
+  /// <summary>
+  /// Average of the values of the last <c>window</c>. Values also expire when nothing new
+  /// arrives — except the latest one, which is still the sensor's current state: HA sensors that
+  /// only report on change (e.g. a CT clamp going to 0 W and staying there) otherwise kept the
+  /// old values forever (2026-10-22: the EV's 2 kW stayed in the average after the car stopped,
+  /// and was subtracted from the house load for 10 min, down to −1.2 kW).
+  /// </summary>
+  public class RunningIntAverage(TimeSpan window, Func<DateTime>? utcNow = null)
   {
     private Queue<(DateTime timestamp, int value)> _Values = [];
     private TimeSpan _Window = window;
+    private readonly Func<DateTime> _utcNow = utcNow ?? (() => DateTime.UtcNow);
 
     public void AddValue(int value)
     {
-      DateTime now = DateTime.UtcNow;
-      _Values.Enqueue((now, value));
+      _Values.Enqueue((_utcNow(), value));
+      Prune();
+    }
 
-      while (_Values.Count > 0 && now - _Values.Peek().timestamp > _Window)
-      {
+    /// <summary>Drops values older than the window, keeping at least the latest one.</summary>
+    private void Prune()
+    {
+      DateTime now = _utcNow();
+      while (_Values.Count > 1 && now - _Values.Peek().timestamp > _Window)
         _Values.Dequeue();
-      }
     }
     public int Count
     {
@@ -568,6 +579,7 @@ namespace NetDeamon.apps
     {
       if (_Values.Count == 0)
         return int.MinValue;
+      Prune();
       return (int)Math.Round(_Values.Average(v => v.value), 0);
     }
 

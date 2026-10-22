@@ -74,11 +74,18 @@ namespace NetDeamon.apps.PVControl.Predictions
       var result     = new Dictionary<DateTime, int>(raw);
       var today      = now.Date;
       var endOfToday = today.AddDays(1);
+      // The simulation starts with the running quarter (EnergySimulator, RoundToNearestQuarterHour
+      // floors) — from that slot on everything is "ahead", also when now is already into it.
+      // Before, the running slot got the raw forecast and the live average went to the slot after.
+      var start      = now.RoundToNearestQuarterHour();
 
-      // Sum forecast slots from midnight up to (not including) now — same window as actual energy
-      int forecastSumWh = raw
+      // Forecast from midnight to now — same window as the actual energy, the running slot pro
+      // rata. Counting it in full as soon as it began (actual ≈ 0 for it yet) dropped the ratio at
+      // every quarter boundary: 2026-10-22 14:15:15 1.83 → 1.71, −616 Wh PV in the simulation,
+      // more than the NeedToCharge hysteresis — a stopped grid charge started again.
+      int forecastSumWh = (int)raw
         .Where(kvp => kvp.Key >= today && kvp.Key < now)
-        .Sum(kvp => kvp.Value);
+        .Sum(kvp => kvp.Value * Math.Clamp((now - kvp.Key).TotalMinutes / 15.0, 0.0, 1.0));
 
       // Compute raw day-scale ratio; skip before meaningful generation has been forecast
       double ratio = 1.0;
@@ -86,6 +93,7 @@ namespace NetDeamon.apps.PVControl.Predictions
         ratio = Math.Clamp((double)actualPVEnergyWh / forecastSumWh, 0.0, 2.0);
 
       // Confidence: count how many slots before now had meaningful forecast (>= 100 Wh = ~400 W).
+      // (A just-started slot counts — confidence is full after ~1.5 h of sun, so that's irrelevant.)
       // 100 Wh/slot filters out the low-irradiance dawn/dusk fringe where the ratio is unreliable.
       // Self-seasonal: threshold is met earlier in summer, later in winter/spring.
       // Full confidence is reached after 6 such slots (≈ 1.5 h of meaningful solar activity).
@@ -99,7 +107,7 @@ namespace NetDeamon.apps.PVControl.Predictions
       // Apply effective day-scale to all remaining today slots
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
       {
-        if (key < now) continue;
+        if (key < start) continue;
         if (key >= endOfToday) break;
         result[key] = (int)(result[key] * effectiveRatio);
       }
@@ -117,7 +125,7 @@ namespace NetDeamon.apps.PVControl.Predictions
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
       {
         if (remaining <= 0) break;
-        if (key < now) continue;
+        if (key < start) continue;
         int scaled = result[key];
         if (scaled > 0)
           result[key] = scaled + (shortAvgPerSlot - scaled) * remaining / slotsToCorrect;
@@ -137,10 +145,11 @@ namespace NetDeamon.apps.PVControl.Predictions
       var result      = new Dictionary<DateTime, int>(raw);
       int avgPerSlot  = avgW / 4;
       int remaining   = slotsToCorrect;
+      var start       = now.RoundToNearestQuarterHour(); // same first slot as the PV overload
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
       {
         if (remaining <= 0) break;
-        if (key < now) continue;
+        if (key < start) continue;
         int predicted = result[key];
         result[key] = predicted + (avgPerSlot - predicted) * remaining / slotsToCorrect;
         remaining--;

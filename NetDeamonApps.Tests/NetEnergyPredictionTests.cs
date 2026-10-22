@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl.Predictions;
 using Xunit;
@@ -59,7 +60,58 @@ public class NetEnergyPredictionTests
 
     var corrected = NetEnergyPrediction.WithRunningAvgCorrection(raw, liveRunningAvgW, actualPVEnergyWh: 2000, now);
 
-    var firstSlot = now.AddMinutes(7).RoundToNearestQuarterHour(); // 10:15 — full ramp weight
-    Assert.Equal(liveRunningAvgW / 4, corrected[firstSlot]);
+    // The running slot (10:00) is the simulation's first slot — it gets the live average in full,
+    // the ramp then goes down to the day-scaled forecast over the next three.
+    Assert.Equal(liveRunningAvgW / 4, corrected[now.RoundToNearestQuarterHour()]);
+  }
+
+  /// <summary>Live 2026-10-22: forecast far too low (≈ 300 Wh per quarter in the afternoon),
+  /// actual PV 1.83× of it, live average ≈ 2.5 kW.</summary>
+  static (Dictionary<DateTime, int> Raw, Func<DateTime, int> Actual) Live20261022()
+  {
+    var today = new DateTime(2026, 10, 22);
+    var raw = new Dictionary<DateTime, int>();
+    for (int i = 0; i < 96; i++)
+    {
+      var t = today.AddMinutes(15 * i);
+      raw[t] = t.Hour is >= 8 and < 17 ? 300 : 0;
+    }
+    // Actual energy grows continuously: 1.83 × the forecast up to that moment.
+    int Actual(DateTime now) => (int)(1.83 * raw.Sum(kv =>
+      kv.Value * Math.Clamp((now - kv.Key).TotalMinutes / 15.0, 0.0, 1.0)));
+    return (raw, Actual);
+  }
+
+  static int SumFrom(Dictionary<DateTime, int> pv, DateTime from) =>
+    pv.Where(kv => kv.Key >= from && kv.Key < from.Date.AddDays(1)).Sum(kv => kv.Value);
+
+  [Fact]
+  public void PVCorrection_Live20261022_NoJumpAtQuarterBoundary()
+  {
+    // 14:12:15 the grid charge stopped (trough lifted enough); 14:15:15 the 14:15 slot counted
+    // fully as "until now" (actual ≈ 0 for it) and as past (raw, no correction): ≈ −600 Wh of PV
+    // in the simulation, 5.3 % SoC — more than the 5 % hysteresis, the charge started again.
+    var (raw, actual) = Live20261022();
+    var before = new DateTime(2026, 10, 22, 14, 12, 15);
+    var after = new DateTime(2026, 10, 22, 14, 15, 15);
+    var from = new DateTime(2026, 10, 22, 14, 15, 0); // PV still ahead at both times
+
+    int pvBefore = SumFrom(NetEnergyPrediction.WithRunningAvgCorrection(raw, 2500, actual(before), before), from);
+    int pvAfter = SumFrom(NetEnergyPrediction.WithRunningAvgCorrection(raw, 2500, actual(after), after), from);
+
+    // What's left is the 4-slot live-average ramp moving on by one slot (≈ 75 Wh here, < 1 % SoC).
+    Assert.InRange(pvAfter - pvBefore, -100, 100);
+  }
+
+  [Fact]
+  public void PVCorrection_SlotTheSimulationStartsWith_IsCorrected()
+  {
+    // 15 s into the 14:15 slot the simulation still starts with it — it must get the day scale
+    // and the live average like any slot ahead, not the raw forecast.
+    var (raw, actual) = Live20261022();
+    var now = new DateTime(2026, 10, 22, 14, 15, 15);
+    var corrected = NetEnergyPrediction.WithRunningAvgCorrection(raw, 2500, actual(now), now);
+    Assert.Equal(2500 / 4, corrected[now.RoundToNearestQuarterHour()]);
+    Assert.InRange(corrected[new DateTime(2026, 10, 22, 16, 0, 0)], 548, 550); // 300 × 1.83
   }
 }

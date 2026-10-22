@@ -690,9 +690,11 @@ namespace NetDeamon.apps.PVControl
       var inverterState = _house.ProposedState;
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
-      // Derive next planned grid-charge window from the simulation timeline.
+      // Derive the current or next planned grid-charge window from the simulation timeline. The
+      // running slot counts (it ends after now): with "Time >= now" a charge in progress showed
+      // window "none", price 0 and need_to_charge off, flickering with the slot after it.
       var nextChargeSlot = _house.SimulationTimeline
-        .FirstOrDefault(s => s.Time >= now && s.State.Mode == InverterModes.force_charge);
+        .FirstOrDefault(s => s.Time.AddMinutes(15) > now && s.State.Mode == InverterModes.force_charge);
       var nextChargePrice = nextChargeSlot != null
         ? _house.Prices.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
         : default;

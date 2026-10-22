@@ -124,16 +124,29 @@ Chosen by backtest (`tools/LoadBacktest`, 376 nights 2025-09 → 2026-10): −15
 Applied to the PV forecast both when computing `Prediction_NetEnergy` and when building
 `SimulationInput.PVPredictionWh`. Two-stage:
 
-1. **Day-scale ratio** (all remaining today slots):
-   `ratio = actual_PV_energy_today_Wh / Σ(forecast slots midnight → now)`
+1. **Day-scale ratio** (all today slots from the running one on):
+   `ratio = actual_PV_energy_today_Wh / Σ(forecast midnight → now, running slot pro rata)`
    Corrects for persistent over/under-prediction (e.g. cloudy day).
    Skipped when forecast sum < 50 Wh (night/dawn/dusk). Clamped to [0.0, 2.0]. Tomorrow untouched.
 
-2. **Near-term 4-slot ramp** (slots 0–3 from now, applied after day-scale):
-   Blends from the 5-minute running average down to the day-scaled forecast.
+2. **Near-term 4-slot ramp** (slot 0 = the running slot, applied after day-scale):
+   Blends from the 15-minute PV running average down to the day-scaled forecast.
    `slot[i] = scaled[i] + (shortAvgPerSlot − scaled[i]) × (4 − i) / 4`
 
 Load uses only the near-term ramp (no day-scale — load follows historical patterns, not weather).
+
+Why "running slot pro rata" and "slot 0 = running slot": the simulation starts with the running
+quarter (`RoundToNearestQuarterHour` floors). Before, the running slot counted in full into the
+forecast sum as soon as it began (its actual energy ≈ 0 yet) and was itself left raw, with the
+live average going to the slot after. Every quarter boundary therefore cut the simulated PV —
+2026-10-22 14:15:15 by ~600 Wh (ratio 1.83 → 1.71 on a day the forecast was 45 % low), 5.3 %
+SoC, more than `NeedToChargeHysteresisPct`: a NeedToCharge grid charge stopped at 14:12 started
+again at 14:15:15.
+
+`RunningIntAverage` also expires values when nothing new arrives (keeping the latest one, the
+current state). Sensors that only report on change kept old values otherwise: the EV CT went to
+0 W at 14:13:46 the same day and stayed silent, the EV's ~1.7 kW stayed in its average and was
+subtracted from the house load (`avg_house_load_now` down to −1.2 kW) until the next restart.
 
 ---
 
