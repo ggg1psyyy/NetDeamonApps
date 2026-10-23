@@ -4,20 +4,23 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.LoadModel;
 
-/// <summary>
-/// One logged hour (local start) as the load models see it: Total = the load PVControl forecasts
-/// (house energy without the schedulable loads' columns, e.g. EV and warm water), HpHeat = heat
-/// pump energy without warm water (space heating + standby; NaN if unknown), OutdoorTemp measured.
-/// </summary>
+/// <summary>One logged hour as the load models see it.</summary>
+/// <param name="Local">Local start of the hour.</param>
+/// <param name="Total">Load PVControl forecasts: house energy without the excluded loads, Wh.</param>
+/// <param name="HpHeat">Heat pump energy without warm water (heating + standby), Wh; NaN if unknown.</param>
+/// <param name="OutdoorTemp">Measured outside temperature, °C.</param>
 public readonly record struct LoadHour(DateTime Local, double Total, double HpHeat, double? OutdoorTemp)
 {
+  /// <summary>Load without the heat pump, Wh; NaN if the heat pump is unknown.</summary>
   public double Base => double.IsNaN(HpHeat) ? double.NaN : Total - HpHeat;
 
-  /// <summary>
-  /// A DataLogger row as a load hour, or null when it's structurally impossible (negative energies,
-  /// warm water above the heat pump, heat pump or excluded loads above the house — ~45 hours since
-  /// 2024 such as warm water −19 kWh in one hour, each able to wreck a night's sum).
-  /// </summary>
+  /// <summary>A DataLogger row as a load hour; null if impossible (negative energies, parts above their total).</summary>
+  /// <param name="local">Local start of the hour.</param>
+  /// <param name="house">House energy, Wh.</param>
+  /// <param name="excluded">Energy of the excluded loads, Wh.</param>
+  /// <param name="heatPump">Heat pump energy, Wh.</param>
+  /// <param name="warmWater">Warm-water energy, Wh.</param>
+  /// <param name="outdoor">Outside temperature, °C.</param>
   public static LoadHour? FromRow(DateTime local, double? house, double excluded, double? heatPump, double? warmWater, double? outdoor)
   {
     if (house is not { } h || h < 0 || excluded < 0) return null;
@@ -36,54 +39,61 @@ public readonly record struct LoadHour(DateTime Local, double Total, double HpHe
 }
 
 /// <summary>
-/// The house's heat demand — electrical heat pump energy per local hour for space heating plus
-/// standby: a_h + s·b_h·HDH, HDH = max(0, 13 °C − 24-h mean outside temperature) (underfloor
-/// heating follows the last day's temperature, not the current hour's). a_h, b_h by weighted least
-/// squares over the history (half-life ~3 months — the heating curve may change); s scales the
-/// heating part to what the heat pump did in the last 48 h (heating curve changes). Reusable: the
-/// load forecast uses it, a heating planner can use the same energy signature.
-/// Backtest (tools/LoadBacktest, 2025-09 → 2026-10): with the base load model below, −20 % night
-/// error in winter against the hour-of-day average.
+/// Heat pump energy per local hour for heating + standby: a_h + s·b_h·HDH, HDH = max(0, 13 °C − 24-h
+/// mean outside temperature). a, b by weighted least squares over the history; s scales the heating
+/// part to the last 48 h (heating curve changes).
 /// </summary>
 public sealed class HeatDemandModel
 {
+  /// <summary>Heating limit of the degree-hours, °C.</summary>
   public const double BaseTemp = 13;
   const double HalfLifeDays = 130;
 
   readonly double[] _a = new double[24], _b = new double[24];
+  /// <summary>Factor on the heating part from the last 48 h (0…1.5; 1 if unknown).</summary>
   public double Scale { get; private set; } = 1;
+  /// <summary>Recent standby level vs the fitted intercepts, Wh/h.</summary>
   public double StandbyOffset { get; private set; }
   /// <summary>Mean heat pump energy (Wh/h) of the last 24 h — the forecast while heating is off.</summary>
   public double RecentLevel { get; private set; }
 
+  /// <summary>Heating degree-hours of an hour.</summary>
+  /// <param name="temp24">24-h mean outside temperature, °C.</param>
+  /// <returns>max(0, <see cref="BaseTemp"/> − temp24).</returns>
   public static double Hdh(double temp24) => Math.Max(0, BaseTemp - temp24);
 
-  /// <summary>Wh per heating degree-hour of a local hour (the energy signature's slope).</summary>
+  /// <summary>Wh per heating degree-hour of a local hour (the signature's slope).</summary>
+  /// <param name="localHour">Hour of day 0–23.</param>
   public double Slope(int localHour) => _b[localHour];
+  /// <summary>Heat pump Wh of a local hour without heating demand (the signature's intercept).</summary>
+  /// <param name="localHour">Hour of day 0–23.</param>
   public double Intercept(int localHour) => _a[localHour];
 
+  /// <summary>Fits the model.</summary>
   /// <param name="history">Hours before <paramref name="now"/>, in time order.</param>
-  /// <param name="temp24">24-h mean outside temperature for each history hour.</param>
-  /// <param name="heatingOnSince">When heating was switched on (heat pump mode), if known. Within
-  /// 48 h of that the last 48 h don't show the heating yet, so the signature is used unscaled.</param>
+  /// <param name="temp24">24-h mean outside temperature per history hour.</param>
+  /// <param name="now">Current time (age weighting, last 48 h).</param>
+  /// <param name="heatingOnSince">When heating was switched on; within 48 h the signature is used unscaled.</param>
+  /// <returns>The model.</returns>
   public static HeatDemandModel Fit(IReadOnlyList<LoadHour> history, IReadOnlyList<double> temp24, DateTime now, DateTime? heatingOnSince = null)
   {
     var m = new HeatDemandModel();
-    var s0 = new double[24]; var sx = new double[24]; var sy = new double[24]; var sxx = new double[24]; var sxy = new double[24];
+    var xs = new List<double>[24]; var ys = new List<double>[24]; var ws = new List<double>[24];
+    for (int hr = 0; hr < 24; hr++) { xs[hr] = []; ys[hr] = []; ws[hr] = []; }
     for (int i = 0; i < history.Count; i++)
     {
       var h = history[i];
       if (double.IsNaN(h.HpHeat)) continue;
-      double w = Math.Exp(-Math.Abs((h.Local.Date - now.Date).Days) / HalfLifeDays);
-      double x = Hdh(temp24[i]);
       int hr = h.Local.Hour;
-      s0[hr] += w; sx[hr] += w * x; sy[hr] += w * h.HpHeat; sxx[hr] += w * x * x; sxy[hr] += w * x * h.HpHeat;
+      xs[hr].Add(Hdh(temp24[i]));
+      ys[hr].Add(h.HpHeat);
+      ws[hr].Add(Mean.AgeWeight(h.Local, now, HalfLifeDays));
     }
+    // Per hour: weighted least squares, the slope not below 0 (the intercept then through the means).
     for (int hr = 0; hr < 24; hr++)
     {
-      double det = s0[hr] * sxx[hr] - sx[hr] * sx[hr];
-      m._b[hr] = det > 1e-9 ? Math.Max(0, (s0[hr] * sxy[hr] - sx[hr] * sy[hr]) / det) : 0;
-      m._a[hr] = s0[hr] > 0 ? (sy[hr] - m._b[hr] * sx[hr]) / s0[hr] : 0;
+      m._b[hr] = Math.Max(0, Regression.LinearFit(xs[hr], ys[hr], ws[hr])?.Slope ?? 0);
+      m._a[hr] = Regression.InterceptFor(xs[hr], ys[hr], ws[hr], m._b[hr]);
     }
 
     // Last 48 h: scale of the heating part; last 24 h: standby level and the overall level.
@@ -113,8 +123,11 @@ public sealed class HeatDemandModel
     return m;
   }
 
-  /// <summary>Expected heat pump energy (Wh) of a local hour; with heating off only the recent
-  /// standby level.</summary>
+  /// <summary>Expected heat pump energy of a local hour.</summary>
+  /// <param name="localHour">Hour of day 0–23.</param>
+  /// <param name="temp24">24-h mean outside temperature, °C.</param>
+  /// <param name="heatingOn">Heating mode on; off = the recent level only.</param>
+  /// <returns>Wh.</returns>
   public double Expected(int localHour, double temp24, bool heatingOn) =>
     heatingOn
       ? Math.Max(0, _a[localHour] + StandbyOffset + Scale * _b[localHour] * Hdh(temp24))
@@ -122,30 +135,28 @@ public sealed class HeatDemandModel
 }
 
 /// <summary>
-/// Weather-aware load forecast (backtest model M2): base load = weighted hour-of-day average of the
-/// load without the heat pump (exp(−days/10), as the current forecast) plus half of its mean
-/// deviation over the last 48 h (limited to ±25 %); plus the heat pump from
-/// <see cref="HeatDemandModel"/> with the 24-h mean of measured and forecast temperatures.
+/// Weather-aware load forecast (backtest model M2): age-weighted hour-of-day base load (scale 10
+/// days) plus half its deviation over the last 48 h (±25 %), plus the heat pump from
+/// <see cref="HeatDemandModel"/>.
 /// </summary>
 public sealed class WeatherLoadModel
 {
-  public double[] BaseProfile { get; } = new double[24];
+  /// <summary>Base load per local hour, Wh.</summary>
+  public double[] BaseProfile { get; private init; } = new double[24];
+  /// <summary>Shift of the base load from the last 48 h, Wh.</summary>
   public double BaseLevel { get; private set; }
+  /// <summary>The heat pump part.</summary>
   public HeatDemandModel HeatDemand { get; private set; } = null!;
 
+  /// <summary>Fits the model.</summary>
+  /// <param name="history">Hours before <paramref name="now"/>, in time order.</param>
+  /// <param name="temp24">24-h mean outside temperature per history hour.</param>
+  /// <param name="now">Current time.</param>
+  /// <param name="heatingOnSince">When heating was switched on (see <see cref="HeatDemandModel.Fit"/>).</param>
+  /// <returns>The model.</returns>
   public static WeatherLoadModel Fit(IReadOnlyList<LoadHour> history, IReadOnlyList<double> temp24, DateTime now, DateTime? heatingOnSince = null)
   {
-    var m = new WeatherLoadModel();
-    var weights = new double[24];
-    foreach (var h in history)
-    {
-      if (double.IsNaN(h.Base)) continue;
-      double w = Math.Exp(-Math.Abs((h.Local.Date - now.Date).Days) / 10.0);
-      m.BaseProfile[h.Local.Hour] += h.Base * w;
-      weights[h.Local.Hour] += w;
-    }
-    for (int hr = 0; hr < 24; hr++)
-      m.BaseProfile[hr] = weights[hr] > 0 ? m.BaseProfile[hr] / weights[hr] : 0;
+    var m = new WeatherLoadModel { BaseProfile = Mean.HourOfDayProfile(history.Select(h => (h.Local, h.Base)), now, 10.0) };
 
     double sum = 0; int n = 0;
     foreach (var h in history)
@@ -161,14 +172,22 @@ public sealed class WeatherLoadModel
     return m;
   }
 
+  /// <summary>Base load of a local hour (profile + level, not below 0).</summary>
+  /// <param name="localHour">Hour of day 0–23.</param>
+  /// <returns>Wh.</returns>
   public double BaseAt(int localHour) => Math.Max(0, BaseProfile[localHour] + BaseLevel);
 
-  /// <summary>Forecast load (Wh) of a local hour.</summary>
+  /// <summary>Forecast load of a local hour: base + heat pump.</summary>
+  /// <param name="localHour">Hour of day 0–23.</param>
+  /// <param name="temp24">24-h mean outside temperature, °C.</param>
+  /// <param name="heatingOn">Heating mode on.</param>
+  /// <returns>Wh.</returns>
   public double Forecast(int localHour, double temp24, bool heatingOn) =>
     BaseAt(localHour) + HeatDemand.Expected(localHour, temp24, heatingOn);
 
-  /// <summary>24-h mean temperatures for a series of hourly temperatures (gaps filled with the
-  /// previous value; the first hours average what's there).</summary>
+  /// <summary>24-h means of an hourly temperature series (gaps filled with the previous value; the first hours average what's there).</summary>
+  /// <param name="temps">Hourly temperatures, °C; null = missing.</param>
+  /// <returns>24-h mean per hour, °C.</returns>
   public static double[] Rolling24(IReadOnlyList<double?> temps)
   {
     var filled = new double[temps.Count];

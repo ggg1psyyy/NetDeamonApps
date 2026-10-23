@@ -24,8 +24,14 @@ public class DailySnapshots
   private Dictionary<DateTime, int> _dailyChargePrediction = [];
   private Dictionary<DateTime, int> _dailyDischargePrediction = [];
 
+  /// <summary>Time of the last snapshot.</summary>
   public DateTime LastSnapshotUpdate { get; private set; } = default;
 
+  /// <summary>Creates the snapshots over the given predictions.</summary>
+  /// <param name="pvPrediction">PV forecast.</param>
+  /// <param name="loadPrediction">Load forecast.</param>
+  /// <param name="batterySoCPrediction">Simulated SoC.</param>
+  /// <param name="getSimulationResult">Current simulation result (inverter modes).</param>
   public DailySnapshots(
     Prediction pvPrediction,
     Prediction loadPrediction,
@@ -38,6 +44,7 @@ public class DailySnapshots
     _getSimulationResult = getSimulationResult;
   }
 
+  /// <summary>Takes a new snapshot at 00:01, when empty or older than 24 h.</summary>
   private void UpdateSnapshots()
   {
     DateTime now = DateTime.Now;
@@ -57,21 +64,25 @@ public class DailySnapshots
     }
   }
 
+  /// <summary>Snapshot of the simulated SoC, %.</summary>
   public Dictionary<DateTime, int> DailyBatterySoCPredictionTodayAndTomorrow
   {
     get { UpdateSnapshots(); return _dailySoCPrediction; }
   }
 
+  /// <summary>Snapshot of the inverter mode per slot.</summary>
   public Dictionary<DateTime, string> DailyModePredictionTodayAndTomorrow
   {
     get { UpdateSnapshots(); return _dailyModePrediction; }
   }
 
+  /// <summary>Snapshot of the PV forecast as daily running sums, Wh.</summary>
   public Dictionary<DateTime, int> DailyChargePredictionTodayAndTomorrow
   {
     get { UpdateSnapshots(); return _dailyChargePrediction; }
   }
 
+  /// <summary>Snapshot of the load forecast as daily running sums, Wh.</summary>
   public Dictionary<DateTime, int> DailyDischargePredictionTodayAndTomorrow
   {
     get { UpdateSnapshots(); return _dailyDischargePrediction; }

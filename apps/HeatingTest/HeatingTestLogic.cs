@@ -4,6 +4,7 @@ using System.Linq;
 
 namespace NetDeamon.apps.HeatingTest;
 
+/// <summary>Kind of a night run.</summary>
 public enum RunKind
 {
   /// <summary>Heating-curve level lowered by the offset for the run.</summary>
@@ -12,44 +13,71 @@ public enum RunKind
   Reference,
 }
 
-/// <summary>A test or reference run. <see cref="OriginalLevel"/> is the level to restore after a test.</summary>
+/// <summary>A test or reference run.</summary>
+/// <param name="Id">DB id.</param>
+/// <param name="Kind">Test or reference.</param>
+/// <param name="Start">Start time.</param>
+/// <param name="PlannedEnd">Planned end.</param>
+/// <param name="OffsetK">Level offset of a test, K.</param>
+/// <param name="OriginalLevel">Level to restore after a test; null for a reference night.</param>
 public sealed record HeatingRun(long Id, RunKind Kind, DateTime Start, DateTime PlannedEnd, double OffsetK, double? OriginalLevel);
 
 /// <summary>The user settings of the test (HA entities).</summary>
+/// <param name="Armed">Test armed.</param>
+/// <param name="StartTime">Start time of day.</param>
+/// <param name="DurationHours">Run length, hours.</param>
+/// <param name="OffsetK">Level offset of a test, K.</param>
 public readonly record struct TestSettings(bool Armed, TimeOnly StartTime, double DurationHours, double OffsetK);
 
-/// <summary>A room's controller: current temperature, setpoint, and how far below it a test aborts (null = never).</summary>
+/// <summary>A room controller's reading.</summary>
+/// <param name="Name">Room name.</param>
+/// <param name="Current">Current temperature, °C.</param>
+/// <param name="Setpoint">Setpoint, °C.</param>
+/// <param name="AbortBelowK">A test aborts this far below the setpoint, K; null = never.</param>
 public readonly record struct RoomReading(string Name, double? Current, double? Setpoint, double? AbortBelowK);
 
 /// <summary>Live inputs of one decision.</summary>
-/// <param name="HeatingMinutes24h">Minutes the heat pump heated the house in the last 24 h (from the log).</param>
-/// <param name="LastKind">Kind of the last run, to alternate test and reference nights.</param>
+/// <param name="Now">Current time.</param>
+/// <param name="Settings">User settings.</param>
+/// <param name="Active">The run going on; null if none.</param>
+/// <param name="LastKind">Kind of the last run (test and reference alternate).</param>
 /// <param name="LastAttemptDate">Day the start was last decided (started or skipped) — once per night.</param>
-/// <param name="HeatingMode">The heat pump's operating mode, e.g. "Nur Warmwasser"; null when not configured.</param>
-/// <param name="HeatingModeOn">Whether that mode includes space heating (false also when unavailable).</param>
+/// <param name="Outdoor">Outside temperature, °C.</param>
+/// <param name="HeatingMinutes24h">Minutes the heat pump heated in the last 24 h.</param>
+/// <param name="Rooms">Room readings.</param>
+/// <param name="MaxOutdoorAtStart">Warmest outside temperature for a start, °C.</param>
+/// <param name="MinHeatingMinutes24h">Least heating in 24 h for a start, minutes.</param>
+/// <param name="HeatingMode">Heat pump operating mode; null when not configured.</param>
+/// <param name="HeatingModeOn">The mode includes space heating (false also when unavailable).</param>
 public readonly record struct TestInput(
   DateTime Now, TestSettings Settings, HeatingRun? Active, RunKind? LastKind, DateOnly? LastAttemptDate,
   double? Outdoor, int HeatingMinutes24h, IReadOnlyList<RoomReading> Rooms,
   double MaxOutdoorAtStart, int MinHeatingMinutes24h,
   string? HeatingMode = null, bool HeatingModeOn = true);
 
+/// <summary>What to do this cycle.</summary>
 public enum TestAction { None, Start, End, Skip }
 
+/// <summary>Result of <see cref="HeatingTestLogic.Decide"/>.</summary>
+/// <param name="Action">What to do.</param>
 /// <param name="Kind">For Start: which kind of run.</param>
+/// <param name="Reason">Explanation for the status entity.</param>
 public readonly record struct TestDecision(TestAction Action, RunKind? Kind, string Reason);
 
 /// <summary>
-/// When the heating step test starts, ends or aborts. Pure, so it's testable without Home Assistant.
-/// Test and reference nights alternate (a skipped night doesn't count), each starting at the start
-/// time if the heat pump is in a heating mode, actually heated these days and it's cold enough. A
-/// run ends at its planned end, when disarmed or when the heat pump leaves its heating mode; a test
-/// also when a room falls too far below its setpoint.
+/// When the heating step test starts, ends or aborts. Test and reference nights alternate (a skipped
+/// night doesn't count), starting at the start time if the heat pump heats, heated these days and
+/// it's cold enough; a run ends at its planned end, when disarmed or the heating mode is left, a test
+/// also when a room gets too cold.
 /// </summary>
 public static class HeatingTestLogic
 {
   /// <summary>The start is only taken within this many minutes after the start time (e.g. not after a restart at 03:00).</summary>
   public const int StartWindowMinutes = 10;
 
+  /// <summary>The decision of this cycle.</summary>
+  /// <param name="c">Live inputs.</param>
+  /// <returns>Action, kind and reason.</returns>
   public static TestDecision Decide(TestInput c)
   {
     if (c.Active is { } run)
@@ -86,7 +114,9 @@ public static class HeatingTestLogic
     return new(TestAction.Start, kind, $"{kind} night started");
   }
 
-  /// <summary>The first room more than its abort margin below its setpoint, described; null if none.</summary>
+  /// <summary>The first room more than its abort margin below its setpoint.</summary>
+  /// <param name="rooms">Room readings.</param>
+  /// <returns>A description; null if none.</returns>
   public static string? TooCold(IEnumerable<RoomReading> rooms)
   {
     foreach (var r in rooms)
@@ -95,13 +125,20 @@ public static class HeatingTestLogic
     return null;
   }
 
-  public static DateTime NextStart(DateTime now, TimeOnly startTime, bool doneToday)
-  {
-    var today = now.Date + startTime.ToTimeSpan();
-    return now < today && !doneToday ? today : today.AddDays(1);
-  }
+  /// <summary>Next start of a run.</summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="startTime">Start time of day.</param>
+  /// <param name="doneToday">Today's start was already decided — then tomorrow.</param>
+  /// <returns>The next start.</returns>
+  public static DateTime NextStart(DateTime now, TimeOnly startTime, bool doneToday) =>
+    doneToday ? now.Date.AddDays(1) + startTime.ToTimeSpan() : TimeRange.NextOccurrence(startTime, now);
 
-  /// <summary>The test level: original + offset, kept within the heat pump's range.</summary>
+  /// <summary>The test level: original + offset, within the heat pump's range, rounded to 0.1.</summary>
+  /// <param name="original">Current level.</param>
+  /// <param name="offsetK">Offset, K.</param>
+  /// <param name="min">Lowest level.</param>
+  /// <param name="max">Highest level.</param>
+  /// <returns>The level.</returns>
   public static double TestLevel(double original, double offsetK, double min = -15, double max = 40) =>
     Math.Round(Math.Clamp(original + offsetK, min, max), 1);
 }

@@ -4,20 +4,29 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.WarmWater;
 
-/// <summary>One warm-water heating run seen in the history: start/end and the tank temperature at both.</summary>
+/// <summary>One warm-water heating run seen in the history.</summary>
+/// <param name="Start">Heating started.</param>
+/// <param name="End">Heating stopped.</param>
+/// <param name="StartTemp">Tank temperature at the start, °C.</param>
+/// <param name="EndTemp">Tank temperature at the end, °C.</param>
+/// <param name="AvgPowerW">Mean heat pump power, W; null if unknown.</param>
 public readonly record struct HeatingRun(DateTime Start, DateTime End, double StartTemp, double EndTemp, double? AvgPowerW = null)
 {
+  /// <summary>Length of the run, hours.</summary>
   public double Hours => (End - Start).TotalHours;
 }
 
 /// <summary>
-/// Thermal model of the warm-water tank, learned from the temperature history (see <see cref="Fit"/>).
-/// Heating raises the temperature at a constant rate (measured 40 → 57 °C: ~17 K/h at any
-/// temperature). Without heating it falls by the standby loss, proportional to the difference to
-/// an apparent ambient temperature (measured 0.73 K/h at 41 °C, 1.56 K/h at 55 °C), plus a
-/// per-hour-of-day usage term. The power draw grows slightly with the temperature (~1.67 kW at
-/// 42 °C, ~1.9 kW at 50+ °C).
+/// Thermal model of the warm-water tank, learned from the history (<see cref="Fit"/>): heating at a
+/// constant rate; standby loss proportional to the difference to an apparent ambient temperature,
+/// plus a usage term per hour of day; power rising slightly with the temperature.
 /// </summary>
+/// <param name="HeatingRateKPerHour">Temperature rise while heating, K/h.</param>
+/// <param name="LossCoefficientPerHour">Standby loss per K above ambient, 1/h.</param>
+/// <param name="AmbientTempC">Apparent ambient temperature, °C.</param>
+/// <param name="PowerAt45W">Heating power at 45 °C, W.</param>
+/// <param name="PowerSlopeWPerK">Power change per K, W/K.</param>
+/// <param name="UsageKPerHour">Extra drop by usage per hour of day, K/h (24 values).</param>
 public sealed record TankModel(
   double HeatingRateKPerHour,
   double LossCoefficientPerHour,
@@ -29,15 +38,26 @@ public sealed record TankModel(
   /// <summary>Standby loss never drops below this, even below the fitted ambient temperature.</summary>
   public const double MinLossKPerHour = 0.2;
 
-  /// <summary>Values measured 2026-10-09 – 10-19 (HP automatic at 45 °C plus two one-time runs to 57 °C).</summary>
+  /// <summary>Values measured 2026-10-09 – 10-19, used until a fit has enough data.</summary>
   public static TankModel Default { get; } = new(17.3, 0.059, 28.6, 1720, 26, new double[24]);
 
+  /// <summary>Temperature drop without heating (standby + usage, at least <see cref="MinLossKPerHour"/> standby).</summary>
+  /// <param name="temp">Tank temperature, °C.</param>
+  /// <param name="hour">Hour of day 0–23.</param>
+  /// <returns>K/h.</returns>
   public double LossKPerHour(double temp, int hour) =>
     Math.Max(MinLossKPerHour, LossCoefficientPerHour * (temp - AmbientTempC)) + UsageKPerHour[hour];
 
+  /// <summary>Heating power at a tank temperature (at least 100 W).</summary>
+  /// <param name="temp">Tank temperature, °C.</param>
+  /// <returns>W.</returns>
   public double PowerW(double temp) => Math.Max(100, PowerAt45W + PowerSlopeWPerK * (temp - 45));
 
-  /// <summary>Temperature after <paramref name="hours"/> without heating, starting at <paramref name="time"/>.</summary>
+  /// <summary>Temperature after a time without heating.</summary>
+  /// <param name="temp">Start temperature, °C.</param>
+  /// <param name="time">Start time (hour of day for the usage term).</param>
+  /// <param name="hours">Duration, hours.</param>
+  /// <returns>°C.</returns>
   public double Cool(double temp, DateTime time, double hours) =>
     temp - LossKPerHour(temp, time.Hour) * hours;
 
@@ -52,11 +72,11 @@ public sealed record TankModel(
   /// <summary>The loss slope needs this temperature spread; below it only the offset is fitted.</summary>
   public const double MinSpreadForSlopeK = 4;
 
-  /// <summary>
-  /// Learns the model from history. <paramref name="temps"/> are (time, °C) readings in time
-  /// order, <paramref name="runs"/> the heating runs (any kind: automatic or one-time). Every part
-  /// that has too little data keeps the value of <paramref name="fallback"/>.
-  /// </summary>
+  /// <summary>Learns the model from history; every part with too little data keeps the fallback's value.</summary>
+  /// <param name="temps">(time, °C) readings in time order.</param>
+  /// <param name="runs">Heating runs (automatic or one-time).</param>
+  /// <param name="fallback">Values for parts without enough data.</param>
+  /// <returns>The model.</returns>
   public static TankModel Fit(IReadOnlyList<(DateTime Time, double Temp)> temps, IReadOnlyList<HeatingRun> runs, TankModel fallback)
   {
     var model = fallback;
@@ -76,7 +96,7 @@ public sealed record TankModel(
     {
       var xs = powerRuns.Select(r => (r.StartTemp + r.EndTemp) / 2).ToList();
       var ys = powerRuns.Select(r => r.AvgPowerW!.Value).ToList();
-      if (xs.Max() - xs.Min() >= MinSpreadForSlopeK && LinearFit(xs, ys) is { } fit)
+      if (xs.Max() - xs.Min() >= MinSpreadForSlopeK && Regression.LinearFit(xs, ys) is { } fit)
       {
         double slope = Math.Clamp(fit.Slope, 0, 200);
         model = model with { PowerSlopeWPerK = slope, PowerAt45W = Math.Clamp(ys.Average() + slope * (45 - xs.Average()), 300, 5000) };
@@ -92,7 +112,7 @@ public sealed record TankModel(
       var xs = windows.Select(w => w.AvgTemp).ToList();
       var ys = windows.Select(w => w.DropKPerHour).ToList();
       double k = model.LossCoefficientPerHour;
-      if (xs.Max() - xs.Min() >= MinSpreadForSlopeK && LinearFit(xs, ys) is { Slope: > 0 } fit)
+      if (xs.Max() - xs.Min() >= MinSpreadForSlopeK && Regression.LinearFit(xs, ys) is { Slope: > 0 } fit)
         k = Math.Clamp(fit.Slope, 0.01, 0.3);
       // drop = k·(T − ambient)  →  ambient = mean(T) − mean(drop)/k
       double ambient = Math.Clamp(xs.Average() - ys.Average() / k, -10, 45);
@@ -108,10 +128,16 @@ public sealed record TankModel(
     return model;
   }
 
-  /// <summary>One standby hour: its hour of day, mean temperature and temperature drop.</summary>
+  /// <summary>One standby hour for the loss fit.</summary>
+  /// <param name="Hour">Hour of day 0–23.</param>
+  /// <param name="AvgTemp">Mean tank temperature, °C.</param>
+  /// <param name="DropKPerHour">Temperature drop, K/h.</param>
   public readonly record struct StandbyWindow(int Hour, double AvgTemp, double DropKPerHour);
 
-  /// <summary>One-hour windows (every 15 min) that don't touch a heating run or its settling.</summary>
+  /// <summary>One-hour windows (every 15 min) that don't touch a heating run or its settling time.</summary>
+  /// <param name="temps">(time, °C) readings in time order.</param>
+  /// <param name="runs">Heating runs.</param>
+  /// <returns>The windows.</returns>
   public static List<StandbyWindow> StandbyWindows(IReadOnlyList<(DateTime Time, double Temp)> temps, IReadOnlyList<HeatingRun> runs)
   {
     var result = new List<StandbyWindow>();
@@ -135,20 +161,5 @@ public sealed record TankModel(
       result.Add(new StandbyWindow(a.Hour, (ta + tb) / 2, (ta - tb) / LossWindow.TotalHours));
     }
     return result;
-  }
-
-  /// <summary>Least squares y = slope·x + intercept; null when x has no spread.</summary>
-  public static (double Slope, double Intercept)? LinearFit(IReadOnlyList<double> xs, IReadOnlyList<double> ys)
-  {
-    double mx = xs.Average(), my = ys.Average();
-    double sxx = 0, sxy = 0;
-    for (int i = 0; i < xs.Count; i++)
-    {
-      sxx += (xs[i] - mx) * (xs[i] - mx);
-      sxy += (xs[i] - mx) * (ys[i] - my);
-    }
-    if (sxx < 1e-9) return null;
-    double slope = sxy / sxx;
-    return (slope, my - slope * mx);
   }
 }

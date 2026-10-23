@@ -5,34 +5,35 @@ using System.Linq;
 namespace NetDeamon.apps.PVControl;
 
 /// <summary>When the next day's prices were first available on a day.</summary>
+/// <param name="Day">The day (date).</param>
+/// <param name="PublishedAt">Time they were first seen.</param>
 public sealed record PricePublication(DateTime Day, DateTime PublishedAt);
 
-/// <summary>
-/// Notes when tomorrow's prices first show up in PVControl's import price list each day (the
-/// recorder doesn't keep the price list itself — too large — so this is the only record). Until
-/// then the simulation works with estimated prices (PriceList.WithEstimatedPrices).
-/// </summary>
+/// <summary>Records when tomorrow's prices first show up each day (HA's recorder doesn't keep the price list).</summary>
 public sealed class PricePublicationTracker
 {
+  /// <summary>Days kept.</summary>
   public const int KeepDays = 14;
-  readonly List<PricePublication> _days = [];
+  readonly DayLog<PricePublication> _days = new(KeepDays, d => d.Day);
 
-  public IReadOnlyList<PricePublication> Days => _days;
+  /// <summary>Recorded days, oldest first.</summary>
+  public IReadOnlyList<PricePublication> Days => _days.Items;
 
-  public void Restore(IEnumerable<PricePublication> days)
-  {
-    _days.Clear();
-    _days.AddRange(days.OrderBy(d => d.Day).TakeLast(KeepDays));
-  }
+  /// <summary>Restores recorded days after a restart (the last <see cref="KeepDays"/>).</summary>
+  /// <param name="days">Days from the sensor's attribute.</param>
+  public void Restore(IEnumerable<PricePublication> days) => _days.Restore(days);
 
-  /// <summary>Today's publication time, null while tomorrow isn't published yet.</summary>
-  public DateTime? PublishedToday(DateTime now) => _days.FirstOrDefault(d => d.Day == now.Date)?.PublishedAt;
+  /// <summary>Today's publication time.</summary>
+  /// <param name="now">Current time.</param>
+  /// <returns>The time; null while tomorrow isn't published.</returns>
+  public DateTime? PublishedToday(DateTime now) => _days.Items.FirstOrDefault(d => d.Day == now.Date)?.PublishedAt;
 
   DateTime? _unpublishedSeenOn;
 
-  /// <summary>Notes the first moment of a day the prices reach the end of tomorrow. True if noted.
-  /// Only after tomorrow was seen missing earlier that day — after a restart in the afternoon the
-  /// prices are just there, and the restart time isn't their publication time.</summary>
+  /// <summary>Notes the first moment of a day the prices reach the end of tomorrow — only after they were seen missing that day (not at a restart).</summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="pricesUntil">End of the published prices.</param>
+  /// <returns>True if a publication was noted.</returns>
   public bool Observe(DateTime now, DateTime? pricesUntil)
   {
     if (pricesUntil is not { } until || until < now.Date.AddDays(2))
@@ -40,10 +41,9 @@ public sealed class PricePublicationTracker
       _unpublishedSeenOn = now.Date;
       return false;
     }
-    if (_unpublishedSeenOn != now.Date || _days.Any(d => d.Day == now.Date))
+    if (_unpublishedSeenOn != now.Date || _days.Has(now.Date))
       return false;
     _days.Add(new PricePublication(now.Date, now));
-    if (_days.Count > KeepDays) _days.RemoveAt(0);
     return true;
   }
 }

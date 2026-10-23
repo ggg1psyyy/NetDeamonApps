@@ -155,8 +155,8 @@ public class TankModelTests : TestBase
   {
     var t0 = new DateTime(2026, 10, 1, 0, 0, 0);
     var values = new List<(DateTime, double)> { (t0, 40), (t0.AddMinutes(10), 41) };
-    Assert.Equal(40, WarmWaterController.ValueAt(values, t0.AddMinutes(-1)));
-    Assert.Equal(40, WarmWaterController.ValueAt(values, t0.AddMinutes(9)));
-    Assert.Equal(41, WarmWaterController.ValueAt(values, t0.AddMinutes(10)));
+    Assert.Equal(40, StepFunction.ValueAt(values, t0.AddMinutes(-1)));
+    Assert.Equal(40, StepFunction.ValueAt(values, t0.AddMinutes(9)));
+    Assert.Equal(41, StepFunction.ValueAt(values, t0.AddMinutes(10)));
   }
 }

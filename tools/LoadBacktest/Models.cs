@@ -22,24 +22,13 @@ public sealed record Context(History History, DateTime OriginUtc, int OriginInde
 
 static class Profile
 {
-  /// <summary>Weighted mean per local hour, weight exp(−|days before the origin day| / scaling) —
-  /// HourlyWeightedAverageLoadPrediction.HourlyWeightedAverages.</summary>
-  public static double[] HourOfDay(Context c, Func<Hour, double> value, double scaling)
-  {
-    var sums = new double[24];
-    var weights = new double[24];
-    var today = c.OriginLocalDate;
-    for (int i = 0; i < c.OriginIndex; i++)
-    {
-      var h = c.History.Hours[i];
-      double v = value(h);
-      if (double.IsNaN(v)) continue;
-      double w = Math.Exp(-Math.Abs((h.Local - today).Days) / scaling);
-      sums[h.Local.Hour] += v * w;
-      weights[h.Local.Hour] += w;
-    }
-    return Enumerable.Range(0, 24).Select(i => weights[i] > 0 ? sums[i] / weights[i] : 0).ToArray();
-  }
+  /// <summary>Age-weighted mean per local hour of the history before the origin (the app's <c>Mean.HourOfDayProfile</c>).</summary>
+  /// <param name="c">Backtest context.</param>
+  /// <param name="value">Value of an hour (NaN = skipped).</param>
+  /// <param name="scaling">Age weighting in days.</param>
+  /// <returns>Mean per hour 0–23.</returns>
+  public static double[] HourOfDay(Context c, Func<Hour, double> value, double scaling) =>
+    NetDeamon.apps.Mean.HourOfDayProfile(c.History.Hours.Take(c.OriginIndex).Select(h => (h.Local, value(h))), c.OriginLocalDate, scaling);
 
   /// <summary>Mean deviation of the last 24 h from the profile, limited to ±25 % of the profile's
   /// mean — a level step (e.g. the heat pump's standby +30 W on 2026-10-21) shows up here a day
@@ -107,24 +96,23 @@ public sealed class TemperatureModel(double baseTemp = 15, int levelHours = 24, 
     var baseProfile = Profile.HourOfDay(c, h => h.Base, 10);
     double baseOffset = Profile.LevelOffset(c, baseProfile, h => h.Base, levelHours, levelDamping);
 
-    // Weighted least squares hp = a + b·hdh per local hour.
-    var s0 = new double[24]; var sx = new double[24]; var sy = new double[24]; var sxx = new double[24]; var sxy = new double[24];
-    var today = c.OriginLocalDate;
+    // Weighted least squares hp = a + b·hdh per local hour (slope not below 0).
+    var xs = new List<double>[24]; var ys = new List<double>[24]; var ws = new List<double>[24];
+    for (int hr = 0; hr < 24; hr++) { xs[hr] = []; ys[hr] = []; ws[hr] = []; }
     for (int i = 0; i < c.OriginIndex; i++)
     {
       var h = c.History.Hours[i];
       if (double.IsNaN(h.HpHeat)) continue;
-      double w = Math.Exp(-Math.Abs((h.Local - today).Days) / 130.0);
-      double x = Hdh(c.MeasuredTemp24[i]);
       int hr = h.Local.Hour;
-      s0[hr] += w; sx[hr] += w * x; sy[hr] += w * h.HpHeat; sxx[hr] += w * x * x; sxy[hr] += w * x * h.HpHeat;
+      xs[hr].Add(Hdh(c.MeasuredTemp24[i]));
+      ys[hr].Add(h.HpHeat);
+      ws[hr].Add(NetDeamon.apps.Mean.AgeWeight(h.Local, c.OriginLocalDate, 130.0));
     }
     var a = new double[24]; var b = new double[24];
     for (int hr = 0; hr < 24; hr++)
     {
-      double det = s0[hr] * sxx[hr] - sx[hr] * sx[hr];
-      b[hr] = det > 1e-9 ? Math.Max(0, (s0[hr] * sxy[hr] - sx[hr] * sy[hr]) / det) : 0;
-      a[hr] = s0[hr] > 0 ? (sy[hr] - b[hr] * sx[hr]) / s0[hr] : 0;
+      b[hr] = Math.Max(0, NetDeamon.apps.Regression.LinearFit(xs[hr], ys[hr], ws[hr])?.Slope ?? 0);
+      a[hr] = NetDeamon.apps.Regression.InterceptFor(xs[hr], ys[hr], ws[hr], b[hr]);
     }
 
     // Scale of the heating part from the last 48 h; level of the standby part from the last 24 h.

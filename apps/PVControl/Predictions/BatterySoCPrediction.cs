@@ -3,16 +3,15 @@ using System.Collections.Generic;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
-  /// <summary>
-  /// Placeholder battery SoC prediction, empty until the energy simulator produces its first
-  /// real result. HouseEnergy.RunSimulation() overwrites the data every cycle via the
-  /// <see cref="Prediction.UpdateData(Dictionary{DateTime, int})"/> bypass overload — this
-  /// class never computes a forecast itself.
-  /// </summary>
+  /// <summary>Battery SoC per slot, %; set from the simulation every cycle (<see cref="Prediction.UpdateData(Dictionary{DateTime, int}, DateTime?)"/>), never calculated itself.</summary>
   public class BatterySoCPrediction : Prediction
   {
+    /// <summary>Creates the prediction with an empty window.</summary>
     public BatterySoCPrediction() => Initialize("Battery SoC Prediction");
 
+    /// <summary>An empty window (zeros).</summary>
+    /// <param name="now">Day of the window.</param>
+    /// <returns>Zeros by slot start.</returns>
     protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
       Dictionary<DateTime, int> result = [];

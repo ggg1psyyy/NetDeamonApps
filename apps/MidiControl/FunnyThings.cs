@@ -2,6 +2,7 @@
 
 namespace NetDeamon.apps.MidiControl;
 
+/// <summary>A sine wave wandering across the faders (demo).</summary>
 public class FaderWaveController
 {
     private const int NumFaders = 8;
@@ -13,6 +14,8 @@ public class FaderWaveController
     private const double WaveAmplitude = 40.0;  // Wave height (0-50 recommended)
     private const double BaseLevel = 50.0;      // Center position (0-100)
     
+    /// <summary>Next frame of the wave.</summary>
+    /// <returns>Fader positions 0–100.</returns>
     public int[] GetFaderValues()
     {
         int[] values = new int[NumFaders];

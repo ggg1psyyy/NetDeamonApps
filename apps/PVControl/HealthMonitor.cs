@@ -4,25 +4,31 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl;
 
+/// <summary>Health level of sensor.pv_control_health.</summary>
 public enum HealthLevel { ok, degraded, error }
 
-/// <summary>
-/// A problem a check found in this cycle. <paramref name="Key"/> identifies it across cycles;
-/// with <paramref name="EscalateAfter"/> a degraded issue becomes an error once it has lasted that long.
-/// </summary>
+/// <summary>A problem a check found in this cycle.</summary>
+/// <param name="Key">Identifies the issue across cycles.</param>
+/// <param name="Level">Its level.</param>
+/// <param name="Message">Text for the sensor.</param>
+/// <param name="EscalateAfter">A degraded issue becomes an error after lasting this long; null = never.</param>
 public sealed record HealthIssue(string Key, HealthLevel Level, string Message, TimeSpan? EscalateAfter = null);
 
-/// <summary>An issue that counts: present for at least the monitor's raise delay.</summary>
+/// <summary>An issue that counts (present at least the raise delay).</summary>
+/// <param name="Key">Identifies the issue.</param>
+/// <param name="Level">Its level (escalated if due).</param>
+/// <param name="Message">Text for the sensor.</param>
+/// <param name="Since">First seen.</param>
 public sealed record ActiveIssue(string Key, HealthLevel Level, string Message, DateTime Since);
 
+/// <summary>Overall health.</summary>
+/// <param name="Level">Worst level of the active issues; ok without any.</param>
+/// <param name="Issues">The active issues.</param>
 public sealed record HealthStatus(HealthLevel Level, IReadOnlyList<ActiveIssue> Issues);
 
-/// <summary>
-/// Overall health of PVControl from the issues its checks report every cycle
-/// (sensor.pv_control_health). An issue only counts after <c>raiseAfter</c> (a 15-s sensor blip
-/// like 2026-10-21 13:28 doesn't notify anyone) and keeps counting until it has been gone for
-/// <c>clearAfter</c> (no ok/degraded flapping). The level is the worst counting issue.
-/// </summary>
+/// <summary>Debounces the checks' issues into the overall health: an issue counts after raiseAfter and until gone for clearAfter.</summary>
+/// <param name="raiseAfter">How long an issue must be present to count.</param>
+/// <param name="clearAfter">How long a counting issue must be gone to clear.</param>
 public sealed class HealthMonitor(TimeSpan raiseAfter, TimeSpan clearAfter)
 {
   sealed class Tracked(HealthIssue issue, DateTime firstSeen)
@@ -34,6 +40,10 @@ public sealed class HealthMonitor(TimeSpan raiseAfter, TimeSpan clearAfter)
 
   readonly Dictionary<string, Tracked> _tracked = [];
 
+  /// <summary>Adds this cycle's issues and returns the overall health.</summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="current">Issues found this cycle.</param>
+  /// <returns>Level and active issues.</returns>
   public HealthStatus Evaluate(DateTime now, IEnumerable<HealthIssue> current)
   {
     foreach (var issue in current)

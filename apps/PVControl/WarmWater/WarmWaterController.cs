@@ -20,10 +20,14 @@ namespace NetDeamon.apps.PVControl.WarmWater;
 /// </summary>
 public sealed class WarmWaterController
 {
+  /// <summary>Configuration (YAML).</summary>
   public WarmWaterConfig Config { get; }
-  public string Slug => Config.Name.ToLowerInvariant().Replace(' ', '_');
+  /// <summary>HA entity-id part of the name (<see cref="Extensions.ToSlug"/>).</summary>
+  public string Slug => Config.Name.ToSlug();
 
+  /// <summary>Current tank model.</summary>
   public TankModel Model { get; private set; } = TankModel.Default;
+  /// <summary>Time of the last model fit.</summary>
   public DateTime? LastFit { get; private set; }
   /// <summary>The optimized plan (published in every mode, controls only in Auto).</summary>
   public WarmWaterPlan Plan { get; private set; } = WarmWaterPlan.Empty;
@@ -42,6 +46,8 @@ public sealed class WarmWaterController
   bool _wasActive;
   bool _boostSawRunning;
 
+  /// <summary>Creates the controller and follows the heat pump power (average for the house load).</summary>
+  /// <param name="config">Configuration (YAML).</param>
   public WarmWaterController(WarmWaterConfig config)
   {
     Config = config;
@@ -69,6 +75,8 @@ public sealed class WarmWaterController
   public int ActivePowerW => Heating && _power.GetAverage() > 100 ? _power.GetAverage() : 0;
 
   /// <summary>The warm-water heating the house simulation should expect: the plan in Auto, else the automatic forecast.</summary>
+  /// <param name="now">Current time.</param>
+  /// <returns>Runs not over yet as extra loads.</returns>
   public List<ExtraLoad> ExtraLoads(DateTime now)
   {
     var runs = Mode == WarmWaterMode.Auto || BoostOn ? Plan.Runs : Automatic.Runs;
@@ -79,10 +87,14 @@ public sealed class WarmWaterController
     }).ToList();
   }
 
+  /// <summary>Plans again on the next cycle; the first reason wins.</summary>
+  /// <param name="reason">Why.</param>
   public void RequestReplan(string reason) => _replanRequest ??= reason;
 
   // ── Planning ───────────────────────────────────────────────────────────────────────────────
-  /// <summary>Why the plan must be made again now, or null to keep it.</summary>
+  /// <summary>Why the plan must be made again now.</summary>
+  /// <param name="now">Current time.</param>
+  /// <returns>The reason; null to keep the plan.</returns>
   public string? ReplanReason(DateTime now)
   {
     if (LastPlan is not { } last) return "first plan";
@@ -90,7 +102,7 @@ public sealed class WarmWaterController
     if (Heating != _lastHeating) return "heating started/stopped";
     // The heat pump starts ~2.5 min after the switch, so a run can outlast its planned end —
     // replan from the real temperature before the control would switch it off short of its target.
-    if (IsOn(Config.OneTimeActiveEntity) && !Plan.Runs.Any(r => r.Start <= now && r.End > now)
+    if (IsOn(Config.OneTimeActiveEntity) && !Plan.Runs.Any(r => TimeRange.Contains(r.Start, r.End, now))
         && Plan.Runs.Any(r => r.End <= now && r.End > last)) return "run outlasted its plan";
     if (now.RoundToNearestQuarterHour() != last.RoundToNearestQuarterHour()) return "new quarter-hour";
     if ((now - last).TotalMinutes >= Config.ReplanIntervalMinutes) return "interval";
@@ -101,9 +113,14 @@ public sealed class WarmWaterController
   public LoadModel.WeatherForecast? Weather { get; set; }
   /// <summary>End of the published prices at the last plan; the simulation estimated the prices after it.</summary>
   public DateTime? PricesKnownUntil { get; private set; }
+  /// <summary>The last plan scaled prices by the outside temperature.</summary>
   public bool OutsideEfficiencyUsed { get; private set; }
 
-  /// <summary>Plans against the house simulation <paramref name="baseline"/> (made without warm-water heating).</summary>
+  /// <summary>Plans against the house simulation (heating prices per slot) and forecasts the automatic.</summary>
+  /// <param name="baseInput">Simulation input without warm-water heating.</param>
+  /// <param name="baseline">Simulation of <paramref name="baseInput"/>.</param>
+  /// <param name="now">Current time.</param>
+  /// <param name="reason">Why (published).</param>
   public void Replan(SimulationInput baseInput, SimulationResult baseline, DateTime now, string reason)
   {
     _replanRequest = null;
@@ -157,6 +174,8 @@ public sealed class WarmWaterController
   /// <summary>The heat pump entities the control needs were readable in the last cycle (health sensor).</summary>
   public bool HeatPumpAvailable { get; private set; } = true;
 
+  /// <summary>Refits the model once a day and carries out this cycle's control decision (<see cref="WarmWaterControl.Decide"/>).</summary>
+  /// <param name="now">Current time.</param>
   public async Task ActAsync(DateTime now)
   {
     if (LastFit is null || now - LastFit.Value >= TimeSpan.FromDays(1))
@@ -219,6 +238,7 @@ public sealed class WarmWaterController
 
   // ── Learning ───────────────────────────────────────────────────────────────────────────────
   /// <summary>Learns the tank model from the last <see cref="WarmWaterConfig.HistoryDays"/> days of HA history.</summary>
+  /// <param name="ct">Cancels the history requests.</param>
   public async Task RefitAsync(CancellationToken ct)
   {
     LastFit = DateTime.Now;
@@ -251,7 +271,7 @@ public sealed class WarmWaterController
               .Where(h => double.TryParse(h.State, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
               .Select(h => (h.LastChanged.ToLocalTime(), (double?)double.Parse(h.State, CultureInfo.InvariantCulture))).ToList(), a, b);
         }
-        runs.Add(new HeatingRun(a, b, ValueAt(temps, a), ValueAt(temps, b), power));
+        runs.Add(new HeatingRun(a, b, StepFunction.ValueAt(temps, a), StepFunction.ValueAt(temps, b), power));
       }
       Model = TankModel.Fit(temps, runs, TankModel.Default);
       PVCC_Logger.LogInformation("{name}: tank model from {temps} readings and {runs} runs: {model}", Config.Name, temps.Count, runs.Count, Model);
@@ -263,7 +283,9 @@ public sealed class WarmWaterController
     }
   }
 
-  /// <summary>On → off intervals of a binary sensor history (an interval still running is left out).</summary>
+  /// <summary>On → off intervals of a binary sensor history; a running interval is left out.</summary>
+  /// <param name="history">(time, state) in time order.</param>
+  /// <returns>The intervals.</returns>
   public static List<(DateTime Start, DateTime End)> OnIntervals(IEnumerable<(DateTime Time, string State)> history)
   {
     var result = new List<(DateTime, DateTime)>();
@@ -280,24 +302,16 @@ public sealed class WarmWaterController
     return result;
   }
 
-  /// <summary>Last value at or before <paramref name="time"/> (the first value when there is none before).</summary>
-  public static double ValueAt(IReadOnlyList<(DateTime Time, double Temp)> values, DateTime time)
-  {
-    double v = values.Count > 0 ? values[0].Temp : double.NaN;
-    foreach (var (t, x) in values)
-    {
-      if (t > time) break;
-      v = x;
-    }
-    return v;
-  }
 
 
   // ── HA entities ───────────────────────────────────────────────────────────────────────────
+  /// <summary>Entities whose changes are commands for this controller.</summary>
   public IEnumerable<Entity> CommandEntities =>
     new[] { _modeEntity, _comfortTempEntity, _boostEntity, _boostTempEntity }
       .Concat(_periods.SelectMany(p => new[] { p.Time, p.Enabled }));
 
+  /// <summary>Registers the warm-water HA entities (mode, comfort, boost, periods, plan sensors).</summary>
+  /// <param name="reset">Re-register all entities.</param>
   public async Task RegisterEntitiesAsync(bool reset)
   {
     string p = $"pv_control_{Slug}";
@@ -320,7 +334,7 @@ public sealed class WarmWaterController
       defaultValue: "unknown", reRegister: reset);
     foreach (var period in Config.ComfortPeriods)
     {
-      string ps = $"{p}_{period.Name.ToLowerInvariant().Replace(' ', '_')}";
+      string ps = $"{p}_{period.Name.ToSlug()}";
       var time = await RegisterSensor($"time.{ps}", $"{Config.Name} - {period.Name}", null, "mdi:clock-outline",
         defaultValue: SchedulableLoadRuntime.TryParseReadyBy(period.DefaultTime, out var t) ? t.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : "07:00:00",
         reRegister: reset);
@@ -330,7 +344,10 @@ public sealed class WarmWaterController
     }
   }
 
-  /// <summary>Handles a command for one of this controller's entities; false when it isn't one.</summary>
+  /// <summary>Handles a command for one of this controller's entities.</summary>
+  /// <param name="entity">The changed entity.</param>
+  /// <param name="newState">Its new state.</param>
+  /// <returns>False if the entity isn't one of this controller's.</returns>
   public async Task<bool> HandleCommandAsync(Entity entity, string newState)
   {
     string id = entity.EntityId;
@@ -367,9 +384,11 @@ public sealed class WarmWaterController
     return true;
   }
 
+  /// <summary>Publishes the plan, forecast and state sensors.</summary>
+  /// <param name="now">Current time.</param>
   public async Task PublishAsync(DateTime now)
   {
-    var current = Plan.Runs.FirstOrDefault(r => r.Start <= now && r.End > now);
+    var current = Plan.Runs.FirstOrDefault(r => TimeRange.Contains(r.Start, r.End, now));
     var next = Plan.Runs.FirstOrDefault(r => r.Start > now);
     string state = BoostOn ? $"boost to {BoostTemp:F1} °C"
       : current != default ? $"heating to {current.TargetTemp:F1} °C"

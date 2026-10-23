@@ -97,15 +97,6 @@ namespace NetDeamon.apps.PVControl.Managers
     public static bool TryParseReadyBy(string? text, out TimeOnly time) =>
       TimeOnly.TryParseExact(text?.Trim(), ["H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
 
-    /// <summary>The next moment the clock shows a time.</summary>
-    /// <param name="time">Time of day.</param>
-    /// <param name="now">Current time.</param>
-    /// <returns>Today at <paramref name="time"/> if still ahead, else tomorrow.</returns>
-    public static DateTime NextOccurrence(TimeOnly time, DateTime now)
-    {
-      var today = now.Date + time.ToTimeSpan();
-      return today > now ? today : today.AddDays(1);
-    }
 
     /// <summary>Current level read from the HA sensor entity (SoC %, temperature °C, …).</summary>
     public float CurrentLevel
@@ -311,6 +302,6 @@ namespace NetDeamon.apps.PVControl.Managers
     }
 
     /// <summary>HA entity-ID slug: lowercase Name with spaces replaced by underscores.</summary>
-    public string Slug => Config.Name.ToLowerInvariant().Replace(' ', '_');
+    public string Slug => Config.Name.ToSlug();
   }
 }

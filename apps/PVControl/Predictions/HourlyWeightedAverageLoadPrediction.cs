@@ -5,6 +5,7 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
+  /// <summary>Base load forecast: the age-weighted average of each hour of day from the energy history DB, split into quarters.</summary>
   public class HourlyWeightedAverageLoadPrediction : Prediction
   {
     private readonly string _dbLocation;
@@ -32,6 +33,9 @@ namespace NetDeamon.apps.PVControl.Predictions
       Initialize("Load Prediction");
     }
 
+    /// <summary>Today and tomorrow get the same hourly averages, a quarter of each per slot.</summary>
+    /// <param name="now">Day of the window.</param>
+    /// <returns>Wh by slot start.</returns>
     protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
       DateTime today = now.Date;
@@ -64,36 +68,36 @@ namespace NetDeamon.apps.PVControl.Predictions
     /// <param name="weightScaling">Age weighting in days.</param>
     /// <returns>Wh per hour 0–23; 0 for hours without history.</returns>
     public static int[] HourlyWeightedAverages(IEnumerable<(DateTime Timestamp, int Value)> rows, DateTime today, float weightScaling)
-    {
-      var sums = new double[24];
-      var weights = new double[24];
-      foreach (var (timestamp, value) in rows)
-      {
-        var local = timestamp.Kind == DateTimeKind.Utc ? timestamp.ToLocalTime() : timestamp;
-        double w = Math.Exp(-Math.Abs((local - today).Days) / weightScaling);
-        sums[local.Hour] += value * w;
-        weights[local.Hour] += w;
-      }
-      return Enumerable.Range(0, 24)
-        .Select(h => weights[h] > 0 ? (int)Math.Round(sums[h] / weights[h]) : 0)
-        .ToArray();
-    }
+      => Mean.HourOfDayProfile(rows.Select(r => (r.Timestamp.AsLocal(), (double)r.Value)),
+          today, weightScaling).Select(v => (int)Math.Round(v)).ToArray();
 
+    /// <summary>House energy of an hour minus the excluded loads.</summary>
+    /// <param name="houseenergy">House energy, Wh.</param>
+    /// <param name="carcharge">EV charging, Wh.</param>
+    /// <param name="warmwaterenergy">Warm water, Wh.</param>
+    /// <param name="heatpumpenergy">Heat pump, Wh.</param>
+    /// <returns>Wh.</returns>
     private int ComputeValue(int? houseenergy, int? carcharge, int? warmwaterenergy, int? heatpumpenergy)
     {
       int value = houseenergy ?? 0;
       if (_baseLoadOnly)
         return value - (carcharge ?? 0) - (warmwaterenergy ?? 0);
-
-      foreach (var col in _excludeColumns)
-        value -= col.ToLowerInvariant() switch
-        {
-          "carcharge"       => carcharge ?? 0,
-          "warmwaterenergy" => warmwaterenergy ?? 0,
-          "heatpumpenergy"  => heatpumpenergy ?? 0,
-          _                 => 0,
-        };
-      return value;
+      return value - (int)ExcludedEnergy(_excludeColumns, carcharge, warmwaterenergy, heatpumpenergy);
     }
+
+    /// <summary>Energy of the excluded DB columns in an hour (loads the simulation adds back as ExtraLoads).</summary>
+    /// <param name="columns">Column names: "carcharge", "warmwaterenergy", "heatpumpenergy" (others count 0).</param>
+    /// <param name="carcharge">EV charging, Wh.</param>
+    /// <param name="warmwaterenergy">Warm water, Wh.</param>
+    /// <param name="heatpumpenergy">Heat pump, Wh.</param>
+    /// <returns>Wh.</returns>
+    public static double ExcludedEnergy(IEnumerable<string> columns, double? carcharge, double? warmwaterenergy, double? heatpumpenergy) =>
+      columns.Sum(c => c.ToLowerInvariant() switch
+      {
+        "carcharge"       => carcharge ?? 0,
+        "warmwaterenergy" => warmwaterenergy ?? 0,
+        "heatpumpenergy"  => heatpumpenergy ?? 0,
+        _                 => 0,
+      });
   }
 }

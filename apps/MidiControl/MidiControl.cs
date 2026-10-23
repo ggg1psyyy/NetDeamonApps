@@ -19,6 +19,7 @@ namespace NetDeamon.apps.MidiControl;
 // [Focus]
 // #endif
 
+/// <summary>Connects a BCF2000 MIDI controller (via MQTT) with HA entities: faders, buttons and radials set entities, entity changes move the controls and update the displays.</summary>
 public class MidiControl : IAsyncInitializable
 {
     private readonly MidiControlConfig _config;
@@ -31,6 +32,11 @@ public class MidiControl : IAsyncInitializable
     private Dictionary<string, Tuple<string, List<EntityMapping>>> _modifiers;
     //private Tuple<string, string, List<EntityMapping>> _modifiers;
 
+    /// <summary>Creates the app and sends the first status.</summary>
+    /// <param name="ha">HA context.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="config">App configuration (MidiControl.yaml).</param>
+    /// <param name="scheduler">Scheduler.</param>
     public MidiControl(IHaContext ha, ILogger<MidiControl> logger, IAppConfig<MidiControlConfig> config, IScheduler  scheduler)
     {
         _ha = ha;
@@ -44,6 +50,8 @@ public class MidiControl : IAsyncInitializable
 #endif
     }
     
+    /// <summary>Subscribes to the controller's MQTT messages and the mapped entities, then sends all mappings.</summary>
+    /// <param name="cancellationToken">Stops the initialization.</param>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("MidiControl initilizing");
@@ -75,7 +83,7 @@ public class MidiControl : IAsyncInitializable
             foreach (var mapping in _config.Mappings)
             {
                 mapping.ControlEntity?.StateAllChanges().Throttle(TimeSpan.FromMilliseconds(100))
-                    .Subscribe(_ => EntityStateChanged(mapping));
+                    .Subscribe(_ => PublishMappingAsync(mapping));
             }
             PublishAllMappings(sendInfo: false);
 
@@ -95,9 +103,7 @@ public class MidiControl : IAsyncInitializable
             _logger.LogError("Error initializing MidiControl: {ErrorMessage}", e.Message);
         }
     }
-    /// <summary>
-    /// sets all defined faders, buttons/leds, radials to zero/off
-    /// </summary>
+    /// <summary>Resets all faders, buttons and radials on the controller.</summary>
     private void InitializeAllControls()
     {
         foreach (var id in _config.Mqtt.GetAllFaderIDs())
@@ -144,6 +150,12 @@ public class MidiControl : IAsyncInitializable
         }
     }
 
+    /// <summary>Display image of the current status page: the status entities in a grid.</summary>
+    /// <param name="width">Image width, px.</param>
+    /// <param name="height">Image height, px.</param>
+    /// <param name="numCols">Grid columns.</param>
+    /// <param name="numRows">Grid rows.</param>
+    /// <returns>The image; null on failure.</returns>
     private async Task<Image<Rgba32>?> CreateStatusImage(int width=240, int height=320, int numCols = 2, int numRows = 4)
     {
         var image = new Image<Rgba32>(240, 320);
@@ -167,6 +179,11 @@ public class MidiControl : IAsyncInitializable
 
         return image;
     }
+    /// <summary>Display image of one entity (name, icon, value; a graph for sensors).</summary>
+    /// <param name="entity">The entity.</param>
+    /// <param name="width">Image width, px.</param>
+    /// <param name="height">Image height, px.</param>
+    /// <returns>The image; null without an entity.</returns>
     private async Task<Image<Rgba32>?> CreateEntityImage(Entity entity,int width =240, int height=320)
     {
         if (entity is null)
@@ -213,15 +230,25 @@ public class MidiControl : IAsyncInitializable
         );
         return await imageData;
     }
+    /// <summary>Sends every mapping's current state to the controller.</summary>
+    /// <param name="sendInfo">Include the display text/image.</param>
     private async Task PublishAllMappings(bool sendInfo = true)
     {
         foreach (var mapping in _config.Mappings)
-        {
-            var msg = await CreateMidiMessage(mapping, sendInfo: sendInfo);
-            if (msg is not null)
-                PublishMidiMessage(msg);
-        }
+            await PublishMappingAsync(mapping, sendInfo);
     }
+
+    /// <summary>Sends a mapping's current entity state to the controller.</summary>
+    /// <param name="mapping">The mapping.</param>
+    /// <param name="sendInfo">Include the display text/image.</param>
+    private async Task PublishMappingAsync(EntityMapping mapping, bool sendInfo = true)
+    {
+        var msg = await CreateMidiMessage(mapping, sendInfo: sendInfo);
+        if (msg is not null)
+            PublishMidiMessage(msg);
+    }
+    /// <summary>Sends the status page to the display, at most every StatusUpdateInterval seconds.</summary>
+    /// <param name="force">Send regardless of the interval.</param>
     private async Task SendCurrentStatus(bool force = false)
     {
         if ((DateTime.UtcNow - _lastMessageSent).TotalSeconds < _config.StatusUpdateInterval && !force)
@@ -262,6 +289,9 @@ public class MidiControl : IAsyncInitializable
         };
         PublishMidiMessage(msg);
     }
+    /// <summary>Switches a modifier (a layer of mappings) to another value and resends the mappings.</summary>
+    /// <param name="modifierName">Modifier name.</param>
+    /// <param name="modifierValue">New value.</param>
     private void SwitchModifier(string modifierName, string modifierValue)
     {
         if (!_modifiers.ContainsKey(modifierName))
@@ -296,6 +326,8 @@ public class MidiControl : IAsyncInitializable
         PublishMidiMessage(msg);
     }
 
+    /// <summary>Handles a MIDI message from the controller: finds its mapping and sets the entity.</summary>
+    /// <param name="msgElement">The MQTT event (new_state.attributes = the MIDI message).</param>
     private void HandleMqttMessage(JsonElement msgElement)
     {
         //_logger.LogDebug("received event: {event}", msgElement);
@@ -331,6 +363,9 @@ public class MidiControl : IAsyncInitializable
         }
     }
 
+    /// <summary>Applies a MIDI message to the mapped entity (or a modifier/action without entity).</summary>
+    /// <param name="mapping">The mapping.</param>
+    /// <param name="msg">The MIDI message.</param>
     private async Task SetEntityValue(EntityMapping mapping, MidiMessage msg)
     {
         var value = msg.value;
@@ -412,6 +447,9 @@ public class MidiControl : IAsyncInitializable
         }
     }
 
+    /// <summary>The mapping a MIDI message belongs to (by event type and channel/note/controller, active modifier values).</summary>
+    /// <param name="msg">The MIDI message.</param>
+    /// <returns>The mapping; null if none.</returns>
     private EntityMapping? FindMappingFromMidiMessage(MidiMessage msg)
     {
         List<EntityMapping> entitiesFound;
@@ -452,13 +490,12 @@ public class MidiControl : IAsyncInitializable
         return null;
     }
 
-    private async Task EntityStateChanged(EntityMapping mapping)
-    {
-        var msg = await CreateMidiMessage(mapping);
-        if (msg is not null)
-            PublishMidiMessage(msg);
-    }
 
+    /// <summary>The MIDI message that shows a mapping's entity state on the controller.</summary>
+    /// <param name="mapping">The mapping.</param>
+    /// <param name="overrideValue">Value to send instead of the entity's; int.MinValue = none.</param>
+    /// <param name="sendInfo">Include the display text/image.</param>
+    /// <returns>The message; null if there is nothing to send.</returns>
     private async Task<MidiMessage?> CreateMidiMessage(EntityMapping mapping, int overrideValue = int.MinValue, bool sendInfo = true)
     {
         var modifierName = mapping.Options?.ModifierName?.ToLowerInvariant() ?? string.Empty;
@@ -560,6 +597,8 @@ public class MidiControl : IAsyncInitializable
         return null;
     }
 
+    /// <summary>Publishes a MIDI message to the controller's MQTT topic.</summary>
+    /// <param name="msg">The message.</param>
     private void PublishMidiMessage(MidiMessage msg)
     {
         var json = JsonSerializer.Serialize(msg);
@@ -573,6 +612,10 @@ public class MidiControl : IAsyncInitializable
         _logger.LogTrace("Published MIDI: {Json}", json);
     }
 
+    /// <summary>Scales a value from 0…curMax to 0…newMax, rounded.</summary>
+    /// <param name="value">Value to scale.</param>
+    /// <param name="curMax">Maximum of the input range.</param>
+    /// <param name="newMax">Maximum of the output range.</param>
     private static int ConvertRange(int value, int curMax = 255, int newMax = 11)
     {
         var scaledValue = (double)value / curMax * newMax;
@@ -580,6 +623,7 @@ public class MidiControl : IAsyncInitializable
     }
 }
 
+/// <summary>A MIDI message as exchanged over MQTT (field names as in the JSON).</summary>
 public class MidiMessage
 {
     public required string event_type { get; init; }
@@ -592,6 +636,7 @@ public class MidiMessage
     public string? info { get; init; } = string.Empty;
     public string? image { get; init; } = string.Empty;
 
+    /// <summary>Type, channel, note, controller and value for logs.</summary>
     public override string ToString()
     {
         return event_type + " - Channel:" + channel + " Note:" + note + " Controller:" + controller + " Value:" + value;

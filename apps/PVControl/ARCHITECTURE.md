@@ -568,6 +568,15 @@ no charge rate, `feedin_priority` = `Normal` without battery charging, `force_ch
 `SimulationInput.PVPeriodAt`: between the day's first and last relevant PV slot. `IsInPVPeriod`
 took the first edge from the slot itself on, which made it "this slot has net PV" — a cloudy
 slot at midday counted as outside the PV period.
+The second pass (all apps) merged: gross import/export price (`PriceManager.GrossPrice`), the age
+weighting and hour-of-day profile of both load forecasts and the backtest (`Mean.AgeWeight`/
+`HourOfDayProfile`; the average forecast took the age from the time difference, so yesterday
+afternoon counted as today), least squares of the heat demand and tank models (`Regression`),
+the excluded load columns, the night window, the price-publication and night-score day lists
+(`DayLog`), ISO timestamps (five parsers, three formats), the SQLite schema version/columns of
+DataLogger and HeatingTest (`SqliteSchema`), DataLogger's hourly/daily catch-up loops, the next
+time of day (`TimeRange.NextOccurrence`, ready-by and heating test) and rounding up to a quarter.
+`tools/LoadBacktest` links `Calculations.cs`, so its "App" variant computes exactly what the app does.
 
 **What a kWh cost** (`SourceShares`, `PriceList.GetPriceOrMean`). The battery's average stored
 cost and the extra loads' cost totals used two separate source splits: the battery counted a

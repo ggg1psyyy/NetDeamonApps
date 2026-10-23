@@ -23,6 +23,7 @@ namespace NetDeamon.apps.PVControl
 #if DEBUG
   [Focus]
 #endif
+  /// <summary>The PVControl app: registers the HA entities, reacts to user changes and runs the 15-s cycle (simulation, inverter command, loads, sensors).</summary>
   public class PVControl : IAsyncInitializable
   {
     // nullforgiving "!" used to supress CS8618 for now
@@ -72,6 +73,13 @@ namespace NetDeamon.apps.PVControl
     private Costs _lastCostsEntry = new();
     private readonly SemaphoreSlim _schedLock = new(1, 1);
     private bool _schedPendingRerun = false;
+    /// <summary>Sets up the shared context (<see cref="PVControlCommon"/>).</summary>
+    /// <param name="ha">HA context.</param>
+    /// <param name="entityManager">MQTT entity manager.</param>
+    /// <param name="config">App configuration (PVControl.yaml).</param>
+    /// <param name="scheduler">Scheduler for the cycle.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="apiManager">HA REST API.</param>
     public PVControl(IHaContext ha, IMqttEntityManager entityManager, IAppConfig<PVConfig> config, IScheduler scheduler, ILogger<PVControl> logger, IHomeAssistantApiManager apiManager)
     {
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
@@ -269,6 +277,9 @@ namespace NetDeamon.apps.PVControl
         PVCC_Logger.LogError("Error registering sensors");
       }
     }
+    /// <summary>Applies a change of a PVControl control entity (mode, SoC limits, load settings, …) and requests a replan.</summary>
+    /// <param name="entity">The changed entity; null = ignored.</param>
+    /// <param name="newState">Its new state.</param>
     private async Task UserStateChanged(Entity? entity, string newState)
     {
       if (entity == null)
@@ -375,6 +386,7 @@ namespace NetDeamon.apps.PVControl
       await ScheduledOperations();
 #endif
     }
+    /// <summary>Runs one cycle (<see cref="ScheduledOperationsCore"/>) and publishes the health; a cycle requested while one runs follows right after.</summary>
     private async Task ScheduledOperations()
     {
       if (!await _schedLock.WaitAsync(0))
@@ -421,6 +433,7 @@ namespace NetDeamon.apps.PVControl
     private readonly PricePublicationTracker _pricePublication = new();
     private DateTime _pricePublicationPublished;
 
+    /// <summary>Restores the recorded price publication times from the sensor's "days" attribute after a restart.</summary>
     private void RestorePricePublications()
     {
       try
@@ -438,8 +451,8 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>sensor.pv_control_price_publication: when tomorrow's prices arrived today (HH:mm,
-    /// or "pending"), the last 14 days, and how far the published prices reach.</summary>
+    /// <summary>Publishes sensor.pv_control_price_publication: today's publication time (or "pending"), the last 14 days, the end of the published prices.</summary>
+    /// <param name="now">Current time.</param>
     private async Task PublishPricePublicationAsync(DateTime now)
     {
       if (_pricePublicationEntity is null) return;
@@ -485,11 +498,8 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>
-    /// sensor.pv_control_load_forecast: the coming night's (22:00–08:00) load by the weather model —
-    /// next to the hour-of-day average, the heat pump part, the next 24 h of both and the nights
-    /// scored so far (shadow mode: is the model really better?).
-    /// </summary>
+    /// <summary>Publishes sensor.pv_control_load_forecast: tonight's (22:00–08:00) weather-model load next to the average, the heat pump part, the next 24 h and the scored nights.</summary>
+    /// <param name="now">Current time.</param>
     private async Task PublishLoadForecastAsync(DateTime now)
     {
       if (_loadForecastEntity is null || _house.WeatherLoad is not { } weatherLoad)
@@ -508,7 +518,8 @@ namespace NetDeamon.apps.PVControl
         return;
       _loadForecastPublished = now;
 
-      var nightHours = weatherLoad.Hours.Where(h => h.Hour >= night.AddHours(22) && h.Hour < night.AddHours(32)).ToList();
+      var (nightFrom, nightTo) = LoadModel.NightForecastTracker.NightWindow(night);
+      var nightHours = weatherLoad.Hours.Where(h => TimeRange.Contains(nightFrom, nightTo, h.Hour)).ToList();
       var averageSlots = _house.AverageLoad.TodayAndTomorrow;
       var (maeModel, maeAverage, scored) = _nightTracker.MeanAbsoluteError();
       static double Kwh(double wh) => Math.Round(wh / 1000, 2);
@@ -560,6 +571,9 @@ namespace NetDeamon.apps.PVControl
 
     static bool Unavailable(Entity? e) => e is null || e.State is null or "unknown" or "unavailable";
 
+    /// <summary>Runs all <see cref="HealthChecks"/> on the values of this cycle.</summary>
+    /// <param name="now">Current time.</param>
+    /// <returns>The current issues.</returns>
     private IEnumerable<HealthIssue> CollectHealthIssues(DateTime now)
     {
       var battery = _house.Battery;
@@ -604,7 +618,7 @@ namespace NetDeamon.apps.PVControl
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT max(timestamp) FROM hourly";
         return command.ExecuteScalar() is string text
-          ? DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime
+          ? Extensions.FromISO8601(text)
           : null;
       }
       catch (Exception ex)
@@ -614,9 +628,8 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>sensor.pv_control_health: ok / degraded / error, the issues, and the time of the last
-    /// cycle (an HA automation notifies on a level change, and when last_cycle gets old — then
-    /// NetDaemon itself isn't running and this sensor can't say so).</summary>
+    /// <summary>Publishes sensor.pv_control_health: ok/degraded/error, the issues and the last cycle time.</summary>
+    /// <param name="now">Current time.</param>
     private async Task PublishHealthAsync(DateTime now)
     {
       var status = _health.Evaluate(now, CollectHealthIssues(now));
@@ -637,8 +650,8 @@ namespace NetDeamon.apps.PVControl
     }
     #endregion
 
-    /// <summary>Battery SoC unavailable for longer than <see cref="BatteryState.SoCMaxHold"/>: hand the
-    /// inverter back to normal mode (its own automatic) instead of keeping any special mode.</summary>
+    /// <summary>Battery SoC unavailable longer than <see cref="BatteryState.SoCMaxHold"/>: publishes normal mode (battery charge and export on), logged once.</summary>
+    /// <param name="now">Current time.</param>
     private async Task PublishSoCUnavailableAsync(DateTime now)
     {
       if (!_socUnavailableLogged)
@@ -660,6 +673,7 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, "ON");
     }
 
+    /// <summary>One 15-s cycle: weather refresh, simulation, inverter command, load switching and all sensors.</summary>
     private async Task ScheduledOperationsCore()
     {
       PVCC_Logger.LogTrace("Entering Schedule");
@@ -1050,6 +1064,8 @@ namespace NetDeamon.apps.PVControl
       #endregion
       PVCC_Logger.LogTrace("Leave Schedule");
     }
+    /// <summary>Checks that the configured entities exist; errors are logged.</summary>
+    /// <returns>False if a required entity is missing.</returns>
     private bool CheckConfiguration()
     {
       bool checkResult = true;
@@ -1082,6 +1098,9 @@ namespace NetDeamon.apps.PVControl
 
       return checkResult;
     }
+    /// <summary>Registers PVControl's HA entities (sensors, selects, numbers, switches) via MQTT and reads their current values.</summary>
+    /// <param name="reset">Re-register all entities (drops their configuration in HA).</param>
+    /// <returns>Always true.</returns>
     private async Task<bool> RegisterControlSensors(bool reset=false)
     {
       //reset = true;

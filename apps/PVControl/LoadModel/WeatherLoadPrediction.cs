@@ -9,11 +9,9 @@ using static NetDeamon.apps.PVControl.PVControlCommon;
 namespace NetDeamon.apps.PVControl.LoadModel;
 
 /// <summary>
-/// The weather-aware load forecast as a <see cref="Prediction"/>: <see cref="WeatherLoadModel"/>
-/// fitted on DataLogger's history (400 days), the hours ahead with the forecast temperature, the
-/// heat pump part switched by the heat pump mode. Without a usable weather forecast or history it
-/// delivers the hour-of-day average it wraps (<see cref="Source"/> says which), so PVControl can
-/// use it in place of the average.
+/// The weather-aware load forecast as a <see cref="Prediction"/>: <see cref="WeatherLoadModel"/> fitted on
+/// 400 days of DataLogger history with the forecast temperature ahead; the wrapped hour-of-day
+/// average without a usable forecast or history (<see cref="Source"/> says which).
 /// </summary>
 public sealed class WeatherLoadPrediction : Prediction
 {
@@ -24,6 +22,12 @@ public sealed class WeatherLoadPrediction : Prediction
   readonly string _dbLocation;
   readonly IReadOnlyList<string> _excludeColumns;
 
+  /// <summary>Creates the forecast and seeds the heat pump mode from the history.</summary>
+  /// <param name="average">Hour-of-day average (the fallback).</param>
+  /// <param name="weather">Weather forecast.</param>
+  /// <param name="config">Load forecast configuration.</param>
+  /// <param name="dbLocation">Path of the energy history DB.</param>
+  /// <param name="excludeColumns">DB columns subtracted from the house load.</param>
   public WeatherLoadPrediction(Prediction average, WeatherForecast weather, LoadForecastConfig config, string dbLocation, IReadOnlyList<string> excludeColumns)
   {
     _average = average;
@@ -38,15 +42,14 @@ public sealed class WeatherLoadPrediction : Prediction
 
   readonly HeatPumpModeTracker _mode;
 
-  /// <summary>Follows the heat pump mode every cycle (a switch shows up within 15 s, not only at
-  /// the hourly recalculation); unavailable keeps the last known mode.</summary>
+  /// <summary>Follows the heat pump mode (every cycle, so a switch counts within 15 s).</summary>
+  /// <param name="now">Current time.</param>
   public void ObserveMode(DateTime now) => _mode.Observe(now, _config.HeatPumpModeEntity?.State);
 
   /// <summary>The heat pump mode changed since the last calculation (recompute now, not in up to an hour).</summary>
   public bool ModeChanged => _config.HeatPumpModeEntity is not null && _mode.HeatingOn is { } on && on != HeatingOn && Model is not null;
 
-  /// <summary>DataLogger's hourly heat pump mode of the last 3 days (column heatingmode), so a
-  /// restart still knows when heating was switched on. Missing column/DB: unknown.</summary>
+  /// <summary>Seeds the heat pump mode from DataLogger's last 72 hourly modes (unknown without DB or column).</summary>
   void SeedModeFromHistory()
   {
     if (_config.HeatPumpModeEntity is null) return;
@@ -60,7 +63,7 @@ public sealed class WeatherLoadPrediction : Prediction
       var rows = new List<(DateTime, string?)>();
       while (reader.Read())
       {
-        var end = DateTimeOffset.Parse(reader.GetString(0), System.Globalization.CultureInfo.InvariantCulture).LocalDateTime;
+        var end = Extensions.FromISO8601(reader.GetString(0));
         rows.Add((end.Floor(60), reader.GetString(1)));
       }
       rows.Reverse();
@@ -74,11 +77,16 @@ public sealed class WeatherLoadPrediction : Prediction
 
   /// <summary>"model" or why the average is used.</summary>
   public string Source { get; private set; } = "not computed yet";
+  /// <summary>The fitted model; null when the average is used.</summary>
   public WeatherLoadModel? Model { get; private set; }
+  /// <summary>Heating counted as on in the last calculation.</summary>
   public bool HeatingOn { get; private set; }
   /// <summary>Per hour (local start) of the window: base load, heat pump part (Wh), 24-h mean temperature.</summary>
   public IReadOnlyList<(DateTime Hour, double Base, double HeatPump, double Temp24)> Hours { get; private set; } = [];
 
+  /// <summary>The model's forecast, or the average when the weather forecast is stale or the history shorter than 30 days.</summary>
+  /// <param name="now">Day of the window.</param>
+  /// <returns>Wh by slot start.</returns>
   protected override Dictionary<DateTime, int> PopulateData(DateTime now)
   {
     if (HouseEnergy.NeedsDayRollover(_average.TodayAndTomorrow, now))
@@ -99,6 +107,9 @@ public sealed class WeatherLoadPrediction : Prediction
     }
   }
 
+  /// <summary>Uses the hour-of-day average.</summary>
+  /// <param name="why">Reason for <see cref="Source"/>.</param>
+  /// <returns>The average's window.</returns>
   Dictionary<DateTime, int> Fallback(string why)
   {
     Source = why;
@@ -107,6 +118,10 @@ public sealed class WeatherLoadPrediction : Prediction
     return new Dictionary<DateTime, int>(_average.TodayAndTomorrow);
   }
 
+  /// <summary>Fits the model and forecasts today and tomorrow per hour (measured temperatures, then the forecast).</summary>
+  /// <param name="history">History hours, in time order.</param>
+  /// <param name="now">Current time.</param>
+  /// <returns>Wh by slot start.</returns>
   Dictionary<DateTime, int> Compute(List<LoadHour> history, DateTime now)
   {
     // One hourly temperature series from the first history hour to the end of tomorrow:
@@ -138,7 +153,7 @@ public sealed class WeatherLoadPrediction : Prediction
       double baseWh = model.BaseAt(hour.Hour), hpWh = model.HeatDemand.Expected(hour.Hour, t24, HeatingOn);
       hours.Add((hour, baseWh, hpWh, t24));
       for (int q = 0; q < 4; q++)
-        data[hour.AddMinutes(15 * q)] = (int)Math.Round((baseWh + hpWh) / 4);
+        data[hour.AddMinutes(15 * q)] = Energy.SlotWh(baseWh + hpWh); // hourly Wh = mean W
     }
     Model = model;
     Hours = hours;
@@ -146,25 +161,27 @@ public sealed class WeatherLoadPrediction : Prediction
     return data;
   }
 
-  /// <summary>The load really used in the night 22:00–08:00 starting on <paramref name="night"/>
-  /// (Wh, same definition as the forecast); null until DataLogger has all 10 hours.</summary>
+  /// <summary>Measured load of a night (<see cref="NightTotal"/>).</summary>
+  /// <param name="night">Start date of the night.</param>
+  /// <param name="now">Current time (history end).</param>
+  /// <returns>Wh; null until DataLogger has all hours.</returns>
   public double? ActualNightSum(DateTime night, DateTime now) => NightTotal(LoadHistory(now), night, TimeZoneInfo.Local);
 
-  /// <summary>
-  /// The load of the night 22:00–08:00 (local) from logged hours; null unless every hour that
-  /// exists that night is there. DST: the repeated hour in October is two real hours and both
-  /// count; the skipped hour in March doesn't exist and isn't missing.
-  /// </summary>
+  /// <summary>Load of a night 22:00–08:00 from logged hours; DST: the repeated hour counts twice, the skipped one isn't missing.</summary>
+  /// <param name="hours">Logged hours.</param>
+  /// <param name="night">Start date of the night.</param>
+  /// <param name="zone">Time zone (DST).</param>
+  /// <returns>Wh; null unless every existing hour is there.</returns>
   public static double? NightTotal(IEnumerable<LoadHour> hours, DateTime night, TimeZoneInfo zone)
   {
-    var from = night.AddHours(22);
-    var inNight = hours.Where(h => h.Local >= from && h.Local < from.AddHours(10)).ToList();
+    var (from, to) = NightForecastTracker.NightWindow(night);
+    var inNight = hours.Where(h => TimeRange.Contains(from, to, h.Local)).ToList();
     var expected = Enumerable.Range(0, 10).Select(k => from.AddHours(k)).Where(h => !zone.IsInvalidTime(h));
     return expected.All(h => inNight.Any(x => x.Local == h)) ? inNight.Sum(h => h.Total) : null;
   }
 
-  /// <summary>DataLogger's hourly rows of the last <see cref="HistoryDays"/> days as load hours
-  /// (corrupt rows skipped), in time order. The row stamped hh:59:59 covers hour hh.</summary>
+  /// <summary>DataLogger's hourly rows of the last <see cref="HistoryDays"/> days as load hours (corrupt rows skipped), in time order.</summary>
+  /// <param name="now">Current time (history end).</param>
   List<LoadHour> LoadHistory(DateTime now)
   {
     var from = now.Date.AddDays(-HistoryDays);
@@ -176,16 +193,9 @@ public sealed class WeatherLoadPrediction : Prediction
     var result = new List<LoadHour>();
     foreach (var r in rows)
     {
-      var local = r.Timestamp.Kind == DateTimeKind.Utc ? r.Timestamp.ToLocalTime() : r.Timestamp;
-      var hour = local.Floor(60);
+      var hour = r.Timestamp.AsLocal().Floor(60);
       if (hour < from || hour >= now) continue;
-      double excluded = _excludeColumns.Sum(c => c switch
-      {
-        "carcharge" => r.Carcharge ?? 0,
-        "warmwaterenergy" => r.Warmwaterenergy ?? 0,
-        "heatpumpenergy" => r.Heatpumpenergy ?? 0,
-        _ => 0,
-      });
+      double excluded = HourlyWeightedAverageLoadPrediction.ExcludedEnergy(_excludeColumns, r.Carcharge, r.Warmwaterenergy, r.Heatpumpenergy);
       if (LoadHour.FromRow(hour, r.Houseenergy, excluded, r.Heatpumpenergy, r.Warmwaterenergy, r.Temperatureoutside) is { } h)
         result.Add(h);
     }

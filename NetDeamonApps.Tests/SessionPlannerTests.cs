@@ -293,8 +293,8 @@ public class SessionPlannerTests : TestBase
   public void ReadyBy_NextOccurrence_TodayIfStillAhead_ElseTomorrow()
   {
     var now = new DateTime(2026, 10, 18, 17, 0, 0);
-    Assert.Equal(new DateTime(2026, 10, 18, 22, 0, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(22, 0), now));
-    Assert.Equal(new DateTime(2026, 10, 19, 6, 30, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(6, 30), now));
-    Assert.Equal(new DateTime(2026, 10, 19, 17, 0, 0), NetDeamon.apps.PVControl.Managers.SchedulableLoadRuntime.NextOccurrence(new TimeOnly(17, 0), now));
+    Assert.Equal(new DateTime(2026, 10, 18, 22, 0, 0), NetDeamon.apps.TimeRange.NextOccurrence(new TimeOnly(22, 0), now));
+    Assert.Equal(new DateTime(2026, 10, 19, 6, 30, 0), NetDeamon.apps.TimeRange.NextOccurrence(new TimeOnly(6, 30), now));
+    Assert.Equal(new DateTime(2026, 10, 19, 17, 0, 0), NetDeamon.apps.TimeRange.NextOccurrence(new TimeOnly(17, 0), now));
   }
 }

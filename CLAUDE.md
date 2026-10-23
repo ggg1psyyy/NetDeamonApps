@@ -54,7 +54,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`PricePublicationTrackerTests`** — when tomorrow's prices first appear (`sensor.pv_control_price_publication`)
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
 - **`RunningSlotTests`** — no jumps at quarter boundaries: the simulation's running slot counts only its rest (`SimulationInput.SlotFraction`), the 0.1-kWh PV energy counter made continuous (`CounterInterpolator`)
-- **`CalculationsTests`** — the shared basic calculations (`apps/Calculations.cs`: time ranges/slot fractions, W/Wh/minutes, SoC/Wh and charge time, weighted mean, step functions)
+- **`CalculationsTests`** — the shared basic calculations (`apps/Calculations.cs`: time ranges/slot fractions/rounding, W/Wh/minutes, SoC/Wh and charge time, weighted and age-weighted means, hour-of-day profile, least squares, step functions), `DayLog`, `ToSlug`
 - **`SourceSharesTests`** — what a kWh costs by its source (`SourceShares`: PV free, grid, battery) for `sensor.pv_control_battery_avg_cost_per_kwh` and the loads' cost totals, `CostTracker.BlendAverageCost`, the shared price lookup `PriceList.GetPriceOrMean`
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`AppVersionTests`** — build version from git (`NetDeamonApps.csproj` target `GitVersion`, `apps/AppVersion.cs`), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
@@ -87,7 +87,7 @@ Each app consists of:
 ### Key Patterns
 - **MQTT Entity Registration**: All dynamic HA sensors/selects/numbers/switches/times are created via `IMqttEntityManager`, not static YAML — see `PVControlCommon.RegisterSensor()`
 - **Reactive Extensions**: State subscriptions use Rx.LINQ with throttling; cron jobs via `INetDaemonScheduler`
-- **Calculations.cs**: the basic calculations shared by all apps, each once — `TimeRange` (overlap, slot fraction, floor), `Energy` (W/Wh/minutes), `Soc` (SoC/Wh, charge time), `Mean.Weighted`, `StepFunction` (HA history held values, time-weighted mean). Use these instead of writing the formula again
+- **Calculations.cs**: the basic calculations shared by all apps, each once — `TimeRange` (overlap, slot fraction, floor), `Energy` (W/Wh/minutes), `Soc` (SoC/Wh, charge time), `Mean` (weighted, age weight, hour-of-day profile), `Regression` (least squares), `StepFunction` (HA history held values, time-weighted mean). `SqliteSchema` (version, columns) for the apps' own DBs; `Extensions.ToISO8601`/`FromISO8601` for every stored or HA time. Use these instead of writing the formula again
 - **Extensions.cs**: Central utility library — `GetEntityHistoryAsync()`, `GetUnitMultiplicator()`, `TryGetStateValue()`, enums for `InverterModes`, `BatteryStatuses`, `ForceChargeReasons`, `LoadSchedulingMode`
 
 ### Configuration

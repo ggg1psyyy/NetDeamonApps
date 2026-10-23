@@ -55,6 +55,7 @@ public class ImageConfig
     public float CornerRadius { get; set; } = 8f;
 }
 
+/// <summary>Renders the controller display images (entity tiles with name, icon, value and graph).</summary>
 public class ImageGenerator
 {
     private readonly FontCollection _fontCollection;
@@ -72,11 +73,12 @@ public class ImageGenerator
         { "mdi:help-circle", "\uf059" } // fa-circle-question
     };
     
+    /// <summary>Creates the generator.</summary>
+    /// <param name="config">Layout and fonts; null = defaults.</param>
     public ImageGenerator(ImageConfig config = null)
     {
         _config = config ?? new ImageConfig();
         _fontCollection = new FontCollection();
-        _iconManager = new IconManager(_config.IconPath);
         #if DEBUG
         _iconManager = new IconManager(@"D:\TEMP\NetDeamon\ico");
         #else
@@ -84,6 +86,13 @@ public class ImageGenerator
         #endif
     }
     
+    /// <summary>An entity tile.</summary>
+    /// <param name="name">Name; null = none.</param>
+    /// <param name="iconName">mdi icon.</param>
+    /// <param name="value">Value text.</param>
+    /// <param name="unit">Unit text.</param>
+    /// <param name="graphData">Values for the graph; null = no graph.</param>
+    /// <returns>The image.</returns>
     public async Task<Image<Rgba32>> CreateEntityImage(
         string? name,
         string iconName,
@@ -161,6 +170,10 @@ public class ImageGenerator
         await DrawIconAsync(image, iconName, _config.IconColor);
         return image;
     }
+    /// <summary>Draws the icon at its place on a tile.</summary>
+    /// <param name="image">The tile.</param>
+    /// <param name="iconName">mdi icon.</param>
+    /// <param name="color">Color.</param>
     private async Task DrawIconAsync(Image<Rgba32> image, string iconName, Color color)
     {
         int iconSize = (int)(_config.Height * _config.IconSize);
@@ -183,6 +196,9 @@ public class ImageGenerator
         });
     }
 
+    /// <summary>Draws a line graph at the bottom of a tile.</summary>
+    /// <param name="ctx">Drawing context.</param>
+    /// <param name="data">Values; fewer than 2 = nothing.</param>
     private void DrawGraph(IImageProcessingContext ctx, List<float> data)
     {
         if (data.Count < 2) return;
@@ -235,6 +251,10 @@ public class ImageGenerator
         ctx.Draw(_config.GraphLineColor, _config.GraphLineWidth, path);
     }
     
+    /// <summary>Loads a font file, falling back to a system font.</summary>
+    /// <param name="path">Font file.</param>
+    /// <param name="size">Size, px.</param>
+    /// <returns>The font.</returns>
     private Font LoadFont(string path, float size)
     {
         try

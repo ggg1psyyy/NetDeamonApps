@@ -4,12 +4,8 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.LoadModel;
 
-/// <summary>
-/// Whether the heat pump heats the house (its mode is one of the heating modes) and since when.
-/// An unavailable/unknown mode (KNX dropouts) keeps the last known one, and only a real change
-/// from not heating to heating sets <see cref="HeatingOnSince"/> — HA's LastChanged also moves on
-/// "unavailable → heating", which made a dropout look like "just switched on".
-/// </summary>
+/// <summary>Whether the heat pump heats the house and since when; unknown/unavailable modes keep the last known one.</summary>
+/// <param name="heatingModes">Modes that count as heating.</param>
 public sealed class HeatPumpModeTracker(IReadOnlyCollection<string> heatingModes)
 {
   /// <summary>Null until a mode was known.</summary>
@@ -19,7 +15,9 @@ public sealed class HeatPumpModeTracker(IReadOnlyCollection<string> heatingModes
 
   static bool Known(string? mode) => !string.IsNullOrEmpty(mode) && mode is not "unknown" and not "unavailable";
 
-  /// <summary>The live mode at <paramref name="now"/>.</summary>
+  /// <summary>Takes the live mode; only a real change sets <see cref="HeatingOnSince"/>.</summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="mode">Heat pump mode; unknown/unavailable is ignored.</param>
   public void Observe(DateTime now, string? mode)
   {
     if (!Known(mode)) return;
@@ -29,8 +27,8 @@ public sealed class HeatPumpModeTracker(IReadOnlyCollection<string> heatingModes
     HeatingOn = on;
   }
 
-  /// <summary>Starts from DataLogger's hourly modes (time order, hour start): the last change to
-  /// heating in there becomes <see cref="HeatingOnSince"/> — so a restart doesn't forget it.</summary>
+  /// <summary>Starts from DataLogger's hourly modes, so a restart keeps <see cref="HeatingOnSince"/>.</summary>
+  /// <param name="logged">(hour start, mode) in time order.</param>
   public void Seed(IEnumerable<(DateTime Hour, string? Mode)> logged)
   {
     bool? was = null;

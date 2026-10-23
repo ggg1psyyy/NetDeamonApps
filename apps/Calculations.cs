@@ -44,6 +44,26 @@ namespace NetDeamon.apps
     /// <returns>The floored time; seconds dropped, <see cref="DateTimeKind.Unspecified"/>.</returns>
     public static DateTime Floor(this DateTime time, int minutes) =>
       new DateTime(time.Year, time.Month, time.Day, time.Hour, 0, 0).AddMinutes(time.Minute - time.Minute % minutes);
+
+    /// <summary>The next moment the clock shows a time of day.</summary>
+    /// <param name="time">Time of day.</param>
+    /// <param name="now">Current time.</param>
+    /// <returns>Today at <paramref name="time"/> if still ahead, else tomorrow.</returns>
+    public static DateTime NextOccurrence(TimeOnly time, DateTime now)
+    {
+      var today = now.Date + time.ToTimeSpan();
+      return today > now ? today : today.AddDays(1);
+    }
+
+    /// <summary>Rounds a time up to a multiple of minutes within its hour.</summary>
+    /// <param name="time">Time to round.</param>
+    /// <param name="minutes">Step, a divisor of 60.</param>
+    /// <returns><paramref name="time"/> if already on a step (no seconds), else the next step.</returns>
+    public static DateTime Ceiling(this DateTime time, int minutes)
+    {
+      var floor = time.Floor(minutes);
+      return floor < time ? floor.AddMinutes(minutes) : floor;
+    }
   }
 
   /// <summary>Power (W), energy (Wh) and time.</summary>
@@ -63,8 +83,8 @@ namespace NetDeamon.apps
 
     /// <summary>Energy of a 15-min slot at a constant power.</summary>
     /// <param name="powerW">Mean power in W (also: an hour's energy in Wh).</param>
-    /// <returns>Energy in Wh (integer division).</returns>
-    public static int SlotWh(int powerW) => powerW / 4;
+    /// <returns>Energy in Wh, rounded.</returns>
+    public static int SlotWh(double powerW) => (int)Math.Round(powerW / 4);
 
     /// <summary>Mean power of a 15-min slot.</summary>
     /// <param name="wh">Energy of the slot in Wh.</param>
@@ -109,6 +129,80 @@ namespace NetDeamon.apps
     /// <returns>(a·weightA + b·weightB) / (weightA + weightB).</returns>
     public static double Weighted(double a, double weightA, double b, double weightB) =>
       (a * weightA + b * weightB) / (weightA + weightB);
+
+    /// <summary>Weight of a day by its age: exp(−|age in days| / scaleDays).</summary>
+    /// <param name="day">Day of the value (time ignored).</param>
+    /// <param name="today">Reference day (time ignored).</param>
+    /// <param name="scaleDays">Age at which the weight has fallen to 1/e.</param>
+    /// <returns>Weight 0…1.</returns>
+    public static double AgeWeight(DateTime day, DateTime today, double scaleDays) =>
+      Math.Exp(-Math.Abs((day.Date - today.Date).Days) / scaleDays);
+
+    /// <summary>Age-weighted mean per hour of day (<see cref="AgeWeight"/>).</summary>
+    /// <param name="values">(local time, value); NaN values are skipped.</param>
+    /// <param name="today">Reference day for the age.</param>
+    /// <param name="scaleDays">Age weighting, see <see cref="AgeWeight"/>.</param>
+    /// <returns>Mean per hour 0–23; 0 for hours without values.</returns>
+    public static double[] HourOfDayProfile(IEnumerable<(DateTime Local, double Value)> values, DateTime today, double scaleDays)
+    {
+      var sums = new double[24];
+      var weights = new double[24];
+      foreach (var (local, value) in values)
+      {
+        if (double.IsNaN(value)) continue;
+        double w = AgeWeight(local, today, scaleDays);
+        sums[local.Hour] += value * w;
+        weights[local.Hour] += w;
+      }
+      for (int h = 0; h < 24; h++)
+        sums[h] = weights[h] > 0 ? sums[h] / weights[h] : 0;
+      return sums;
+    }
+  }
+
+  /// <summary>Linear regression.</summary>
+  public static class Regression
+  {
+    /// <summary>(Weighted) least squares y = slope·x + intercept.</summary>
+    /// <param name="xs">x values.</param>
+    /// <param name="ys">y values.</param>
+    /// <param name="weights">Weight per point; null = all 1.</param>
+    /// <returns>Slope and intercept; null without points or without spread in x.</returns>
+    public static (double Slope, double Intercept)? LinearFit(IReadOnlyList<double> xs, IReadOnlyList<double> ys, IReadOnlyList<double>? weights = null)
+    {
+      if (Means(xs, ys, weights) is not { } m) return null;
+      double sxx = 0, sxy = 0;
+      for (int i = 0; i < xs.Count; i++)
+      {
+        double w = weights?[i] ?? 1;
+        sxx += w * (xs[i] - m.X) * (xs[i] - m.X);
+        sxy += w * (xs[i] - m.X) * (ys[i] - m.Y);
+      }
+      if (sxx < 1e-9) return null;
+      double slope = sxy / sxx;
+      return (slope, m.Y - slope * m.X);
+    }
+
+    /// <summary>Intercept of the line with a given slope through the (weighted) means — e.g. after limiting the fitted slope.</summary>
+    /// <param name="xs">x values.</param>
+    /// <param name="ys">y values.</param>
+    /// <param name="weights">Weight per point; null = all 1.</param>
+    /// <param name="slope">The slope.</param>
+    /// <returns>mean(y) − slope·mean(x); 0 without points.</returns>
+    public static double InterceptFor(IReadOnlyList<double> xs, IReadOnlyList<double> ys, IReadOnlyList<double>? weights, double slope) =>
+      Means(xs, ys, weights) is { } m ? m.Y - slope * m.X : 0;
+
+    /// <summary>(Weighted) means of x and y; null without points or weight.</summary>
+    private static (double X, double Y)? Means(IReadOnlyList<double> xs, IReadOnlyList<double> ys, IReadOnlyList<double>? weights)
+    {
+      double sw = 0, sx = 0, sy = 0;
+      for (int i = 0; i < xs.Count; i++)
+      {
+        double w = weights?[i] ?? 1;
+        sw += w; sx += w * xs[i]; sy += w * ys[i];
+      }
+      return sw > 0 ? (sx / sw, sy / sw) : null;
+    }
   }
 
   /// <summary>Values that hold from each change until the next one (the HA history of a sensor).</summary>
@@ -128,6 +222,21 @@ namespace NetDeamon.apps
         var end = i + 1 < changes.Count && changes[i + 1].Time < to ? changes[i + 1].Time : to;
         if (end > start) yield return (changes[i].Value, end - start);
       }
+    }
+
+    /// <summary>The value held at a time.</summary>
+    /// <param name="changes">(time, value) in time order.</param>
+    /// <param name="time">Time to look up.</param>
+    /// <returns>The last value at or before <paramref name="time"/>; the first one if none is before; NaN without values.</returns>
+    public static double ValueAt(IReadOnlyList<(DateTime Time, double Value)> changes, DateTime time)
+    {
+      double v = changes.Count > 0 ? changes[0].Value : double.NaN;
+      foreach (var (t, x) in changes)
+      {
+        if (t > time) break;
+        v = x;
+      }
+      return v;
     }
 
     /// <summary>Time-weighted mean of a value over a period.</summary>

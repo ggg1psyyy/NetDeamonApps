@@ -99,6 +99,7 @@ namespace PVControl
 //#if DEBUG
 //  [Focus]
 //#endif
+  /// <summary>Logs hourly and daily energy, temperatures and heat pump operation from the HA history into SQLite (training data for the load models).</summary>
   public partial class DataLogger : IAsyncInitializable
   {
     private readonly IHomeAssistantApiManager _apiManager;
@@ -110,6 +111,11 @@ namespace PVControl
     // A catch-up run can outlast the 15-min cron; overlapping runs inserted every hour twice.
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
+    /// <summary>Creates the app.</summary>
+    /// <param name="apiManager">HA REST API (history).</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="config">App configuration (DataLogger.yaml).</param>
+    /// <param name="scheduler">Scheduler for the 15-min run.</param>
     public DataLogger(IHomeAssistantApiManager apiManager, ILogger<DataLogger> logger, IAppConfig<DataLoggerConfig> config, IScheduler scheduler)
     {
       _apiManager = apiManager;
@@ -202,10 +208,7 @@ namespace PVControl
           _logger.LogWarning("DataLogger: {name} ({entityId}) is not available at startup", name, entity.EntityId);
       }
     }
-    /// <summary>
-    /// Run this at least every 15-30 minutes to make sure every period is correctly logged even if netDeamon or HA restarts
-    /// </summary>
-    /// <returns></returns>
+    /// <summary>Runs <see cref="ScheduleRunCore"/> (every 15 min, catching up after restarts); a run still going skips this one.</summary>
     private async Task ScheduleRun()
     {
       if (!await _runLock.WaitAsync(0))
@@ -217,55 +220,45 @@ namespace PVControl
       finally { _runLock.Release(); }
     }
 
+    /// <summary>Writes every hourly and daily row that is due (backfills an empty table first).</summary>
     private async Task ScheduleRunCore()
     {
       _logger.LogTrace("Entered ScheduleRun");
       DateTime now = DateTime.Now;
-      DateTime lastRunDaily = await GetLastLogTimeStamp("daily");
-      DateTime lastRunHourly = await GetLastLogTimeStamp("hourly");
-
-      if (lastRunHourly == DateTime.MinValue)
-      {
-        // never run, so go back as far as HA history allows (normally 10 days, but we restrict it to 7 days to be sure we get values)
-        DateTime endTime = DateTime.Now.AddDays(-7).Date.AddHours(1).AddMinutes(0);
-        while (endTime < DateTime.Now)
-        {
-          await InsertHourly(endTime);
-          endTime = endTime.AddHours(1);
-        }
-        lastRunHourly = await GetLastLogTimeStamp("hourly");
-      }
-      if (lastRunDaily == DateTime.MinValue)
-      {
-        // never run, so go back as far as HA history allows (normally 10 days, but we restrict it to 7 days to be sure we get values)
-        DateTime endTime = DateTime.Now.AddDays(-6).Date.AddHours(0).AddMinutes(0);
-        while (endTime < DateTime.Now)
-        {
-          await InsertDaily(endTime);
-          endTime = endTime.AddDays(1);
-        }
-        lastRunDaily = await GetLastLogTimeStamp("daily");
-      }
-
-      lastRunHourly = lastRunHourly.AddHours(1);
-      while (lastRunHourly < now)
-      {
-        // make sure we don't have some timedrift
-        lastRunHourly = lastRunHourly.Date.AddHours(lastRunHourly.Hour).AddMinutes(59).AddSeconds(59);
-        await InsertHourly(lastRunHourly);
-        lastRunHourly = lastRunHourly.AddHours(1);
-      }
-
-      lastRunDaily = lastRunDaily.AddDays(1);
-      while (lastRunDaily < now)
-      {
-        // make sure we don't have some timedrift
-        lastRunDaily = lastRunDaily.Date.AddHours(23).AddMinutes(59).AddSeconds(59);
-        await InsertDaily(lastRunDaily);
-        lastRunDaily = lastRunDaily.AddDays(1);
-      }
+      // An empty table goes back as far as HA history safely has values (it keeps ~10 days).
+      await CatchUpAsync("hourly", now, now.AddDays(-7).Date.AddHours(1), TimeSpan.FromHours(1),
+        HourEnd, end => PopulateDB(end, daily: false));
+      await CatchUpAsync("daily", now, now.AddDays(-6).Date, TimeSpan.FromDays(1),
+        DayEnd, end => PopulateDB(end, daily: true));
       _logger.LogTrace("Finished ScheduleRun");
     }
+
+    /// <summary>Writes the rows of one table up to now: an empty table from <paramref name="backfillFrom"/>, then every period after its last row.</summary>
+    /// <param name="table">Table name ("hourly", "daily").</param>
+    /// <param name="now">Current time; periods ending before it are written.</param>
+    /// <param name="backfillFrom">First period end for an empty table.</param>
+    /// <param name="step">Period length.</param>
+    /// <param name="periodEnd">The period end a time belongs to (hh:59:59, 23:59:59 — no drift).</param>
+    /// <param name="insert">Writes the row of the period ending at the given time.</param>
+    private async Task CatchUpAsync(string table, DateTime now, DateTime backfillFrom, TimeSpan step,
+      Func<DateTime, DateTime> periodEnd, Func<DateTime, Task> insert)
+    {
+      DateTime last = await GetLastLogTimeStamp(table);
+      if (last == DateTime.MinValue)
+      {
+        for (var end = backfillFrom; end < now; end += step)
+          await insert(end);
+        last = await GetLastLogTimeStamp(table);
+      }
+      for (var end = last + step; end < now; end += step)
+      {
+        end = periodEnd(end);
+        await insert(end);
+      }
+    }
+    /// <summary>Timestamp of a table's last row.</summary>
+    /// <param name="tableName">"hourly" or "daily".</param>
+    /// <returns>Local time; DateTime.MinValue for an empty table.</returns>
     private async Task<DateTime> GetLastLogTimeStamp(string tableName)
     {
       DateTime timeStamp = DateTime.MinValue;
@@ -282,7 +275,7 @@ namespace PVControl
         {
           if (queryResult.Read())
           {
-            timeStamp = ParseDbTimestamp(queryResult.GetString(0));
+            timeStamp = Extensions.FromISO8601(queryResult.GetString(0));
           }
         }
         await con.CloseAsync();
@@ -290,28 +283,14 @@ namespace PVControl
 
       return timeStamp;
     }
-    /// <summary>
-    /// Reads a stored timestamp ("2026-06-27T12:59:59+02:00") as local time. Don't use
-    /// SqliteDataReader.GetDateTime for this: since Microsoft.Data.Sqlite 10 it returns UTC for
-    /// offset strings, and all period arithmetic here (whole local hours/days) then ran on the
-    /// UTC clock — hourly windows ended up in the future (all NULL), daily ones shifted by the
-    /// UTC offset.
-    /// </summary>
-    public static DateTime ParseDbTimestamp(string text) =>
-      DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime;
 
     /// <summary>
-    /// Energy counted by a meter over a series of readings: the sum of its increases. A drop
-    /// below 90 % of the last counted reading is a reset (daily counters at midnight, whenever it
-    /// happens) and the new reading counts from 0 — unless the meter is back near its level
-    /// within the next <see cref="GlitchLookahead"/> readings: then it was a glitch (e.g. a
-    /// template sum briefly reading 0 while one source is unavailable) and is skipped. Smaller
-    /// drops are noise and skipped too. Works for daily-reset and running-total counters alike.
-    /// (It replaced "last − first, after skipping to the first exact 0", which wrote 0 for every
-    /// day of running totals like the heat pump and carport meters, and for daily counters whose
-    /// reset never showed an exact 0. HA's own statistics count such glitches as resets — e.g.
-    /// 125 kWh of heat pump energy on 2026-10-12 instead of ~5.)
+    /// Energy counted by a meter over its readings: the sum of its increases. A drop below 90 % of the
+    /// last counted reading is a reset (counts from 0) unless the meter returns near its level within
+    /// <see cref="GlitchLookahead"/> readings (a glitch, skipped); smaller drops are noise.
     /// </summary>
+    /// <param name="readings">Meter readings in time order.</param>
+    /// <returns>The increase; works for daily-reset and running-total meters.</returns>
     public static float CounterIncrease(IReadOnlyList<float> readings)
     {
       if (readings.Count == 0) return 0;
@@ -327,15 +306,20 @@ namespace PVControl
       return total;
     }
 
-    /// <summary>
-    /// Minutes in [<paramref name="from"/>, <paramref name="to"/>) during which the state matched.
-    /// <paramref name="changes"/> are (time, state) in time order; the first one is the state at
-    /// the period start (HA history starts with it, stamped earlier or at the start).
-    /// </summary>
+    /// <summary>Minutes in a period during which the state matched.</summary>
+    /// <param name="changes">(time, state) in time order; the first one is the state at the period start.</param>
+    /// <param name="from">Period start.</param>
+    /// <param name="to">Period end.</param>
+    /// <param name="match">Which states count.</param>
+    /// <returns>Minutes.</returns>
     public static double MinutesInState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to, Func<string, bool> match) =>
       StepFunction.Pieces(changes, from, to).Where(p => match(p.Value)).Sum(p => p.Held.TotalMinutes);
 
-    /// <summary>The state held longest in the period (e.g. the heat pump mode of an hour).</summary>
+    /// <summary>The state held longest in a period (unknown/unavailable ignored).</summary>
+    /// <param name="changes">(time, state) in time order.</param>
+    /// <param name="from">Period start.</param>
+    /// <param name="to">Period end.</param>
+    /// <returns>The state; null if none.</returns>
     public static string? PrevailingState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to) =>
       changes.Select(c => c.State).Where(s => s is not "unknown" and not "unavailable").Distinct()
         .Select(s => (State: s, Minutes: MinutesInState(changes, from, to, x => x == s)))
@@ -345,6 +329,10 @@ namespace PVControl
     /// <summary>Readings after a big drop checked for a return to the old level (glitch, not reset).</summary>
     public const int GlitchLookahead = 5;
 
+    /// <summary>Whether a meter gets back to a level within <see cref="GlitchLookahead"/> readings.</summary>
+    /// <param name="readings">Meter readings.</param>
+    /// <param name="from">Index to look from.</param>
+    /// <param name="level">Level to reach.</param>
     private static bool ReturnsTo(IReadOnlyList<float> readings, int from, float level)
     {
       for (int i = from; i < Math.Min(readings.Count, from + GlitchLookahead); i++)
@@ -352,36 +340,38 @@ namespace PVControl
       return false;
     }
 
-    private async Task InsertHourly(DateTime endPeriod)
-    {
-      await PopulateDB(endPeriod, false);
-    }
-    private async Task InsertDaily(DateTime endPeriod)
-    {
-      await PopulateDB(endPeriod, true);
-    }
+    /// <summary>Last second of the hour a time lies in (hh:59:59), the timestamp of an hourly row.</summary>
+    /// <param name="t">Any time in the hour.</param>
+    private static DateTime HourEnd(DateTime t) => t.Floor(60).AddHours(1).AddSeconds(-1);
+
+    /// <summary>Last second of the day a time lies in (23:59:59), the timestamp of a daily row.</summary>
+    /// <param name="t">Any time of the day.</param>
+    private static DateTime DayEnd(DateTime t) => t.Date.AddDays(1).AddSeconds(-1);
+
+    /// <summary>Reads the period's values from the HA history and writes one hourly or daily row.</summary>
+    /// <param name="historyEnd">Period end; near a full hour/day it snaps to the period just ended.</param>
+    /// <param name="daily">True = daily row (24 h), false = hourly.</param>
     private async Task PopulateDB(DateTime historyEnd, bool daily=false)
     {
       int hours = daily ? 24 : 1;
       DateTime historyStart = historyEnd.AddHours(-hours);
       if (historyEnd.Minute >= 58 && hours == 1)
       {
-        historyStart = historyEnd.Date.AddHours(historyEnd.Hour).AddMinutes(0).AddSeconds(0);
+        historyStart = historyEnd.Floor(60);
       }
       else if (historyEnd.Minute <= 2 && hours == 1)
       {
-        historyEnd = historyEnd.AddHours(-1);
-        historyEnd = historyEnd.Date.AddHours(historyEnd.Hour).AddMinutes(59).AddSeconds(59);
-        historyStart = historyEnd.Date.AddHours(historyEnd.Hour).AddMinutes(0).AddSeconds(0);
+        historyEnd = HourEnd(historyEnd.AddHours(-1));
+        historyStart = historyEnd.Floor(60);
       }
       else if (historyEnd.Minute >= 58 && historyEnd.Hour == 23 && hours == 24)
       {
-        historyStart = historyEnd.Date.AddHours(0).AddMinutes(0).AddSeconds(0);
+        historyStart = historyEnd.Date;
       }
       else if (historyEnd.Minute <= 2 && historyEnd.Hour == 0 && hours == 24)
       {
-        historyEnd = historyEnd.Date.AddDays(-1).AddHours(23).AddMinutes(59).AddSeconds(59);
-        historyStart = historyEnd.Date.AddHours(0).AddMinutes(0).AddSeconds(0);
+        historyEnd = DayEnd(historyEnd.AddDays(-1));
+        historyStart = historyEnd.Date;
       }
 
       _logger.LogInformation("Calculating and storing {daily} values from {start} to {end}", daily ? "daily" : "hourly", historyStart.ToISO8601(), historyEnd.ToISO8601());
@@ -466,6 +456,10 @@ namespace PVControl
     private sealed record OperationValues(string? HeatingMode, double? HeatingMinutes, double? CompressorMinutes, double? EcoMinutes,
       double? TargetTemperature, double? FlowTemperature, double? ReturnTemperature, double? WindSpeed, double? AtHomeMinutes, double? RoomsHeating, double? RoomSetpoint);
 
+    /// <summary>Heat pump operation and the house's state over a period (v6 columns) from the HA history.</summary>
+    /// <param name="from">Period start.</param>
+    /// <param name="to">Period end.</param>
+    /// <returns>The values; null where the entity isn't configured or has no history.</returns>
     private async Task<OperationValues> GetOperationValuesAsync(DateTime from, DateTime to)
     {
       async Task<List<SensorData>?> History(Entity? entity, bool attributes = false)
@@ -525,11 +519,22 @@ namespace PVControl
 
     // Configured entities are always queried, whatever their state right now: a sensor that's
     // briefly unavailable at logging time still has history for the period.
+    /// <summary>Starts a history query for an entity, if configured.</summary>
+    /// <param name="averageTasks">Running queries.</param>
+    /// <param name="entity">Entity; null = skipped.</param>
+    /// <param name="op">Aggregation.</param>
+    /// <param name="historyStart">Period start.</param>
+    /// <param name="historyEnd">Period end.</param>
+    /// <param name="query">The query (<see cref="GetFloatStateHistory"/>).</param>
     private static void AddFloatTask(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity, FloatTask op, DateTime historyStart, DateTime historyEnd, Func<Entity, FloatTask, DateTime, DateTime, Task<Tuple<string, float?>>> query)
     {
       if (entity is not null)
         averageTasks.Add(Task.Run(() => query(entity, op, historyStart, historyEnd)));
     }
+    /// <summary>Result of an entity's history query.</summary>
+    /// <param name="averageTasks">Finished queries.</param>
+    /// <param name="entity">Entity; null = none.</param>
+    /// <returns>The value; null if missing or failed.</returns>
     private float? GetFloatTaskResult(List<Task<Tuple<string, float?>>> averageTasks, Entity? entity)
     {
       if (entity is not null)
@@ -546,10 +551,17 @@ namespace PVControl
       }
       return null;
     }
+    /// <summary>Aggregation of a period's numeric readings (diff = <see cref="CounterIncrease"/>).</summary>
     private enum FloatTask
     {
       average, sum, min, max, diff, first, last
     }
+    /// <summary>Aggregates an entity's numeric readings over a period.</summary>
+    /// <param name="entity">Entity.</param>
+    /// <param name="op">Aggregation.</param>
+    /// <param name="historyStart">Period start.</param>
+    /// <param name="historyEnd">Period end.</param>
+    /// <returns>(entity id, value); value null without readings or on error.</returns>
     private async Task <Tuple<string,float?>> GetFloatStateHistory(Entity entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
     {
       try
@@ -584,11 +596,12 @@ namespace PVControl
         return new Tuple<string, float?>(entity.EntityId, null);
       }
     }
+    /// <summary>Creates the tables or migrates them to the current schema version.</summary>
     private async Task InitializeDB()
     {
       using SqliteConnection con = new(_connectionString);
       await con.OpenAsync();
-      int actualDBVersion = await GetDBVersion(con);
+      int actualDBVersion = await SqliteSchema.GetVersionAsync(con);
       if (actualDBVersion <= 0)
       {
         var createTableCommand = con.CreateCommand();
@@ -600,7 +613,7 @@ namespace PVControl
           (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
         ";
         _ = await createTableCommand.ExecuteNonQueryAsync();
-        await SetDbVersion(con, 4);
+        await SqliteSchema.SetVersionAsync(con, 4);
         actualDBVersion = 4;
       }
       if (actualDBVersion < 5)
@@ -611,7 +624,7 @@ namespace PVControl
         migrate.CommandText = DedupeAndIndexSql;
         int removed = await migrate.ExecuteNonQueryAsync();
         _logger.LogInformation("DataLogger DB migrated to v5: duplicates removed, unique timestamp index added ({rows} rows changed)", removed);
-        await SetDbVersion(con, 5);
+        await SqliteSchema.SetVersionAsync(con, 5);
       }
       if (actualDBVersion < 6)
       {
@@ -619,19 +632,12 @@ namespace PVControl
         // must not fail with "duplicate column" on the next start and stop all logging.
         foreach (var table in new[] { "hourly", "daily" })
         {
-          var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-          var info = con.CreateCommand();
-          info.CommandText = $"SELECT name FROM pragma_table_info('{table}')";
-          using (var reader = await info.ExecuteReaderAsync())
-            while (await reader.ReadAsync()) existing.Add(reader.GetString(0));
-          string sql = AddOperationColumnsSql(table, existing);
-          if (sql.Length == 0) continue;
-          var migrate = con.CreateCommand();
-          migrate.CommandText = sql;
-          await migrate.ExecuteNonQueryAsync();
+          string sql = AddOperationColumnsSql(table, await SqliteSchema.ColumnsAsync(con, table));
+          if (sql.Length > 0)
+            await SqliteSchema.ExecuteAsync(con, sql);
         }
         _logger.LogInformation("DataLogger DB migrated to v6: heat pump operation and house state columns added");
-        await SetDbVersion(con, 6);
+        await SqliteSchema.SetVersionAsync(con, 6);
       }
       await con.CloseAsync();
     }
@@ -646,7 +652,10 @@ namespace PVControl
       "returntemperature REAL", "windspeed REAL", "athomeminutes REAL", "roomsheating REAL", "roomsetpoint REAL",
     ];
 
-    /// <summary>ALTER TABLE statements for the v6 columns <paramref name="table"/> doesn't have yet (empty if none).</summary>
+    /// <summary>ALTER TABLE statements for the v6 columns a table doesn't have yet.</summary>
+    /// <param name="table">Table name.</param>
+    /// <param name="existing">Columns it has.</param>
+    /// <returns>SQL; empty if none are missing.</returns>
     public static string AddOperationColumnsSql(string table, IReadOnlySet<string> existing) =>
       string.Concat(OperationColumns.Where(c => !existing.Contains(c.Split(' ')[0]))
         .Select(c => $"ALTER TABLE {table} ADD COLUMN {c};\n"));
@@ -657,22 +666,6 @@ namespace PVControl
       DELETE FROM daily  WHERE rowid NOT IN (SELECT MIN(rowid) FROM daily  GROUP BY timestamp);
       CREATE UNIQUE INDEX IF NOT EXISTS ux_hourly_timestamp ON hourly(timestamp);
       CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_timestamp  ON daily(timestamp);";
-    private static async Task SetDbVersion(SqliteConnection con, int version)
-    {
-      var pragmaCommand = con.CreateCommand();
-      pragmaCommand.CommandText = String.Format("PRAGMA user_version={0};", version);
-      await pragmaCommand.ExecuteNonQueryAsync();
-    }
-    private static async Task<int> GetDBVersion(SqliteConnection con)
-    {
-      var pragmaCommand = con.CreateCommand();
-      pragmaCommand.CommandText = "PRAGMA user_version;";
-      using var result = await pragmaCommand.ExecuteReaderAsync();
-      if (await result.ReadAsync())
-        return int.TryParse(result.GetString(0), out int version) ? version : 0;
-
-      return 0;
-    }
 
     [GeneratedRegex(@"^-?\d+\.?\d*$")]
     private static partial Regex RegexNumeric();

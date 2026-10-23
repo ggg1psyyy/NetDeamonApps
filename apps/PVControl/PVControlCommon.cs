@@ -14,12 +14,20 @@ using NetDaemon.Client;
 
 namespace NetDeamon.apps.PVControl
 {
+  /// <summary>Whether the battery needs a grid charge (<see cref="Simulator.EnergySimulator"/>).</summary>
   public struct NeedToChargeResult
   {
+    /// <summary>A grid charge is needed.</summary>
     public bool NeedToCharge;
+    /// <summary>Latest time to start charging.</summary>
     public DateTime LatestChargeTime;
+    /// <summary>SoC at the critical point (or the lowest point without a need), %.</summary>
     public int EstimatedSoc;
 
+    /// <summary>Creates the result.</summary>
+    /// <param name="estimatedSoc">SoC at the critical point, %.</param>
+    /// <param name="latestChargeTime">Latest time to start charging.</param>
+    /// <param name="needToCharge">A grid charge is needed.</param>
     public NeedToChargeResult(int estimatedSoc, DateTime latestChargeTime, bool needToCharge)
     {
       EstimatedSoc = estimatedSoc;
@@ -28,6 +36,11 @@ namespace NetDeamon.apps.PVControl
     }
   }
 
+  /// <summary>A snapshot of the house.</summary>
+  /// <param name="houseLoad">House load, W.</param>
+  /// <param name="soC">Battery SoC, %.</param>
+  /// <param name="inverterState">Inverter mode.</param>
+  /// <param name="pvPower">PV power, W.</param>
   public struct SystemState(int houseLoad, int soC, InverterState inverterState, int pvPower)
   {
     public int PVPower = pvPower;
@@ -35,20 +48,23 @@ namespace NetDeamon.apps.PVControl
     public int SoC = soC;
     public InverterState InverterState = inverterState;
   }
+  /// <summary>An inverter command: mode, reason and the two modifiers.</summary>
+  /// <param name="mode">Inverter mode.</param>
+  /// <param name="modeReason">Why this mode.</param>
+  /// <param name="batteryChargeEnable">PV surplus may charge the battery.</param>
+  /// <param name="exportAllowed">PV surplus may be exported.</param>
   public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true, bool exportAllowed = true)
   {
     public InverterModes Mode = mode;
     public ForceChargeReasons ModeReason = modeReason;
     public bool BatteryChargeEnable = batteryChargeEnable;
-    /// <summary>
-    /// Whether PV surplus may currently be exported to the grid. False when the export price is
-    /// negative — orthogonal to <see cref="Mode"/> so a cheap-import charge decision can still
-    /// run underneath it (see EnergySimulator.ComputeMode's negative-export-price handling).
-    /// </summary>
+    /// <summary>PV surplus may be exported; false at a negative export price, independent of <see cref="Mode"/>.</summary>
     public bool ExportAllowed = exportAllowed;
   }
+  /// <summary>Shared dependencies of PVControl (HA context, MQTT, logger, config, scheduler, API), set once by the app.</summary>
   public class PVControlCommon
   {
+    /// <summary>Single instance (<see cref="PVCCInstance"/>).</summary>
     private PVControlCommon() { }
     private static readonly PVControlCommon _instance = new();
     public static PVControlCommon PVCCInstance => _instance;
@@ -59,6 +75,13 @@ namespace NetDeamon.apps.PVControl
     public static DisposableScheduler PVCC_Scheduler { get; private set; } = null!;
     public static IHomeAssistantApiManager PVCC_ApiManager { get; private set; } = null!;
 
+    /// <summary>Sets the shared dependencies.</summary>
+    /// <param name="haContext">HA context.</param>
+    /// <param name="mqttEntityManager">MQTT entity manager.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="pVConfig">App configuration.</param>
+    /// <param name="scheduler">Scheduler.</param>
+    /// <param name="apiManager">HA REST API.</param>
     public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, IAppConfig<PVConfig> pVConfig, DisposableScheduler scheduler, IHomeAssistantApiManager apiManager)
     {
       PVCC_HaContext = haContext;
@@ -77,8 +100,16 @@ namespace NetDeamon.apps.PVControl
       PVCC_Scheduler = null!;
       PVCC_ApiManager = null!;
     }
-    /// <param name="republish">Publish the config even if the entity exists (no remove, state kept) —
-    /// HA updates the device info (e.g. its firmware version) only from a published config.</param>
+    /// <summary>Creates a PVControl entity via MQTT discovery (device "PV Control") unless it exists.</summary>
+    /// <param name="id">Entity id, e.g. "sensor.pv_control_version".</param>
+    /// <param name="name">Display name.</param>
+    /// <param name="deviceClass">HA device class; null = none.</param>
+    /// <param name="icon">mdi icon.</param>
+    /// <param name="addConfig">Extra discovery config (unit, options, min/max, …).</param>
+    /// <param name="defaultValue">State set after (re)creating; "" = none.</param>
+    /// <param name="reRegister">Remove and create again (drops the entity's config in HA).</param>
+    /// <param name="republish">Publish the config although the entity exists (HA takes device info, e.g. the firmware version, only from it).</param>
+    /// <returns>The entity.</returns>
     public static async Task<Entity> RegisterSensor(string id, string name, string? deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false, bool republish = false)
     {
       var identifiers = new[] { "pv_control" };
@@ -227,11 +258,18 @@ namespace NetDeamon.apps.PVControl
     public int EndHour { get; set; }
     public float Price { get; set; }
 
-    /// <summary>True when <paramref name="t"/> falls within this period's month and hour ranges.</summary>
+    /// <summary>Whether the period is active at a time.</summary>
+    /// <param name="t">Time to check.</param>
+    /// <returns>True if its month and hour lie in the period's ranges.</returns>
     public bool IsActiveAt(DateTime t) =>
       InRange(t.Month, StartMonth, EndMonth, inclusiveEnd: true)
       && InRange(t.Hour, StartHour, EndHour, inclusiveEnd: false);
 
+    /// <summary>Whether a value lies in a range that wraps around when start &gt; end.</summary>
+    /// <param name="value">Value (month or hour).</param>
+    /// <param name="start">Range start (inclusive).</param>
+    /// <param name="end">Range end.</param>
+    /// <param name="inclusiveEnd">Whether the end is included.</param>
     private static bool InRange(int value, int start, int end, bool inclusiveEnd) =>
       start <= end
         ? value >= start && (inclusiveEnd ? value <= end : value < end)

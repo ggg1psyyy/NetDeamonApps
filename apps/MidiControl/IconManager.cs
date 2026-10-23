@@ -17,6 +17,7 @@ using Path = System.IO.Path;
 
 namespace NetDeamon.apps.MidiControl;
 
+/// <summary>Material Design icons as images: downloaded as SVG from GitHub once, converted to PNG and colored.</summary>
 public class IconManager
 {
     private const string GitHubSvgBaseUrl = "https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg";
@@ -26,6 +27,8 @@ public class IconManager
     private readonly Dictionary<string, SemaphoreSlim> _iconLocks;
     private readonly SemaphoreSlim _lockDictionaryLock;
     
+    /// <summary>Creates the manager; the icon directory is created if missing.</summary>
+    /// <param name="iconDirectory">Where SVG and PNG files are kept.</param>
     public IconManager(string iconDirectory = "/config/netdaemon5/ico")
     {
         _iconDirectory = iconDirectory;
@@ -37,6 +40,11 @@ public class IconManager
         Directory.CreateDirectory(_iconDirectory);
     }
 
+    /// <summary>An icon in a size and color (downloads and converts it on first use).</summary>
+    /// <param name="iconName">Icon name, with or without "mdi:".</param>
+    /// <param name="size">Size, px.</param>
+    /// <param name="color">Color.</param>
+    /// <returns>The icon; a placeholder if it can't be loaded.</returns>
     public async Task<Image<Rgba32>> GetIconAsync(string iconName, int size, Color color)
     {
         var cleanIconName = ExtractIconName(iconName);
@@ -96,12 +104,18 @@ public class IconManager
         }
     }
 
+    /// <summary>Icon name without "mdi:".</summary>
+    /// <param name="iconName">Icon name.</param>
     private string ExtractIconName(string iconName)
     {
         if (iconName.StartsWith("mdi:")) return iconName.Substring(4);
         return iconName;
     }
 
+    /// <summary>Downloads an icon's SVG.</summary>
+    /// <param name="iconName">Icon name without "mdi:".</param>
+    /// <param name="outputPath">Target file.</param>
+    /// <returns>True if downloaded.</returns>
     private async Task<bool> DownloadIconAsync(string iconName, string outputPath)
     {
         try
@@ -129,6 +143,10 @@ public class IconManager
         }
     }
 
+    /// <summary>Renders an SVG's path to a PNG.</summary>
+    /// <param name="svgPath">SVG file.</param>
+    /// <param name="pngPath">Target PNG file.</param>
+    /// <param name="size">Size, px.</param>
     private async Task ConvertSvgToPngAsync(string svgPath, string pngPath, int size)
     {
         try
@@ -208,6 +226,9 @@ public class IconManager
         }
     }
 
+    /// <summary>Puts a space before each SVG path command so the path parser accepts it.</summary>
+    /// <param name="pathData">SVG path data.</param>
+    /// <returns>The normalized path.</returns>
     private string NormalizeSvgPath(string pathData)
     {
         // Add space before each command letter (M, L, H, V, C, S, Q, T, A, Z)
@@ -239,6 +260,11 @@ public class IconManager
         return result.ToString();
     }
 
+    /// <summary>Loads a PNG icon, resizes and colors it.</summary>
+    /// <param name="pngPath">PNG file.</param>
+    /// <param name="size">Size, px.</param>
+    /// <param name="color">Color.</param>
+    /// <returns>The icon.</returns>
     private async Task<Image<Rgba32>> LoadAndColorizeIconAsync(string pngPath, int size, Color color)
     {
         var icon = await Image.LoadAsync<Rgba32>(pngPath);
@@ -265,6 +291,10 @@ public class IconManager
         return icon;
     }
 
+    /// <summary>A circle with the icon name's first letter, for icons that can't be loaded.</summary>
+    /// <param name="size">Size, px.</param>
+    /// <param name="color">Color.</param>
+    /// <param name="iconName">Icon name for the letter; empty = circle only.</param>
     private Image<Rgba32> CreatePlaceholder(int size, Color color, string iconName = "")
     {
         var image = new Image<Rgba32>(size, size);

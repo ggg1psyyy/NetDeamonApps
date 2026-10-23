@@ -4,6 +4,7 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.WarmWater;
 
+/// <summary>How far PVControl controls the warm water.</summary>
 public enum WarmWaterMode
 {
   /// <summary>Hands off — the heat pump's automatic runs the tank; PVControl only forecasts it.</summary>
@@ -15,19 +16,29 @@ public enum WarmWaterMode
 }
 
 /// <summary>Live inputs of one control decision.</summary>
-/// <param name="SwitchOn">State of the one-time heating switch — the command. It stays on after the
-/// heat pump reached the setpoint, so it has to be switched off again.</param>
-/// <param name="OneTimeActive">Whether the one-time heating actually runs — the feedback.</param>
-/// <param name="Setpoint">Current one-time setpoint, null when unknown.</param>
+/// <param name="Now">Current time.</param>
+/// <param name="Temp">Tank temperature, °C.</param>
+/// <param name="SwitchOn">One-time heating switch (the command); stays on after the setpoint is reached.</param>
+/// <param name="OneTimeActive">One-time heating actually runs (the feedback).</param>
+/// <param name="Setpoint">One-time setpoint, °C; null if unknown.</param>
+/// <param name="LastCommand">Time of the last command.</param>
 /// <param name="LastStart">When PVControl last switched the one-time heating on.</param>
-/// <param name="LastStop">When a one-time heating last stopped (active → off), for the minimum off-time.</param>
-/// <param name="BoostSawRunning">The one-time heating was seen running since the boost started.</param>
+/// <param name="Mode">Control mode.</param>
+/// <param name="Runs">Planned runs.</param>
+/// <param name="MaxTemp">Highest allowed setpoint, °C.</param>
+/// <param name="BoostOn">Boost switch.</param>
+/// <param name="BoostTemp">Boost target, °C.</param>
+/// <param name="BoostSince">When the boost was switched on.</param>
+/// <param name="BoostSawRunning">The heating was seen running since the boost started.</param>
+/// <param name="BoostTimeoutMinutes">A boost ends after this long.</param>
+/// <param name="LastStop">When a one-time heating last stopped (minimum off-time).</param>
 public readonly record struct ControlInput(
   DateTime Now, double Temp, bool SwitchOn, bool OneTimeActive, double? Setpoint, DateTime? LastCommand, DateTime? LastStart,
   WarmWaterMode Mode, IReadOnlyList<PlannedRun> Runs, double MaxTemp,
   bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes,
   DateTime? LastStop = null);
 
+/// <summary>What to do with the heat pump.</summary>
 public enum ControlCommand
 {
   None,
@@ -39,21 +50,23 @@ public enum ControlCommand
   SetSetpoint,
 }
 
-/// <param name="Target">Setpoint for Start / SetSetpoint.</param>
-/// <param name="EndBoost">Why the boost is over (turn the boost switch off), or null.</param>
+/// <summary>Result of <see cref="WarmWaterControl.Decide"/>.</summary>
+/// <param name="Command">What to do.</param>
+/// <param name="Target">Setpoint for Start / SetSetpoint, °C.</param>
+/// <param name="EndBoost">Why the boost is over (turn the boost switch off); null = not over.</param>
+/// <param name="Reason">Explanation for the sensor.</param>
 public readonly record struct ControlDecision(ControlCommand Command, double? Target, string? EndBoost, string Reason)
 {
+  /// <summary>A decision to do nothing.</summary>
+  /// <param name="reason">Explanation for the sensor.</param>
   public static ControlDecision Wait(string reason) => new(ControlCommand.None, null, null, reason);
 }
 
 /// <summary>
-/// What to do with the heat pump this cycle. The one-time switch is the command, the "active"
-/// sensor the feedback. Every compressor start wears the heat pump, so a heating that runs is
-/// never stopped: it continues to its setpoint, which may only be raised (a later plan or a boost
-/// wanting more). The switch is switched off only after the heat pump stopped by itself (it stays
-/// on otherwise), or when a start wasn't taken. New planned runs need ≥ 3 K of rise and 60 min since
-/// the last run ended. Planned runs only in Auto; a boost in any mode. Pure, so it's testable
-/// without Home Assistant.
+/// What to do with the heat pump this cycle. A running heating is never stopped (compressor starts
+/// wear it): it continues to its setpoint, which may only be raised. The switch goes off only after
+/// the heat pump stopped by itself or a start wasn't taken. New planned runs need ≥ <see cref="MinRunK"/>
+/// rise and <see cref="MinOffTime"/> since the last; planned runs only in Auto, a boost in any mode.
 /// </summary>
 public static class WarmWaterControl
 {
@@ -65,13 +78,12 @@ public static class WarmWaterControl
   public const double BoostReachedK = 0.3;
   /// <summary>No new command within this time after the last one — the heat pump and its sensors need time to react.</summary>
   public static readonly TimeSpan CommandCooldown = TimeSpan.FromMinutes(3);
-  /// <summary>
-  /// How long a start may go unacknowledged (switch on, "active" still off) before it counts as
-  /// not taken and the switch is reset. Measured: "active" follows the switch within 5–7 s, the
-  /// compressor ~2.5 min later (2026-10-15: 144 s) — waiting longer covers a slower start.
-  /// </summary>
+  /// <summary>How long a start may go unacknowledged (switch on, "active" off) before it counts as not taken (measured: active within 5–7 s, compressor ~2.5 min).</summary>
   public static readonly TimeSpan StartAckTimeout = TimeSpan.FromMinutes(10);
 
+  /// <summary>The control decision of this cycle.</summary>
+  /// <param name="c">Live inputs.</param>
+  /// <returns>Command, target and reason.</returns>
   public static ControlDecision Decide(ControlInput c)
   {
     bool cooledDown = c.LastCommand is not { } last || c.Now - last >= CommandCooldown;
@@ -136,12 +148,16 @@ public static class WarmWaterControl
       : ControlDecision.Wait("Plan: waiting for the heat pump"));
   }
 
+  /// <summary>Reason text for the modes that don't control.</summary>
+  /// <param name="mode">Off or PlanOnly.</param>
   static string HandsOff(WarmWaterMode mode) => mode == WarmWaterMode.Off ? "Off (heat pump automatic)" : "Plan only (not controlling)";
 
-  /// <summary>
-  /// The comfort windows from now to <paramref name="horizonEnd"/>: every period daily at its time
-  /// for its duration (a window that started before now and is still open counts too).
-  /// </summary>
+  /// <summary>Comfort windows from now to the horizon: every period daily at its time (a window still open counts).</summary>
+  /// <param name="periods">(start time, duration in minutes) per period.</param>
+  /// <param name="now">Current time.</param>
+  /// <param name="horizonEnd">End of the plan.</param>
+  /// <param name="minTemp">Minimum temperature of the windows, °C.</param>
+  /// <returns>Windows in time order.</returns>
   public static List<ComfortWindow> ComfortWindows(IEnumerable<(TimeOnly Time, int DurationMinutes)> periods, DateTime now, DateTime horizonEnd, double minTemp)
   {
     var windows = new List<ComfortWindow>();
@@ -156,6 +172,9 @@ public static class WarmWaterControl
     return windows.OrderBy(w => w.Start).ToList();
   }
 
-  /// <summary>The heat pump's setpoint has 0.5 K steps — round up, so it heats at least as far as planned.</summary>
+  /// <summary>Heat pump setpoint for a target: rounded up to its 0.5 K steps, at most the maximum.</summary>
+  /// <param name="target">Planned temperature, °C.</param>
+  /// <param name="maxTemp">Highest setpoint, °C.</param>
+  /// <returns>°C.</returns>
   public static double SetpointFor(double target, double maxTemp) => Math.Min(maxTemp, Math.Ceiling(target * 2) / 2);
 }

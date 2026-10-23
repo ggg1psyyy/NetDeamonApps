@@ -47,6 +47,12 @@ public sealed class HeatingTest : IAsyncInitializable
   DateOnly? _lastAttempt;
   string _lastDecision = "";
 
+  /// <summary>Creates the app.</summary>
+  /// <param name="ha">HA context.</param>
+  /// <param name="mqtt">MQTT entity manager.</param>
+  /// <param name="config">App configuration (HeatingTest.yaml).</param>
+  /// <param name="scheduler">Scheduler for the cycle.</param>
+  /// <param name="logger">Logger.</param>
   public HeatingTest(IHaContext ha, IMqttEntityManager mqtt, IAppConfig<HeatingTestConfig> config, IScheduler scheduler, ILogger<HeatingTest> logger)
   {
     _ha = ha;
@@ -288,7 +294,7 @@ public sealed class HeatingTest : IAsyncInitializable
     {
       decision = _lastDecision,
       run_id = _active?.Id,
-      run_end = _active?.PlannedEnd.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture),
+      run_end = _active?.PlannedEnd.ToISO8601(),
       original_level = _active?.OriginalLevel ?? _restore?.OriginalLevel,
       level = Number(_config.LevelEntity),
       next_kind = (_lastKind == RunKind.Test ? RunKind.Reference : RunKind.Test).ToString(),

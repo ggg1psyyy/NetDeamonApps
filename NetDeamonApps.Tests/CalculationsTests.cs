@@ -40,6 +40,13 @@ public class CalculationsTests
     Assert.Equal(new DateTime(2026, 10, 23, eh, em, 0), new DateTime(2026, 10, 23, h, m, s).Floor(minutes));
 
   [Theory]
+  [InlineData(0, 0, 0)]    // on a quarter → itself
+  [InlineData(0, 30, 15)]  // seconds past it → the next one
+  [InlineData(14, 0, 15)]
+  public void Ceiling_Quarter(int m, int s, int expectedMinute) =>
+    Assert.Equal(T.AddMinutes(expectedMinute), T.AddMinutes(m).AddSeconds(s).Ceiling(15));
+
+  [Theory]
   [InlineData(0, 0, 15)]   // on a quarter → the next one
   [InlineData(15, 30, 30)] // seconds into a quarter → the next one
   [InlineData(29, 59, 30)]
@@ -81,6 +88,54 @@ public class CalculationsTests
     Assert.Equal((stored * LevelEnergyLearner.PriorWeightLevels + measured) / (LevelEnergyLearner.PriorWeightLevels + levels),
       LevelEnergyLearner.Blend(stored, measured, levels), 5);
   }
+
+  [Fact]
+  public void AgeWeight_ByDateNotByTime()
+  {
+    Assert.Equal(1.0, Mean.AgeWeight(T.AddHours(5), T, 10), 6);                  // today
+    Assert.Equal(Math.Exp(-0.1), Mean.AgeWeight(T.AddHours(-15), T, 10), 6);     // yesterday 23:00 = 1 day
+    Assert.Equal(Math.Exp(-0.2), Mean.AgeWeight(T.AddDays(2), T, 10), 6);        // ahead counts the same
+  }
+
+  [Fact]
+  public void HourOfDayProfile_WeightedPerHour_SkipsNaN()
+  {
+    (DateTime, double)[] values = [(T, 100), (T.AddDays(-1), 200), (T.AddHours(1), double.NaN), (T.AddMinutes(30), 300)];
+    var profile = Mean.HourOfDayProfile(values, T, 10);
+    double w1 = Math.Exp(-0.1);
+    Assert.Equal((100 + 200 * w1 + 300) / (2 + w1), profile[14], 6);
+    Assert.Equal(0, profile[15]); // only NaN
+    Assert.Equal(0, profile[3]);  // no values
+  }
+
+  [Fact]
+  public void LinearFit_PlainAndWeighted()
+  {
+    double[] xs = [0, 1, 2, 3], ys = [1, 3, 5, 7];
+    var fit = Regression.LinearFit(xs, ys)!.Value;
+    Assert.Equal(2, fit.Slope, 9);
+    Assert.Equal(1, fit.Intercept, 9);
+    // Weight 0 drops the outlier entirely.
+    var weighted = Regression.LinearFit([0, 1, 2, 3, 4], [1, 3, 5, 7, 100], [1, 1, 1, 1, 0])!.Value;
+    Assert.Equal(2, weighted.Slope, 9);
+    Assert.Null(Regression.LinearFit([2, 2, 2], [1, 2, 3]));                 // no spread in x
+    Assert.Equal(4, Regression.InterceptFor(xs, ys, null, slope: 0), 9);      // limited slope: through the means
+  }
+
+  [Fact]
+  public void DayLog_KeepsTheLastDays()
+  {
+    var log = new DayLog<DateTime>(2, d => d);
+    log.Restore([T.Date.AddDays(-3), T.Date.AddDays(-1), T.Date.AddDays(-2)]);
+    Assert.Equal([T.Date.AddDays(-2), T.Date.AddDays(-1)], log.Items);
+    log.Add(T.Date);
+    Assert.Equal([T.Date.AddDays(-1), T.Date], log.Items);
+    Assert.True(log.Has(T.Date));
+    Assert.False(log.Has(T.Date.AddDays(-2)));
+  }
+
+  [Fact]
+  public void Slug_LowerCaseUnderscores() => Assert.Equal("ev_charger", "EV Charger".ToSlug());
 
   [Fact]
   public void StepFunction_PiecesClippedToThePeriod()

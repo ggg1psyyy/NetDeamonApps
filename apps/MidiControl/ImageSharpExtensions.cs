@@ -5,6 +5,11 @@ namespace NetDeamon.apps.MidiControl;
 
 public static class ImageSharpExtensions
 {
+    /// <summary>A rectangle with rounded corners at the origin.</summary>
+    /// <param name="width">Width, px.</param>
+    /// <param name="height">Height, px.</param>
+    /// <param name="cornerRadius">Corner radius, px.</param>
+    /// <returns>The path.</returns>
     public static IPath CreateRoundedRectanglePath(int width, int height, float cornerRadius)
     {
         var pathBuilder = new PathBuilder();

@@ -20,6 +20,7 @@ using TimeSpan = System.TimeSpan;
 
 namespace NetDeamon.apps.PVControl
 {
+  /// <summary>The house's energy model: live averages, the four predictions, costs, the simulation each cycle and the schedulable loads' decisions.</summary>
   public class HouseEnergy
   {
     private readonly RunningIntAverage _loadRunningAverage;
@@ -35,6 +36,7 @@ namespace NetDeamon.apps.PVControl
     public Prediction Prediction_BatterySoC
     { get; private set; }
 
+    /// <summary>Creates the battery, costs, predictions and loads and subscribes to the sensors.</summary>
     public HouseEnergy()
     {
       Battery = new BatteryState();
@@ -140,8 +142,11 @@ namespace NetDeamon.apps.PVControl
 
     }
     // ── Sub-objects ───────────────────────────────────────────────────────────────────────
+    /// <summary>Battery state (SoC, power average, floors).</summary>
     public BatteryState Battery { get; }
+    /// <summary>Energy cost sums and the battery's average cost.</summary>
     public CostTracker Costs { get; }
+    /// <summary>Midnight snapshot of the predictions, to compare with what happened.</summary>
     public DailySnapshots Snapshots { get; }
 
     /// <summary>UserSetting: ForceCharge to 100%</summary>
@@ -150,9 +155,12 @@ namespace NetDeamon.apps.PVControl
     /// UserSetting: Discharge if the export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
     /// </summary>
     public bool OpportunisticDischarge { get; set; }
+    /// <summary>User override of the inverter mode; automatic = the simulation decides.</summary>
     public InverterModes OverrideMode { get; set; }
+    /// <summary>Target SoC of the user force charge, %.</summary>
     public int ForceChargeTargetSoC { get; set; }
 
+    /// <summary>Import and export price lists.</summary>
     public PriceManager Prices { get; } = new();
 
     // ── Schedulable loads ─────────────────────────────────────────────────────────────────
@@ -190,11 +198,9 @@ namespace NetDeamon.apps.PVControl
     public LoadModel.WeatherLoadPrediction? WeatherLoad { get; }
     private DateTime _weatherLoadUpdated;
 
-    /// <summary>
-    /// Updates the load's learned typical power from an instantaneous reading (see
-    /// ChargePowerLearner); persisted when the rounded value moves by 10 W. Also ends the
-    /// energy-per-level measurement once the load has stopped.
-    /// </summary>
+    /// <summary>Updates a load's learned power from a reading (<see cref="ChargePowerLearner"/>); persisted on a 10 W change. Ends the energy-per-level measurement when the load stopped.</summary>
+    /// <param name="load">The load.</param>
+    /// <param name="measuredW">Power reading, W.</param>
     private static async Task LearnPowerAsync(SchedulableLoadRuntime load, float measuredW)
     {
       if (!load.IsDrawingPower)
@@ -208,7 +214,8 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetStateAsync(load.ChargePowerEntity.EntityId, load.LearnedPowerW.ToString(CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Updates the load's learned energy per level unit from the energy counter and level sensor.</summary>
+    /// <summary>Updates a load's learned energy per level unit from its energy counter and level sensor (<see cref="LevelEnergyLearner"/>).</summary>
+    /// <param name="load">The load.</param>
     private static async Task LearnEnergyPerLevelAsync(SchedulableLoadRuntime load)
     {
       if (!load.IsDrawingPower || load.Config.CurrentLevelEntity is null
@@ -222,6 +229,8 @@ namespace NetDeamon.apps.PVControl
         await PVCC_EntityManager.SetStateAsync(load.EnergyPerLevelEntity.EntityId, estimate.ToString("F3", CultureInfo.InvariantCulture));
     }
 
+    /// <summary>Handles a sensor change: prices, power averages, energy counters (costs) and the loads' power and energy.</summary>
+    /// <param name="entity">The changed entity.</param>
     private async Task UserStateChanged(Entity entity)
     {
       if (PVCC_Config.CurrentImportPriceEntities.Any(e => e.EntityId == entity.EntityId)
@@ -323,13 +332,11 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>
-    /// Whether the inverter came back to normal mode from another mode (not from remote mode),
-    /// so the reset signal must be sent before switching back to the selected mode. Only a real
-    /// change counts: when the integration briefly reports "unknown" (live 2026-10-19 14:03:20 –
-    /// 14:03:34, all SolaX sensors), the unknown state isn't stored, so the reading coming back
-    /// equals the last known mode and must not trigger a reset.
-    /// </summary>
+    /// <summary>Whether the inverter came back to normal mode from another mode (not remote), so the reset signal is needed; a brief "unknown" doesn't count.</summary>
+    /// <param name="previous">Last known run mode.</param>
+    /// <param name="current">Run mode now.</param>
+    /// <param name="normalString">The inverter's text for normal mode.</param>
+    /// <returns>True if a reset is needed.</returns>
     public static bool IsReturnToNormalMode(string previous, string current, string normalString) =>
       current != previous && previous != "Normal (R)" && current == normalString;
 
@@ -339,10 +346,8 @@ namespace NetDeamon.apps.PVControl
     private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private SimulationResult? _simulationResult;
 
-    /// <summary>
-    /// Seeds <see cref="_actualSoCHistory"/> from the HA history API on startup, so past SoC slots
-    /// are populated with real values immediately rather than waiting for the first tick.
-    /// </summary>
+    /// <summary>Fills today's past SoC slots from the HA history at startup (the last reading at or before each slot start).</summary>
+    /// <param name="ct">Cancels the history request.</param>
     public async Task SeedSoCHistoryAsync(CancellationToken ct)
     {
       var midnight = DateTime.Now.Date;
@@ -373,10 +378,8 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>
-    /// Runs the two-day forward simulation (today 00:00 – tomorrow 23:45) and updates all
-    /// predictions from its output. Call this instead of UpdatePredictions() each cycle.
-    /// </summary>
+    /// <summary>One cycle: updates the predictions, simulates, replans warm water and the loads when due, then simulates with all extra loads.</summary>
+    /// <param name="extraLoads">Additional fixed loads; null = none.</param>
     public void RunSimulation(List<ExtraLoad>? extraLoads = null)
     {
       // Update upstream predictions first — all with this one clock read: around midnight a second
@@ -505,11 +508,10 @@ namespace NetDeamon.apps.PVControl
     // whether the result satisfies the mode-specific conditions. The first valid start slot
     // determines ChargeNow and the ExtraLoads injected into the final simulation.
 
-    /// <summary>
-    /// Finds the valid scheduling window for a load by iterating over candidate start slots
-    /// and running a test simulation for each. Updates load.ChargeNow/ChargeReason/PredictedEnd.
-    /// The baseline and its grid-supply slots are pre-computed once in RunSimulation.
-    /// </summary>
+    /// <summary>Decides a load (<see cref="DecideLoadWindow"/>), applies the min-off latch to restarts and keeps the session start/stop bookkeeping.</summary>
+    /// <param name="load">The load.</param>
+    /// <param name="baseInput">Simulation input without this load.</param>
+    /// <param name="baseResult">Simulation of <paramref name="baseInput"/>.</param>
     private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
     {
       bool wasActive = load.ChargeNow;
@@ -526,8 +528,7 @@ namespace NetDeamon.apps.PVControl
           && SchedulableLoadRuntime.OffLatchUntil(load.SessionStopTime, load.Config.MinOffMinutes, now,
                load.SessionStopMode == load.Mode && load.SessionStopSettings == settings) is { } until)
       {
-        var notBefore = until.RoundToNearestQuarterHour();
-        if (notBefore < until) notBefore = notBefore.AddMinutes(15);
+        var notBefore = until.Ceiling(TimeRange.SlotMinutes);
         var delayed = SchedulableLoadRuntime.DelayUntil(load.ExtraLoads, notBefore);
         load.ExtraLoads = delayed;
         load.PredictedEnd = delayed.Count > 0 ? delayed.Max(e => e.EndTime) : load.PredictedEnd;
@@ -559,6 +560,10 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>The load decision: gates (off, target, emergency, latch), then the mode ladder Optimal → Priority → PriorityPlus; sets ChargeNow, reason, sessions and end.</summary>
+    /// <param name="load">The load.</param>
+    /// <param name="baseInput">Simulation input without this load.</param>
+    /// <param name="baseResult">Simulation of <paramref name="baseInput"/>.</param>
     private void DecideLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
     {
       var now = DateTime.Now;
@@ -678,7 +683,7 @@ namespace NetDeamon.apps.PVControl
 
       // Optional "ready by" deadline — only PriorityPlus's price scan uses it (it may then exceed
       // the price threshold to finish in time); Optimal/Priority keep their own rules.
-      DateTime? readyBy = load.ReadyByTime is { } rb ? SchedulableLoadRuntime.NextOccurrence(rb, now) : null;
+      DateTime? readyBy = load.ReadyByTime is { } rb ? TimeRange.NextOccurrence(rb, now) : null;
 
       // ── Numbered-mode ladder, climbed from the bottom ───────────────────────────────────────
       // Optimal/Priority/PriorityPlus (LoadSchedulingMode = 10/20/30) are each a complete,
@@ -1125,12 +1130,12 @@ namespace NetDeamon.apps.PVControl
         load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd, readyBy);
     }
 
-    /// <summary>
-    /// Binary-searches for the maximum session end in (currentSlot, maxEnd] where predicate
-    /// is satisfied by the simulation result. Assumes predicate is monotone: if it holds for
-    /// a session ending at T, it also holds for any session ending before T. Returns null if
-    /// even a single 15-minute session fails the predicate.
-    /// </summary>
+    /// <summary>Longest session from the current slot whose simulation passes a predicate (binary search; the predicate must be monotone).</summary>
+    /// <param name="currentSlot">Session start.</param>
+    /// <param name="maxEnd">Latest end.</param>
+    /// <param name="runSim">Simulates a session ending at the given time.</param>
+    /// <param name="predicate">Condition on the simulation.</param>
+    /// <returns>The end; null if even one slot fails.</returns>
     private static DateTime? FindMaxSessionEnd(
       DateTime currentSlot, DateTime maxEnd,
       Func<DateTime, SimulationResult> runSim,
@@ -1156,24 +1161,13 @@ namespace NetDeamon.apps.PVControl
       return best >= 0 ? currentSlot.AddMinutes(best * 15) : null;
     }
 
-    /// <summary>
-    /// Finds the latest session start in [minStart, fixedEnd) where running continuously from
-    /// that start through fixedEnd satisfies predicate, and the resulting window
-    /// (fixedEnd − start) is at least <paramref name="minSessionMinutes"/> long. Used to
-    /// schedule a session as late as possible against a fixed deadline, rather than as long as
-    /// possible from a fixed start.
-    ///
-    /// Deliberately a linear scan from fixedEnd backward, NOT a binary search like
-    /// FindMaxSessionEnd: predicate includes HasNewGridVs, whose force_charge timing is
-    /// price-driven and can jump between discrete price windows as the EV's start time shifts,
-    /// rather than varying smoothly — so "a later start is never harder to satisfy than an
-    /// earlier one" doesn't reliably hold, and a binary search can skip straight over a valid
-    /// later start whose immediate neighbours happen to fail. The scan tests every 15-minute
-    /// candidate from fixedEnd backward (skipping any that wouldn't meet
-    /// minSessionMinutes — e.g. the load's own MinWindowMinutes anti-oscillation floor) and
-    /// returns the first (latest) one that passes, which is correct regardless of whether
-    /// predicate is monotone.
-    /// </summary>
+    /// <summary>Latest start before a fixed end whose simulation passes a predicate; a linear scan backward (the predicate isn't monotone: grid charging jumps between price windows).</summary>
+    /// <param name="minStart">Earliest start.</param>
+    /// <param name="fixedEnd">Session end.</param>
+    /// <param name="minSessionMinutes">Shortest session.</param>
+    /// <param name="runSimFrom">Simulates a session starting at the given time.</param>
+    /// <param name="predicate">Condition on the simulation.</param>
+    /// <returns>The start; null if none passes.</returns>
     private static DateTime? FindLatestSessionStart(
       DateTime minStart, DateTime fixedEnd, int minSessionMinutes,
       Func<DateTime, SimulationResult> runSimFrom,
@@ -1192,9 +1186,16 @@ namespace NetDeamon.apps.PVControl
       return null;
     }
 
+    /// <summary>Earlier of two times.</summary>
+    /// <param name="a">First time.</param>
+    /// <param name="b">Second time.</param>
     private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
+    /// <summary>Later of two times.</summary>
+    /// <param name="a">First time.</param>
+    /// <param name="b">Second time.</param>
     private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
 
+    /// <summary>Inverter command now: the simulation's running slot, or the user override.</summary>
     public InverterState ProposedState
     {
       get
@@ -1256,12 +1257,16 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>Base house load (without active schedulable loads), 5-min average, W.</summary>
     public int CurrentAverageHouseLoad => _loadRunningAverage.GetAverage();
 
+    /// <summary>PV power, 15-min average, W.</summary>
     public int CurrentAveragePVPower => _pvRunningAverage.GetAverage();
 
     private readonly CounterInterpolator _pvEnergyToday = new(100);
 
+    /// <summary>Adds a PV reading to the average and the PV energy interpolation.</summary>
+    /// <param name="watts">PV power, W.</param>
     private void AddPVPower(int watts)
     {
       _pvRunningAverage.AddValue(watts);
@@ -1277,8 +1282,11 @@ namespace NetDeamon.apps.PVControl
       return 0;
     }
 
+    /// <summary>Grid power, 1-min average, W (positive = import).</summary>
     public int CurrentAverageGridPower => _gridRunningAverage.GetAverage() * -1;
 
+    /// <summary>Adds a grid reading to the 1-min average.</summary>
+    /// <param name="value">Grid sensor value, W (negative = import).</param>
     public void AddAverageGridPowerValue(int value)
     {
       _gridRunningAverage.AddValue(value);
@@ -1290,19 +1298,21 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Full simulation result including PV windows and derived predicates.</summary>
     public SimulationResult? SimulationState => _simulationResult;
 
+    /// <summary>Same as <see cref="RunSimulation"/>.</summary>
     public void UpdatePredictions() => RunSimulation();
 
-    /// <summary>The load prediction's 48-h window doesn't start today (or is empty): after midnight
-    /// it still covers yesterday + today and has to be recalculated.</summary>
+    /// <summary>Whether the load prediction's window must be rebuilt for a new day.</summary>
+    /// <param name="window">The prediction's 48-h window.</param>
+    /// <param name="now">Current time.</param>
+    /// <returns>True if it doesn't start today or is empty.</returns>
     public static bool NeedsDayRollover(IReadOnlyDictionary<DateTime, int> window, DateTime now) =>
       window.Count == 0 || window.Keys.Min().Date != now.Date;
 
     private bool _loadRolloverFailed;
     private DateTime _lastLoadRetry;
 
-    /// <summary>Recalculates the load prediction for the new day — the normal midnight step (logged
-    /// as information). Only a failed recalculation is an error, logged once until it works again;
-    /// the health sensor shows it too (load prediction invalid).</summary>
+    /// <summary>Rebuilds the load prediction for the new day; a failure is logged once until it works again.</summary>
+    /// <param name="now">Current time.</param>
     private void RollOverLoadPrediction(DateTime now)
     {
       try
@@ -1330,13 +1340,16 @@ namespace NetDeamon.apps.PVControl
 
     private readonly LoadDeviationTracker _loadDeviation = new();
 
-    /// <summary>Whether the load's min-on or min-off latch currently holds (ignoring bypasses).</summary>
+    /// <summary>Whether the load's min-on or min-off latch holds (bypasses ignored).</summary>
+    /// <param name="load">The load.</param>
+    /// <param name="now">Current time.</param>
     private static bool IsLatched(SchedulableLoadRuntime load, DateTime now) =>
       load.ChargeNow
         ? load.SessionStartTime is { } s && (now - s).TotalMinutes < load.Config.MinWindowMinutes
         : SchedulableLoadRuntime.OffLatchUntil(load.SessionStopTime, load.Config.MinOffMinutes, now, true) is not null;
 
     /// <summary>Makes every schedulable load search its window again on the next cycle.</summary>
+    /// <param name="reason">Why (shown as the plan reason).</param>
     public void RequestReplan(string reason)
     {
       foreach (var load in SchedulableLoads)

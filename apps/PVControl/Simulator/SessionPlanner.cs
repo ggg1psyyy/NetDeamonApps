@@ -124,8 +124,7 @@ public static class SessionPlanner
       var baseline = EnergySimulator.Simulate(input);
 
       var lastEnd = sessions[^1].EndTime;
-      var from = lastEnd.RoundToNearestQuarterHour();
-      if (from < lastEnd) from = from.AddMinutes(15);
+      var from = lastEnd.Ceiling(TimeRange.SlotMinutes);
 
       var start = FindBestPriceAwareStart(from, horizonEnd, remainingMinutes,
         (s, e) => input.SimulateWith(template.Between(s, e)),

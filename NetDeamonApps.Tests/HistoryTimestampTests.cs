@@ -19,7 +19,7 @@ public class HistoryTimestampTests
   [Fact]
   public void DbTimestamp_WithLocalOffset_IsReadAsThatLocalTime()
   {
-    var t = DataLogger.ParseDbTimestamp("2026-06-27T12:59:59+02:00");
+    var t = NetDeamon.apps.Extensions.FromISO8601("2026-06-27T12:59:59+02:00");
 
     Assert.Equal(new DateTime(2026, 6, 27, 12, 59, 59), t);
     Assert.NotEqual(DateTimeKind.Utc, t.Kind);
@@ -29,7 +29,7 @@ public class HistoryTimestampTests
   public void DbTimestamp_WrittenAsUtc_IsConvertedToLocal()
   {
     // The rows the broken logger wrote: same instant as 12:59:59+02:00.
-    Assert.Equal(new DateTime(2026, 6, 27, 12, 59, 59), DataLogger.ParseDbTimestamp("2026-06-27T10:59:59+00:00"));
+    Assert.Equal(new DateTime(2026, 6, 27, 12, 59, 59), NetDeamon.apps.Extensions.FromISO8601("2026-06-27T10:59:59+00:00"));
   }
 
   // ── DataLogger counter differences ───────────────────────────────────────────────────

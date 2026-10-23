@@ -153,10 +153,13 @@ namespace NetDeamon.apps
     /// <summary>Formats a time as ISO 8601 with offset (yyyy-MM-ddTHH:mm:ss±zz:zz).</summary>
     /// <param name="date">Time to format.</param>
     /// <returns>The formatted string.</returns>
-    public static string ToISO8601(this DateTime date)
-    {
-      return date.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz");
-    }
+    public static string ToISO8601(this DateTime date) =>
+      date.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz", CultureInfo.InvariantCulture);
+
+    /// <summary>Reads an ISO 8601 time with offset (e.g. "2026-06-27T12:59:59+02:00", DB and HA) as local time.</summary>
+    /// <param name="text">The time text.</param>
+    /// <returns>Local time (not UTC, as SqliteDataReader.GetDateTime returns for offsets).</returns>
+    public static DateTime FromISO8601(string text) => DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime;
     /// <summary>Factor from an entity's unit_of_measurement to the base unit (W, Wh, €).</summary>
     /// <param name="entity">Entity with the unit attribute.</param>
     /// <returns>The factor; 1 without a unit.</returns>
@@ -494,6 +497,10 @@ namespace NetDeamon.apps
     // The three helpers below run inside the simulator's per-slot loop (thousands of times per
     // planning cycle), so they're single passes without allocation. "First" = first in the
     // dictionary's enumeration order among entries with start <= key <= end (default = unbounded).
+    /// <summary>Whether a time lies in [start, end]; default bounds are open.</summary>
+    /// <param name="key">Time to test.</param>
+    /// <param name="start">Start (inclusive); default = unbounded.</param>
+    /// <param name="end">End (inclusive); default = unbounded.</param>
     private static bool InRange(DateTime key, DateTime start, DateTime end) =>
       (start == default || key >= start) && (end == default || key <= end);
 
@@ -581,6 +588,11 @@ namespace NetDeamon.apps
     /// <returns>The quarter start; seconds dropped.</returns>
     public static DateTime RoundToNearestQuarterHour(this DateTime time) => time.Floor(TimeRange.SlotMinutes);
 
+    /// <summary>A UTC time as local time; other kinds unchanged (DB timestamps).</summary>
+    /// <param name="time">Time of any kind.</param>
+    /// <returns>Local time.</returns>
+    public static DateTime AsLocal(this DateTime time) => time.Kind == DateTimeKind.Utc ? time.ToLocalTime() : time;
+
     /// <summary>Next quarter-hour strictly after a time.</summary>
     /// <param name="time">Any time.</param>
     /// <returns>The next quarter start.</returns>
@@ -635,6 +647,11 @@ namespace NetDeamon.apps
       return false;
     }
 
+    /// <summary>HA entity-id part of a name: lower case, spaces as underscores.</summary>
+    /// <param name="name">Display name, e.g. "EV Charger".</param>
+    /// <returns>e.g. "ev_charger".</returns>
+    public static string ToSlug(this string name) => name.ToLowerInvariant().Replace(' ', '_');
+
     /// <summary>Cuts a string to a maximum length.</summary>
     /// <param name="str">String to cut.</param>
     /// <param name="maxLength">Maximum length; ≤ 0 gives "".</param>
@@ -647,6 +664,43 @@ namespace NetDeamon.apps
     }
     #endregion
   }
+  /// <summary>One entry per day for the last days, oldest first (price publications, scored nights).</summary>
+  /// <typeparam name="T">Entry type.</typeparam>
+  /// <param name="keep">Days kept; older entries are dropped.</param>
+  /// <param name="dayOf">The day an entry belongs to.</param>
+  public sealed class DayLog<T>(int keep, Func<T, DateTime> dayOf)
+  {
+    private readonly List<T> _items = [];
+
+    /// <summary>The entries, oldest first.</summary>
+    public IReadOnlyList<T> Items => _items;
+
+    /// <summary>Replaces the entries (after a restart), keeping the last <paramref name="keep"/> days.</summary>
+    /// <param name="items">Entries in any order.</param>
+    public void Restore(IEnumerable<T> items)
+    {
+      _items.Clear();
+      _items.AddRange(items.OrderBy(dayOf).TakeLast(keep));
+    }
+
+    /// <summary>Whether there is an entry for a day.</summary>
+    /// <param name="day">The day (date).</param>
+    public bool Has(DateTime day) => _items.Any(i => dayOf(i) == day);
+
+    /// <summary>Adds an entry, dropping the oldest beyond <paramref name="keep"/>.</summary>
+    /// <param name="item">The new entry (the newest day).</param>
+    public void Add(T item)
+    {
+      _items.Add(item);
+      if (_items.Count > keep) _items.RemoveAt(0);
+    }
+
+    /// <summary>Replaces an entry.</summary>
+    /// <param name="index">Index in <see cref="Items"/>.</param>
+    /// <param name="item">The new entry.</param>
+    public void Set(int index, T item) => _items[index] = item;
+  }
+
   /// <summary>Queue that drops its oldest item when full.</summary>
   /// <typeparam name="T">Item type.</typeparam>
   /// <param name="capacity">Maximum number of items.</param>
