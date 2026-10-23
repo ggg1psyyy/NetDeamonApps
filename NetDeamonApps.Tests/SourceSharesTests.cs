@@ -82,6 +82,18 @@ public class SourceSharesTests
     Assert.Equal(0.0001f, CostTracker.BlendAverageCost(5, 0.0001f, 1, 0f), 6); // free PV never reaches 0
   }
 
+  [Fact]
+  public void CounterDelta_WhToKwh_FirstReadingAndMidnightReset()
+  {
+    // Live 2026-10-21: the battery input counter (1.3 kWh, read in Wh as 1300) was taken as kWh —
+    // every 0.1-kWh step counted as 100 kWh and swung the average between grid price and 0.
+    float last = float.NaN;
+    Assert.Equal(0f, CostTracker.CounterDeltaKwh(ref last, 1200));        // first reading: baseline
+    Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 1300), 4);   // 0.1 kWh, not 100
+    Assert.True(CostTracker.CounterDeltaKwh(ref last, 100) < 0);          // midnight reset: ignored by callers
+    Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 200), 4);    // counts on from the new day
+  }
+
   // ── Price lookup ─────────────────────────────────────────────────────────────────────
 
   [Fact]

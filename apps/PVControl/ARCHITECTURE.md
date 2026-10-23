@@ -592,6 +592,10 @@ simulation's `NetGridCostVs` (mean outside the prices), and the € come from on
 slot prices of the warm water and the EV) passes the export price: per slot it costs the import
 and earns the export (export = PV not used, a negative PV amount), which values PV by the export
 it displaces — what using a kWh costs, rather than what was paid for it.
+The battery input counter is read in Wh (base unit) like the import/export counters, and all
+three go through `CostTracker.CounterDeltaKwh`. The battery used its own copy that took the Wh
+value as kWh: each 0.1-kWh step counted as 100 kWh, so the average swung between the grid price
+(2026-10-21 00:00, 0.0001 → 0.317 €/kWh in one step) and 0 (07:33 → 0.0056) instead of blending.
 
 ---
 

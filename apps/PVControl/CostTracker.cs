@@ -16,9 +16,10 @@ public class CostTracker
   private const float BatteryAvgCostMaxEurPerKwh = 1.0f;
 
   private float _batteryAvgCostPerKwh;
-  private float _lastBatteryInputEnergyKwh = -1f; // -1 = not yet initialized
-  private float _lastImportEnergySum;
-  private float _lastExportEnergySum;
+  // Last readings of the daily energy counters, kWh; NaN until the first reading.
+  private float _lastBatteryInputEnergyKwh = float.NaN;
+  private float _lastImportEnergySum = float.NaN;
+  private float _lastExportEnergySum = float.NaN;
 
   // ── Cost sum entities (HA is the source of truth — no local copy) ─────────────────────
   /// <summary>Set by PVControl after entity registration; CostTracker writes directly to these.</summary>
@@ -46,16 +47,18 @@ public class CostTracker
 
   public float BatteryAvgCostPerKwh => _batteryAvgCostPerKwh;
 
-  /// <summary>Starts from the current daily import/export counters.</summary>
+  /// <summary>Starts from the current daily import, export and battery input counters.</summary>
   /// <exception cref="NullReferenceException">The daily energy entities are not configured.</exception>
   public CostTracker()
   {
     if (PVCC_Config.DailyExportEnergyEntity is null || PVCC_Config.DailyImportEnergyEntity is null)
       throw new NullReferenceException("DailyEnergyEntities not available");
-    if (PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float lastExportEnergySum))
-      _lastExportEnergySum = lastExportEnergySum / 1000;
-    if (PVCC_Config.DailyImportEnergyEntity.TryGetStateValue(out float lastImportEnergySum))
-      _lastImportEnergySum = lastImportEnergySum / 1000;
+    if (PVCC_Config.DailyExportEnergyEntity.TryGetStateValue(out float exportWh))
+      CounterDeltaKwh(ref _lastExportEnergySum, exportWh);
+    if (PVCC_Config.DailyImportEnergyEntity.TryGetStateValue(out float importWh))
+      CounterDeltaKwh(ref _lastImportEnergySum, importWh);
+    if (PVCC_Config.BatteryInputEnergyEntity?.TryGetStateValue(out float batteryInputWh) == true)
+      CounterDeltaKwh(ref _lastBatteryInputEnergyKwh, batteryInputWh);
   }
 
   /// <summary>Adds an amount to a sum sensor.</summary>
@@ -79,23 +82,12 @@ public class CostTracker
   }
 
   /// <summary>Blends the energy charged since the last reading into the battery's average cost.</summary>
-  /// <param name="batteryInputKwh">Battery input counter (kWh, daily; resets at midnight).</param>
+  /// <param name="batteryInputWh">Daily battery input counter in Wh (base unit; resets at midnight).</param>
   /// <param name="sources">Sources of the charge (<see cref="SourceShares.ForBatteryCharge"/>); PV is free.</param>
   /// <param name="importPrices">Gross import prices.</param>
-  public async Task OnBatteryInputEnergyChangedAsync(float batteryInputKwh, SourceShares sources, PriceList importPrices)
+  public async Task OnBatteryInputEnergyChangedAsync(float batteryInputWh, SourceShares sources, PriceList importPrices)
   {
-    float currentKwh = batteryInputKwh; // sensor reports in kWh
-
-    // First call or midnight reset (sensor went backwards) — just store the baseline.
-    if (_lastBatteryInputEnergyKwh < 0 || currentKwh < _lastBatteryInputEnergyKwh)
-    {
-      _lastBatteryInputEnergyKwh = currentKwh;
-      return;
-    }
-
-    float deltaKwh = currentKwh - _lastBatteryInputEnergyKwh;
-    _lastBatteryInputEnergyKwh = currentKwh;
-
+    float deltaKwh = CounterDeltaKwh(ref _lastBatteryInputEnergyKwh, batteryInputWh);
     if (deltaKwh <= 0) return;
 
     // A share the split can't place counts at the battery's own cost (leaves the average as is).
@@ -153,14 +145,15 @@ public class CostTracker
     }
   }
 
-  /// <summary>Energy since the last reading of a daily counter.</summary>
-  /// <param name="lastKwh">Last reading in kWh; set to this reading.</param>
-  /// <param name="counterWh">This reading in Wh.</param>
-  /// <returns>kWh since the last reading; negative at the midnight reset.</returns>
-  private static float CounterDeltaKwh(ref float lastKwh, float counterWh)
+  /// <summary>Energy since the last reading of a daily counter — the one conversion for all three counters.</summary>
+  /// <param name="lastKwh">Last reading in kWh (NaN = none yet); set to this reading.</param>
+  /// <param name="counterWh">This reading in Wh (the base unit of <see cref="Extensions.TryGetStateValue{T}"/>).</param>
+  /// <returns>kWh since the last reading; 0 for the first reading, negative at the midnight reset.</returns>
+  public static float CounterDeltaKwh(ref float lastKwh, float counterWh)
   {
-    float diff = counterWh / 1000 - lastKwh;
-    lastKwh = counterWh / 1000;
+    float kwh = counterWh / 1000;
+    float diff = float.IsNaN(lastKwh) ? 0 : kwh - lastKwh;
+    lastKwh = kwh;
     return diff;
   }
 }
