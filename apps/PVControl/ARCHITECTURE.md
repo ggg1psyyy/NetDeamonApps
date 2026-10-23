@@ -548,6 +548,21 @@ provider bills hourly (`ImportPriceResolution: Hourly`), so a 15-min source neve
 prices. The health check's `price_source` now means "a source has no data at all" instead of
 "not the first one is used".
 
+**What a kWh cost** (`SourceShares`, `PriceList.GetPriceOrMean`). The battery's average stored
+cost and the extra loads' cost totals used two separate source splits: the battery counted a
+whole charge delta at the import price as soon as the grid meter showed import (else free), the
+EV split PV → grid → battery with the 15-min PV average against a 1-min grid average. Now both go
+through `SourceShares` (PV first, then grid, the rest battery), and the PV surplus comes from the
+meters' balance PV − load = battery charge − grid import, so only the 1-min battery and grid
+averages are needed — the PV average lags the steep evening ramp, a grid charge at dusk would
+have counted partly as PV. The import price is looked up with the same `GetPriceOrMean` as the
+simulation's `NetGridCostVs` (mean outside the prices), and the € come from one function,
+`SourceShares.Cost`, for all three: the only difference is its `pvPrice` parameter. Money paid
+(battery average cost, loads' cost totals) passes 0 — PV is free. `NetGridCostVs` (behind the
+slot prices of the warm water and the EV) passes the export price: per slot it costs the import
+and earns the export (export = PV not used, a negative PV amount), which values PV by the export
+it displaces — what using a kWh costs, rather than what was paid for it.
+
 ---
 
 ## HA entity auto-creation

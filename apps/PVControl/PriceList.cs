@@ -121,6 +121,25 @@ namespace NetDeamon.apps.PVControl
         : _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time).Price;
     }
 
+    /// <summary>
+    /// Price at the given time, or <see cref="Mean"/> where no entry covers it — 0 would make
+    /// energy after the price horizon look free. The one lookup for what a kWh costs: the
+    /// simulation's grid cost (<see cref="Simulator.SimulationResult.NetGridCostVs"/>), the battery's
+    /// stored-energy cost and the extra loads' cost totals.
+    /// </summary>
+    public float GetPriceOrMean(DateTime time)
+    {
+      _priceByQuarter ??= BuildQuarterIndex();
+      if (_priceByQuarter.TryGetValue(time.RoundToNearestQuarterHour(), out var price))
+        return price;
+      var entry = _entries.FirstOrDefault(p => p.StartTime <= time && p.EndTime > time);
+      return entry.EndTime > entry.StartTime ? entry.Price : Mean;
+    }
+
+    /// <summary>Mean price of all entries (0 for an empty list).</summary>
+    public float Mean => _mean ??= _entries.Count > 0 ? _entries.Average(p => p.Price) : 0f;
+    private float? _mean;
+
     private Dictionary<DateTime, float>? _priceByQuarter;
     private Dictionary<DateTime, float> BuildQuarterIndex()
     {

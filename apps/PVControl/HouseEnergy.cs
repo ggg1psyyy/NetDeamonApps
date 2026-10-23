@@ -260,8 +260,8 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == PVCC_Config.BatteryInputEnergyEntity?.EntityId && PVCC_Config.BatteryInputEnergyEntity.TryGetStateValue(out float batInput))
       {
-        int gridPowerW = PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int gp) ? gp : 0;
-        await Costs.OnBatteryInputEnergyChangedAsync(batInput, gridPowerW, Prices.PriceListImport);
+        await Costs.OnBatteryInputEnergyChangedAsync(batInput,
+          SourceShares.ForBatteryCharge(Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower), Prices.PriceListImport);
       }
       foreach (var schedLoad in SchedulableLoads.Where(l => l.Config.ActualPowerEntity is not null
         && entity.EntityId == l.Config.ActualPowerEntity!.EntityId))
@@ -287,15 +287,11 @@ namespace NetDeamon.apps.PVControl
         }
         else if (diff > 0)
         {
-          // Decompose energy source: PV direct (free) → grid direct → battery (avg cost).
+          // Energy source: PV (free) → grid → battery (avg cost) — same calculation as the battery's cost.
           int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.LearnedPowerW;
-          float pvSurplusW = Math.Max(0f, CurrentAveragePVPower - CurrentAverageHouseLoad);
-          float pvFraction      = schedPowerW > 0 ? Math.Min(1f, pvSurplusW / schedPowerW) : 0f;
-          float remainFraction  = 1f - pvFraction;
-          float gridFraction    = schedPowerW > 0 ? Math.Min(remainFraction, Math.Max(0f, CurrentAverageGridPower) / schedPowerW) : 0f;
-          float batteryFraction = remainFraction - gridFraction;
-          float effectivePrice  = gridFraction * Prices.PriceListImport.GetPrice(DateTime.Now)
-                                + batteryFraction * Costs.BatteryAvgCostPerKwh;
+          float effectivePrice = SourceShares
+            .ForLoad(schedPowerW, Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower)
+            .Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now), Costs.BatteryAvgCostPerKwh);
 
           // Maintain totals in memory — never read back from the entity to avoid the
           // MQTT read-modify-write race that causes exponential accumulation.

@@ -119,7 +119,7 @@ The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only 
 | `sensor.pv_control_sum_import_cost_network_only` | Cumulative import cost — network/grid fee only |
 | `sensor.pv_control_sum_export_earnings_brutto` | Cumulative gross export earnings (€) |
 | `sensor.pv_control_sum_import_export_net_cost` | Net cost = import − export (€) |
-| `sensor.pv_control_battery_avg_cost_per_kwh` | Rolling average cost per kWh stored in battery |
+| `sensor.pv_control_battery_avg_cost_per_kwh` | Average cost per kWh stored in the battery: each charged kWh split by source (PV free, grid at the import price), blended into the stored energy — the same calculation as the loads' `total_cost` |
 
 #### Battery / forecast entities
 
@@ -336,6 +336,7 @@ dotnet test NetDeamonApps.Tests/
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |
+| `SourceSharesTests` | What a kWh costs by source (battery average cost, loads' cost totals) and the shared price lookup |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |
 | `AppVersionTests` | Build version from git (commit count, hash, `.dirty`) |
 

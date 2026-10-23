@@ -182,29 +182,13 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
   public float NetGridCostVs(SimulationResult baseline)
   {
     float missingEndKwh = (baseline.Slots[^1].SoC - Slots[^1].SoC) * _input.BatteryCapacityWh / 100f / 1000f;
-    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * MeanPrice(_input.ImportPrices);
+    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * _input.ImportPrices.Mean;
   }
 
   private float? _ownGridCost;
-  private float OwnGridCost => _ownGridCost ??= ComputeOwnGridCost();
-
-  private float ComputeOwnGridCost()
-  {
-    static Dictionary<DateTime, float> ByQuarter(PriceList quarterly)
-    {
-      var d = new Dictionary<DateTime, float>();
-      foreach (var p in quarterly) d.TryAdd(p.StartTime, p.Price);
-      return d;
-    }
-    var import = ByQuarter(_input.QuarterHourlyImportPrices);
-    var export = ByQuarter(_input.ExportPrices.NormalizeToQuarterHourly());
-    float meanImport = MeanPrice(_input.ImportPrices), meanExport = MeanPrice(_input.ExportPrices);
-    return Slots.Sum(s =>
-      s.GridImportWh / 1000f * import.GetValueOrDefault(s.Time, meanImport)
-      - s.GridExportWh / 1000f * export.GetValueOrDefault(s.Time, meanExport));
-  }
-
-  private static float MeanPrice(PriceList prices) => prices.Count > 0 ? prices.Average(p => p.Price) : 0f;
+  private float OwnGridCost => _ownGridCost ??= Slots.Sum(s =>
+    new SourceShares(Pv: -s.GridExportWh / 1000f, Grid: s.GridImportWh / 1000f, Battery: 0)
+      .Cost(_input.ImportPrices.GetPriceOrMean(s.Time), batteryPrice: 0, pvPrice: _input.ExportPrices.GetPriceOrMean(s.Time)));
 
   // ── Helpers ────────────────────────────────────────────────────────────────────────────
   private static DateTime? PvEdge(

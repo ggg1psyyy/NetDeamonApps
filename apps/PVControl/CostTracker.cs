@@ -73,10 +73,11 @@ public class CostTracker
 
   /// <summary>
   /// Called when the battery input energy sensor changes. Uses the actual energy delta
-  /// to update the running average cost per kWh stored in the battery.
-  /// Source is grid (import price) when grid power is negative (importing), otherwise PV (free).
+  /// to update the running average cost per kWh stored in the battery. The delta is priced by
+  /// <paramref name="sources"/> (<see cref="SourceShares.ForBatteryCharge"/>: PV free, the grid
+  /// share at the import price) — the same calculation as the extra loads' costs.
   /// </summary>
-  public async Task OnBatteryInputEnergyChangedAsync(float batteryInputKwh, int gridPowerW, PriceList importPrices)
+  public async Task OnBatteryInputEnergyChangedAsync(float batteryInputKwh, SourceShares sources, PriceList importPrices)
   {
     float currentKwh = batteryInputKwh; // sensor reports in kWh
 
@@ -92,21 +93,25 @@ public class CostTracker
 
     if (deltaKwh <= 0) return;
 
-    // Grid importing (gridPower < 0) while battery charges → grid is the source.
-    float sourcePrice = gridPowerW < 0 ? importPrices.GetPrice(DateTime.Now) : 0f;
+    // A share the split can't place counts at the battery's own cost (leaves the average as is).
+    float sourcePrice = sources.Cost(importPrices.GetPriceOrMean(DateTime.Now), _batteryAvgCostPerKwh);
 
-    // Weighted average: blend existing stored energy cost with new charge cost.
     // currentStoredKwh from the battery SoC entity is the authoritative stored energy.
     if (!PVCC_Config.BatterySoCEntity.TryGetStateValue(out int socPct) ||
         !PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out int capWh))
       return;
-    float currentStoredKwh = Math.Max(0.1f, socPct * capWh / 100f / 1000f);
-    _batteryAvgCostPerKwh = Math.Clamp(
-      (currentStoredKwh * _batteryAvgCostPerKwh + deltaKwh * sourcePrice) / (currentStoredKwh + deltaKwh),
-      BatteryAvgCostMinEurPerKwh, BatteryAvgCostMaxEurPerKwh);
+    _batteryAvgCostPerKwh = BlendAverageCost(socPct * capWh / 100f / 1000f, _batteryAvgCostPerKwh, deltaKwh, sourcePrice);
     if (_batteryAvgCostEntity != null)
       await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
         _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
+  }
+
+  /// <summary>Weighted average: the stored energy at its average cost blended with the new charge at its price, clamped to the plausible range.</summary>
+  public static float BlendAverageCost(float storedKwh, float avgCostPerKwh, float deltaKwh, float pricePerKwh)
+  {
+    storedKwh = Math.Max(0.1f, storedKwh);
+    return Math.Clamp((storedKwh * avgCostPerKwh + deltaKwh * pricePerKwh) / (storedKwh + deltaKwh),
+      BatteryAvgCostMinEurPerKwh, BatteryAvgCostMaxEurPerKwh);
   }
 
   /// <summary>Called when the daily export energy sensor changes. Accumulates export earnings.</summary>
