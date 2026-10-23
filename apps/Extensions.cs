@@ -12,6 +12,10 @@ using System.Web;
 
 namespace NetDeamon.apps
 {
+  /// <summary>Price of a time range.</summary>
+  /// <param name="startTime">Start (inclusive).</param>
+  /// <param name="endTime">End (exclusive).</param>
+  /// <param name="price">Price in €/kWh.</param>
   public struct PriceTableEntry(DateTime startTime, DateTime endTime, float price)
   {
     [JsonPropertyName("start_time")]
@@ -20,6 +24,11 @@ namespace NetDeamon.apps
     public DateTime EndTime { get; set; } = endTime;
     [JsonPropertyName("price_per_kwh")]
     public float Price { get; set; } = price;
+
+    /// <summary>Whether a time lies in this entry.</summary>
+    /// <param name="t">Time to test.</param>
+    /// <returns>True if StartTime ≤ <paramref name="t"/> &lt; EndTime.</returns>
+    public readonly bool Covers(DateTime t) => TimeRange.Contains(StartTime, EndTime, t);
   }
   public enum InverterModes
   {
@@ -107,6 +116,15 @@ namespace NetDeamon.apps
   }
   public static class Extensions
   {
+    /// <summary>Reads an entity's state history from the HA REST API (history/period).</summary>
+    /// <param name="apiManager">HA API.</param>
+    /// <param name="entity">Entity to read.</param>
+    /// <param name="startDateTime">Start of the period.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <param name="getMinimal">Minimal response: only state and last_changed after the first entry.</param>
+    /// <param name="getAttributes">Include the attributes.</param>
+    /// <param name="endDateTime">End of the period; null = now.</param>
+    /// <returns>(true, entries in time order), or (false, empty) on error or no data.</returns>
     public static async Task<Tuple<bool, List<SensorData>>> GetEntityHistoryAsync(this IHomeAssistantApiManager apiManager, Entity entity, DateTime startDateTime, CancellationToken cancellationToken, bool getMinimal = false, bool getAttributes = false, DateTime? endDateTime = null)
     {
       ArgumentNullException.ThrowIfNull(entity);
@@ -132,16 +150,25 @@ namespace NetDeamon.apps
         return new Tuple<bool, List<SensorData>>(false, []);
       }
     }
+    /// <summary>Formats a time as ISO 8601 with offset (yyyy-MM-ddTHH:mm:ss±zz:zz).</summary>
+    /// <param name="date">Time to format.</param>
+    /// <returns>The formatted string.</returns>
     public static string ToISO8601(this DateTime date)
     {
       return date.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz");
     }
+    /// <summary>Factor from an entity's unit_of_measurement to the base unit (W, Wh, €).</summary>
+    /// <param name="entity">Entity with the unit attribute.</param>
+    /// <returns>The factor; 1 without a unit.</returns>
     public static float GetUnitMultiplicator(this Entity entity)
     {
       if (!entity.TryGetJsonAttribute("unit_of_measurement", out JsonElement unitAttr))
         return 1f;
       return GetUnitMultiplicator(unitAttr.ToString());
     }
+    /// <summary>Factor from a unit to its base unit: k/M/m before W/Wh, ct → €.</summary>
+    /// <param name="unit">Unit string, e.g. "kWh", "ct/kWh".</param>
+    /// <returns>The factor; 1 for base or unknown units.</returns>
     public static float GetUnitMultiplicator(string? unit)
     {
       if (unit is not null && unit.Length > 1)
@@ -165,6 +192,12 @@ namespace NetDeamon.apps
       }
       return 1f;
     }
+    /// <summary>Reads an entity's state as a typed value.</summary>
+    /// <typeparam name="T">float, int, string, DateTime, bool ("on"), <see cref="InverterModes"/> or <see cref="LoadSchedulingMode"/>.</typeparam>
+    /// <param name="entity">Entity to read.</param>
+    /// <param name="resultValue">The value; default on failure.</param>
+    /// <param name="numericalGetBaseValue">Numbers: convert to the base unit (<see cref="GetUnitMultiplicator(Entity)"/>).</param>
+    /// <returns>False if the entity is missing, unavailable/unknown, or the state doesn't parse.</returns>
     public static bool TryGetStateValue<T>(this Entity entity, out T resultValue, bool numericalGetBaseValue = true)
     {
       resultValue = default!;
@@ -244,6 +277,11 @@ namespace NetDeamon.apps
       else
         return false;
     }
+    /// <summary>Reads an attribute as raw JSON.</summary>
+    /// <param name="entity">Entity to read.</param>
+    /// <param name="attributeName">Attribute name.</param>
+    /// <param name="attribute">The attribute; default on failure.</param>
+    /// <returns>False if the entity is missing or unavailable, or has no such attribute.</returns>
     public static bool TryGetJsonAttribute(this Entity entity, string attributeName, out JsonElement attribute)
     {
       attribute = default!;
@@ -259,6 +297,11 @@ namespace NetDeamon.apps
 
       return false;
     }
+    /// <summary>Reads an attribute as a string.</summary>
+    /// <param name="entity">Entity to read.</param>
+    /// <param name="attributeName">Attribute name.</param>
+    /// <param name="attribute">The attribute's string value; empty on failure.</param>
+    /// <returns>False if the entity is missing or has no such attribute.</returns>
     public static bool TryGetAttribute(this Entity entity, string attributeName, out string attribute)
     {
       attribute = string.Empty;
@@ -276,6 +319,10 @@ namespace NetDeamon.apps
       }
       return false;
     }
+    /// <summary>Reads a cover's current_position.</summary>
+    /// <param name="entity">Cover entity.</param>
+    /// <param name="position">Position 0…100; 0 on failure.</param>
+    /// <returns>False if there is no readable position.</returns>
     public static bool TryGetCoverPosition(this Entity entity, out int position)
     {
       position = 0;
@@ -292,6 +339,10 @@ namespace NetDeamon.apps
       }
       return false;
     }
+    /// <summary>Calls cover.set_cover_position.</summary>
+    /// <param name="entity">Cover entity.</param>
+    /// <param name="position">Target position 0…100.</param>
+    /// <returns>False if the entity is not a cover.</returns>
     public static bool SetCoverPosition(this Entity entity, int position)
     {
       if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "cover")
@@ -299,12 +350,18 @@ namespace NetDeamon.apps
       entity.HaContext.CallService("cover", "set_cover_position", data: new { entity_id = entity.EntityId , position = position });
       return true;
     }
+    /// <summary>Domain of an entity id ("light" for light.kitchen).</summary>
+    /// <param name="entity">Entity.</param>
+    /// <returns>The domain; empty without an id.</returns>
     public static string GetEntityPlatform(this Entity entity)
     {
       if (entity is null || string.IsNullOrWhiteSpace(entity.EntityId))
         return string.Empty;
       return entity.EntityId.Split('.').FirstOrDefault() ?? string.Empty;
     }
+    /// <summary>Switches a light to the opposite state.</summary>
+    /// <param name="entity">Light entity.</param>
+    /// <returns>True if the light has the new state afterwards.</returns>
     public static bool ToggleLight(this Entity entity)
     {
       if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
@@ -312,6 +369,10 @@ namespace NetDeamon.apps
       entity.TryGetStateValue(out bool curStatus);
       return entity.TurnOnOff(!curStatus);
     }
+    /// <summary>Calls turn_on/turn_off and checks the state 100 ms later.</summary>
+    /// <param name="entity">Switchable entity.</param>
+    /// <param name="On">True = turn on.</param>
+    /// <returns>True if the entity has the requested state; false if its state can't be read.</returns>
     public static bool TurnOnOff(this Entity entity, bool On)
     {
       if (entity.TryGetStateValue(out bool curStatus))
@@ -324,14 +385,24 @@ namespace NetDeamon.apps
       else
         return false;
     }
+    /// <summary>Turns an entity on (<see cref="TurnOnOff"/>).</summary>
+    /// <param name="entity">Switchable entity.</param>
+    /// <returns>True if it is on afterwards.</returns>
     public static bool TurnOn(this Entity entity)
     {
       return TurnOnOff(entity, true);
     }
+    /// <summary>Turns an entity off (<see cref="TurnOnOff"/>).</summary>
+    /// <param name="entity">Switchable entity.</param>
+    /// <returns>True if it is off afterwards.</returns>
     public static bool TurnOff(this Entity entity)
     {
       return TurnOnOff(entity, false);
     }
+    /// <summary>The entity's icon attribute, else a default for its domain (cover, light on/off).</summary>
+    /// <param name="entity">Entity.</param>
+    /// <param name="icon">mdi icon name; "mdi:crosshairs-question" if none applies.</param>
+    /// <returns>False if the entity or its attributes are missing.</returns>
     public static bool TryGetIconString(this Entity entity, out string icon)
     {
       icon = "mdi:crosshairs-question";
@@ -358,6 +429,10 @@ namespace NetDeamon.apps
       }
       return true;
     }
+    /// <summary>Reads a light's brightness.</summary>
+    /// <param name="entity">Light entity.</param>
+    /// <param name="brightness">Brightness 0…255; −1 on failure.</param>
+    /// <returns>False if not a light or no brightness attribute.</returns>
     public static bool TryGetBrightness(this Entity entity, out int brightness)
     {
       brightness = -1;
@@ -371,6 +446,10 @@ namespace NetDeamon.apps
       return false;
     }
 
+    /// <summary>Turns a light on with a brightness.</summary>
+    /// <param name="entity">Light entity.</param>
+    /// <param name="brightness">Brightness 0…255.</param>
+    /// <returns>The brightness read back; −1 on failure.</returns>
     public static int SetBrightness(this Entity entity, int brightness)
     {
       if (entity is null || entity.GetEntityPlatform().ToLowerInvariant() != "light")
@@ -382,6 +461,10 @@ namespace NetDeamon.apps
       
       return -1;
     }
+    /// <summary>Reads a light's supported_color_modes.</summary>
+    /// <param name="entity">Light entity.</param>
+    /// <param name="supportedColorModes">The modes; empty if none.</param>
+    /// <returns>False if not a light.</returns>
     public static bool TryGetSupportedColorModes(this Entity entity, out List<string> supportedColorModes)
     {
       supportedColorModes = [];
@@ -393,6 +476,10 @@ namespace NetDeamon.apps
       }
       return true;
     }
+    /// <summary>Adds a second forecast to the first per time (e.g. two PV roof sides).</summary>
+    /// <param name="list1">First forecast; modified in place.</param>
+    /// <param name="list2">Forecast to add; missing times are added.</param>
+    /// <returns>The sum, ordered by time.</returns>
     public static Dictionary<DateTime, int> CombineForecastLists(this Dictionary<DateTime, int> list1, Dictionary<DateTime, int> list2)
     {
       foreach (var item in list2)
@@ -410,28 +497,50 @@ namespace NetDeamon.apps
     private static bool InRange(DateTime key, DateTime start, DateTime end) =>
       (start == default || key >= start) && (end == default || key <= end);
 
-    public static KeyValuePair<DateTime, int> FirstMinOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
+    /// <summary>First entry with the lowest value in a time range.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The entry; default if the range is empty.</returns>
+    public static KeyValuePair<DateTime, int> FirstMinOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default) =>
+      FirstExtremeOrDefault(list, -1, start, end);
+    /// <summary>First entry with the highest value in a time range.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The entry; default if the range is empty.</returns>
+    public static KeyValuePair<DateTime, int> FirstMaxOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default) =>
+      FirstExtremeOrDefault(list, 1, start, end);
+    /// <summary>First entry with the lowest or highest value in a time range.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="sign">−1 = lowest, +1 = highest.</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The entry; default if the range is empty.</returns>
+    private static KeyValuePair<DateTime, int> FirstExtremeOrDefault(Dictionary<DateTime, int> list, int sign, DateTime start, DateTime end)
     {
       KeyValuePair<DateTime, int> best = default;
       bool found = false;
       foreach (var kv in list)
-        if (InRange(kv.Key, start, end) && (!found || kv.Value < best.Value)) { best = kv; found = true; }
+        if (InRange(kv.Key, start, end) && (!found || sign * kv.Value > sign * best.Value)) { best = kv; found = true; }
       return best;
     }
-    public static KeyValuePair<DateTime, int> FirstMaxOrDefault(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
-    {
-      KeyValuePair<DateTime, int> best = default;
-      bool found = false;
-      foreach (var kv in list)
-        if (InRange(kv.Key, start, end) && (!found || kv.Value > best.Value)) { best = kv; found = true; }
-      return best;
-    }
+    /// <summary>First entry at or below a value in a time range.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="underValue">Threshold (inclusive).</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The entry; default if there is none.</returns>
     public static KeyValuePair<DateTime, int> FirstUnderOrDefault(this Dictionary<DateTime, int> list, int underValue, DateTime start = default, DateTime end = default)
     {
       foreach (var kv in list)
         if (InRange(kv.Key, start, end) && kv.Value <= underValue) return kv;
       return default;
     }
+    /// <summary>Entry of the quarter-hour a time lies in.</summary>
+    /// <param name="list">Values by quarter-hour start.</param>
+    /// <param name="time">Any time within the quarter.</param>
+    /// <returns>The entry; (default, 0) if missing.</returns>
     public static KeyValuePair<DateTime, int> GetEntryAtTime(this Dictionary<DateTime, int> list, DateTime time)
     {
       if (list.TryGetValue(time.RoundToNearestQuarterHour(), out var entry))
@@ -439,6 +548,9 @@ namespace NetDeamon.apps
       else
         return new KeyValuePair<DateTime, int>(default, 0);
     }
+    /// <summary>Running sum per day (restarts at each new date).</summary>
+    /// <param name="list">Values by time, in time order.</param>
+    /// <returns>Cumulative values by time.</returns>
     public static Dictionary<DateTime, int> GetRunningSumsDaily(this Dictionary<DateTime, int> list)
     {
       return list.Aggregate(new Dictionary<DateTime, int>(), (acc, x) =>
@@ -450,37 +562,32 @@ namespace NetDeamon.apps
         return acc;
       });
     }
-    public static int GetSum(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
-    {
-      if (start == default) start = DateTime.MinValue;
-      if (end == default) end = DateTime.MaxValue;
-      return list.Where(t => t.Key >= start && t.Key <= end).Sum(s => s.Value);
-    }
-    public static int GetAverage(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default)
-    {
-      if (start == default) start = DateTime.MinValue;
-      if (end == default) end = DateTime.MaxValue;
-      return (int)Math.Round(list.Where(t => t.Key >= start && t.Key <= end).Average(s => s.Value), 0);
-    }
-    public static DateTime RoundToNearestQuarterHour(this DateTime time)
-    {
-      int minutes = time.Minute;
-      int remainder = minutes % 15;
-      return new DateTime(time.Year, time.Month, time.Day, time.Hour, minutes - remainder, 0);
-    }
+    /// <summary>Sum of the values in a time range.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The sum.</returns>
+    public static int GetSum(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default) =>
+      list.Where(t => InRange(t.Key, start, end)).Sum(s => s.Value);
+    /// <summary>Mean of the values in a time range, rounded.</summary>
+    /// <param name="list">Values by time.</param>
+    /// <param name="start">Range start (inclusive); default = unbounded.</param>
+    /// <param name="end">Range end (inclusive); default = unbounded.</param>
+    /// <returns>The rounded mean; throws if the range is empty.</returns>
+    public static int GetAverage(this Dictionary<DateTime, int> list, DateTime start = default, DateTime end = default) =>
+      (int)Math.Round(list.Where(t => InRange(t.Key, start, end)).Average(s => s.Value), 0);
+    /// <summary>Start of the quarter-hour a time lies in (floors, despite the name).</summary>
+    /// <param name="time">Any time.</param>
+    /// <returns>The quarter start; seconds dropped.</returns>
+    public static DateTime RoundToNearestQuarterHour(this DateTime time) => time.Floor(TimeRange.SlotMinutes);
 
-    public static DateTime GetNextQuarterHour(this DateTime time)
-    {
-      int remainder = time.Minute % 15;
-      int minutesToAdd = (15 - remainder) % 15;
-      DateTime nextQuarter = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, 0, 0).AddMinutes(minutesToAdd);
-      if (nextQuarter <= time)
-      {
-        nextQuarter = nextQuarter.AddMinutes(15);
-      }
-      return nextQuarter;
-    }
-    /// <summary>Empty (0) prediction window for the day of <paramref name="now"/>: today 00:00 → tomorrow 23:45.</summary>
+    /// <summary>Next quarter-hour strictly after a time.</summary>
+    /// <param name="time">Any time.</param>
+    /// <returns>The next quarter start.</returns>
+    public static DateTime GetNextQuarterHour(this DateTime time) => time.RoundToNearestQuarterHour() + TimeRange.Slot;
+    /// <summary>Fills a prediction window with zeros: today 00:00 → tomorrow 23:45 in 15-min slots.</summary>
+    /// <param name="data">Window to clear and fill.</param>
+    /// <param name="now">Any time of today.</param>
     public static void ClearAndCreateEmptyPredictionData(this Dictionary<DateTime, int> data, DateTime now)
     {
       data.Clear();
@@ -491,6 +598,10 @@ namespace NetDeamon.apps
     }
     
     #region General Things
+    /// <summary>Parses numbers and ranges ("3", "1-5") into a list of ints.</summary>
+    /// <param name="list">Items to parse; unparsable ones are skipped.</param>
+    /// <param name="numbers">The numbers, ranges expanded.</param>
+    /// <returns>False if <paramref name="list"/> is null or empty.</returns>
     public static bool TryParseToIntList(this List<string> list, out List<int> numbers)
     {
       numbers = [];
@@ -524,6 +635,10 @@ namespace NetDeamon.apps
       return false;
     }
 
+    /// <summary>Cuts a string to a maximum length.</summary>
+    /// <param name="str">String to cut.</param>
+    /// <param name="maxLength">Maximum length; ≤ 0 gives "".</param>
+    /// <returns>The first <paramref name="maxLength"/> characters.</returns>
     public static string Truncate(this string str, int maxLength)
     {
       if (maxLength <= 0)
@@ -532,10 +647,15 @@ namespace NetDeamon.apps
     }
     #endregion
   }
+  /// <summary>Queue that drops its oldest item when full.</summary>
+  /// <typeparam name="T">Item type.</typeparam>
+  /// <param name="capacity">Maximum number of items.</param>
   public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
   {
     private readonly int _capacity = capacity;
 
+    /// <summary>Adds an item, dropping the oldest one when full.</summary>
+    /// <param name="item">Item to add.</param>
     public new void Enqueue(T item)
     {
       if (Count >= _capacity)
@@ -546,12 +666,10 @@ namespace NetDeamon.apps
     }
   }
   /// <summary>
-  /// An energy counter with coarse steps (the inverter's "today's solar energy": 0.1 kWh) made
-  /// continuous: the last counter value plus the power integrated since the counter last changed,
-  /// at most one step (<paramref name="resolutionWh"/>) — the next step brings it back in line.
-  /// The PV day-scale correction divides by it: with the raw steps every 0.1 kWh moved the whole
-  /// remaining day's PV (p95 change of the PV ahead per 15-s cycle 102 → 55 Wh, live 2026-10-22).
+  /// An energy counter with coarse steps made continuous: the last counter value plus the power
+  /// integrated since it last changed, at most one step.
   /// </summary>
+  /// <param name="resolutionWh">Step of the counter in Wh (inverter's PV energy today: 100).</param>
   public sealed class CounterInterpolator(int resolutionWh)
   {
     private int? _counter;
@@ -559,7 +677,9 @@ namespace NetDeamon.apps
     private DateTime? _powerAt;
     private int _powerW;
 
-    /// <summary>A new power reading (W) at <paramref name="at"/>; negative counts as 0.</summary>
+    /// <summary>Adds a power reading.</summary>
+    /// <param name="at">Time of the reading.</param>
+    /// <param name="watts">Power in W; negative counts as 0.</param>
     public void AddPower(DateTime at, int watts)
     {
       Accumulate(at);
@@ -567,7 +687,10 @@ namespace NetDeamon.apps
       _powerAt = at;
     }
 
-    /// <summary>The counter (Wh) as read at <paramref name="now"/>, plus what flowed since its last step.</summary>
+    /// <summary>The counter made continuous.</summary>
+    /// <param name="now">Current time.</param>
+    /// <param name="counterWh">Counter as read now, in Wh.</param>
+    /// <returns>Counter + energy since its last step (at most one step), in Wh.</returns>
     public int Value(DateTime now, int counterWh)
     {
       if (counterWh != _counter)
@@ -580,29 +703,32 @@ namespace NetDeamon.apps
       return counterWh + (int)Math.Min(_sinceStepWh, resolutionWh);
     }
 
+    /// <summary>Integrates the last power reading up to a time.</summary>
+    /// <param name="at">Integrate until here.</param>
     private void Accumulate(DateTime at)
     {
       if (_powerAt is { } p && at > p)
       {
-        _sinceStepWh += _powerW * (at - p).TotalHours;
+        _sinceStepWh += Energy.Wh(_powerW, at - p);
         _powerAt = at;
       }
     }
   }
 
   /// <summary>
-  /// Average of the values of the last <c>window</c>. Values also expire when nothing new
-  /// arrives — except the latest one, which is still the sensor's current state: HA sensors that
-  /// only report on change (e.g. a CT clamp going to 0 W and staying there) otherwise kept the
-  /// old values forever (2026-10-22: the EV's 2 kW stayed in the average after the car stopped,
-  /// and was subtracted from the house load for 10 min, down to −1.2 kW).
+  /// Average of the values of a time window. Values also expire on read; the latest one is always
+  /// kept (sensors that report only on change still have their current state).
   /// </summary>
+  /// <param name="window">Window length.</param>
+  /// <param name="utcNow">Clock (UTC); null = system clock. For tests.</param>
   public class RunningIntAverage(TimeSpan window, Func<DateTime>? utcNow = null)
   {
     private Queue<(DateTime timestamp, int value)> _Values = [];
     private TimeSpan _Window = window;
     private readonly Func<DateTime> _utcNow = utcNow ?? (() => DateTime.UtcNow);
 
+    /// <summary>Adds a value with the current time.</summary>
+    /// <param name="value">Value to add.</param>
     public void AddValue(int value)
     {
       _Values.Enqueue((_utcNow(), value));
@@ -616,10 +742,13 @@ namespace NetDeamon.apps
       while (_Values.Count > 1 && now - _Values.Peek().timestamp > _Window)
         _Values.Dequeue();
     }
+    /// <summary>Number of values in the window.</summary>
     public int Count
     {
       get { return _Values.Count; }
     }
+    /// <summary>Average of the values in the window.</summary>
+    /// <returns>Rounded average; int.MinValue without any value.</returns>
     public int GetAverage()
     {
       if (_Values.Count == 0)
@@ -628,10 +757,12 @@ namespace NetDeamon.apps
       return (int)Math.Round(_Values.Average(v => v.value), 0);
     }
 
+    /// <summary>Same as <see cref="GetAverage"/>.</summary>
     public int CurrentAverage
     {
       get => GetAverage();
     }
+    /// <summary>Drops all values and starts again with 0.</summary>
     public void Reset()
     {
       _Values = [];

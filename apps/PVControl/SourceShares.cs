@@ -3,19 +3,19 @@ using System;
 namespace NetDeamon.apps.PVControl;
 
 /// <summary>
-/// Where the power a consumer draws right now comes from (fractions 0…1), and what one kWh of it
-/// costs — the one calculation behind the battery's stored-energy cost
-/// (<c>sensor.pv_control_battery_avg_cost_per_kwh</c>) and the extra loads' cost totals.
-/// PV is free (money actually paid, not the export it displaces), grid import costs the import
-/// price (<see cref="PriceList.GetPriceOrMean"/>), battery energy what it cost to store.
+/// Energy by source — shares (fractions 0…1) or amounts (kWh) — and its cost. The one € calculation
+/// for energy: battery average cost, extra loads' cost totals and the simulation's grid cost.
 /// </summary>
+/// <param name="Pv">PV share/amount; negative amount = exported (PV not used).</param>
+/// <param name="Grid">Grid import share/amount.</param>
+/// <param name="Battery">Battery share/amount.</param>
 public readonly record struct SourceShares(float Pv, float Grid, float Battery)
 {
-  /// <summary>
-  /// PV surplus first, then grid import, the rest from the battery. Without a measured draw
-  /// (<paramref name="powerW"/> ≤ 0) all of it counts as battery — for the battery itself that
-  /// keeps its average cost unchanged.
-  /// </summary>
+  /// <summary>Splits a draw: PV surplus first, then grid import, the rest battery.</summary>
+  /// <param name="powerW">Power drawn in W; ≤ 0 (not measured) counts all as battery.</param>
+  /// <param name="pvSurplusW">PV available for this consumer in W.</param>
+  /// <param name="gridImportW">Grid import in W (negative = export).</param>
+  /// <returns>Shares summing to 1.</returns>
   public static SourceShares Of(float powerW, float pvSurplusW, float gridImportW)
   {
     if (powerW <= 0) return new(0, 0, 1);
@@ -24,29 +24,29 @@ public readonly record struct SourceShares(float Pv, float Grid, float Battery)
     return new(pv, grid, 1f - pv - grid);
   }
 
-  // The PV surplus comes from the meters' balance PV − load = battery charge − grid import, so
-  // battery and grid (both 1-min averages) are all it needs: the PV average is 15 min and lags the
-  // steep evening ramp — a grid charge at dusk would have counted as PV.
+  // The PV surplus comes from the meters' balance PV − load = battery charge − grid import, so the
+  // 1-min battery and grid averages are all it needs (the 15-min PV average lags, see ARCHITECTURE).
 
-  /// <summary>A load that is part of the house load (EV charger): the PV beyond the rest of the house goes to it first.</summary>
+  /// <summary>Sources of a load that is part of the house load (EV charger); PV beyond the rest of the house goes to it first.</summary>
+  /// <param name="loadW">Power the load draws in W.</param>
+  /// <param name="batteryChargeW">Battery power in W (positive = charging).</param>
+  /// <param name="gridImportW">Grid power in W (positive = import).</param>
+  /// <returns>Shares of the load's power.</returns>
   public static SourceShares ForLoad(float loadW, float batteryChargeW, float gridImportW) =>
     Of(loadW, batteryChargeW - gridImportW + loadW, gridImportW);
 
-  /// <summary>The battery charging: PV beyond the whole house load first, then grid import.</summary>
+  /// <summary>Sources of the battery charge: PV beyond the whole house load first, then grid import.</summary>
+  /// <param name="batteryChargeW">Battery power in W (positive = charging).</param>
+  /// <param name="gridImportW">Grid power in W (positive = import).</param>
+  /// <returns>Shares of the charge power.</returns>
   public static SourceShares ForBatteryCharge(float batteryChargeW, float gridImportW) =>
     Of(batteryChargeW, batteryChargeW - gridImportW, gridImportW);
 
-  /// <summary>
-  /// The one cost calculation: grid at <paramref name="importPrice"/>, battery at
-  /// <paramref name="batteryPrice"/>, PV at <paramref name="pvPrice"/>. With shares (fractions) it's
-  /// €/kWh, with amounts (kWh) €. The parameter is the only difference between its users:
-  /// <list type="bullet">
-  /// <item>money paid (battery average cost, loads' cost totals): PV free, <paramref name="pvPrice"/> = 0;</item>
-  /// <item>what using energy costs (<see cref="Simulator.SimulationResult.NetGridCostVs"/> → slot
-  /// prices): <paramref name="pvPrice"/> = the export price — exported energy is PV not used,
-  /// a negative <see cref="Pv"/> amount, so it earns.</item>
-  /// </list>
-  /// </summary>
+  /// <summary>Cost: Grid × import price + Battery × battery price + Pv × PV price.</summary>
+  /// <param name="importPrice">Import price in €/kWh.</param>
+  /// <param name="batteryPrice">Cost of battery energy in €/kWh.</param>
+  /// <param name="pvPrice">Value of PV in €/kWh: 0 = money paid, the export price = what using it costs (lost export).</param>
+  /// <returns>€/kWh for shares, € for amounts.</returns>
   public float Cost(float importPrice, float batteryPrice, float pvPrice = 0) =>
     Grid * importPrice + Battery * batteryPrice + Pv * pvPrice;
 }

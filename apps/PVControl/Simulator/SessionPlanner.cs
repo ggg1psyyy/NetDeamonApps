@@ -4,10 +4,7 @@ using System.Linq;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
-/// <summary>
-/// Price-aware session search for schedulable loads. Pure functions over EnergySimulator, so
-/// they're testable without Home Assistant.
-/// </summary>
+/// <summary>Why <see cref="SessionPlanner.FindBestPriceAwareStart"/> chose a start.</summary>
 public enum StartChoice
 {
   /// <summary>Earliest start that passes the price check.</summary>
@@ -20,39 +17,36 @@ public enum StartChoice
   DeadlineNow,
 }
 
+/// <summary>A chosen session start.</summary>
+/// <param name="Start">Start time.</param>
+/// <param name="Choice">Why this start.</param>
 /// <param name="SavingPercent">For <see cref="StartChoice.Cheaper"/>: saving vs the earliest start, in %.</param>
 public readonly record struct PlannedStart(DateTime Start, StartChoice Choice, float SavingPercent = 0);
 
+/// <summary>Price-aware session search for schedulable loads, over EnergySimulator (free of HA).</summary>
 public static class SessionPlanner
 {
-  /// <summary>
-  /// A later start must be at least this much cheaper than the earliest one to be worth waiting
-  /// for — keeps the plan from waiting on savings within forecast noise.
-  /// </summary>
+  /// <summary>Saving a later start needs over the earliest one, as a fraction (keeps the plan from waiting on forecast noise).</summary>
   public const float DefaultMinSavingFraction = 0.01f;
 
   /// <summary>Without a deadline, a session must end this long before the simulation ends.</summary>
   public const int ConsequenceMarginHours = 12;
 
   /// <summary>
-  /// PriorityPlus's price scan. Simulates the load at every 15-min start from minStart — day or
-  /// night, no PV-period gating. A start passes when it needs no new grid vs. baseline, or new
-  /// grid only at/under the price threshold. Of the passing starts, the earliest wins unless a
-  /// later one is cheaper overall (<see cref="SimulationResult.NetGridCostVs"/>) by at least
-  /// <paramref name="minSavingFraction"/> — waiting for a tiny saving isn't worth leaving the
-  /// load idle. Every start is re-simulated because moving it changes what NeedToCharge does.
-  ///
-  /// Without a deadline, starts are bounded by horizonEnd (the published price horizon); null
-  /// when none passes. With a deadline, only starts that finish by it are considered, and the
-  /// deadline beats the price threshold: if none passes, the cheapest start that still finishes
-  /// in time is taken, and if even starting now is too late, now.
-  ///
-  /// <paramref name="preferredStart"/> (last cycle's planned start) makes the plan sticky: the
-  /// live inputs move every cycle, so a later start's saving hovers around the threshold and the
-  /// choice would otherwise flip — and the first flip to "now" commits the session. The
-  /// preferred start is kept while it still passes and is cheaper than the earliest start, unless
-  /// another start beats it by the minimum saving.
+  /// PriorityPlus price scan: simulates the load at every 15-min start and picks one. A start passes
+  /// if it needs no new grid or only at/under the price limit; the earliest passing start wins unless a
+  /// later one is cheaper (<see cref="SimulationResult.NetGridCostVs"/>) by the minimum saving. A
+  /// deadline beats the price limit.
   /// </summary>
+  /// <param name="minStart">Earliest start.</param>
+  /// <param name="horizonEnd">Latest start without a deadline (end of the published prices).</param>
+  /// <param name="durationMinutes">Length of the session.</param>
+  /// <param name="runSim">Simulates the load from start to end.</param>
+  /// <param name="baseline">Simulation without the load.</param>
+  /// <param name="deadline">Session must end by then; null = none.</param>
+  /// <param name="minSavingFraction">Saving a later start needs over the earliest one (0.01 = 1 %).</param>
+  /// <param name="preferredStart">Last cycle's planned start; kept while it passes and is cheaper than the earliest (stops flipping).</param>
+  /// <returns>The start and why; null if none passes (no deadline).</returns>
   public static PlannedStart? FindBestPriceAwareStart(
     DateTime minStart, DateTime horizonEnd, int durationMinutes,
     Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline,
@@ -101,14 +95,14 @@ public static class SessionPlanner
     return null;
   }
 
-  /// <summary>
-  /// Plans follow-up sessions after <paramref name="currentSessions"/> (the load's current or
-  /// next session as decided this cycle) until <paramref name="energyNeededWh"/> is covered,
-  /// using the same price scan (and deadline, if any). Each follow-up is judged against a
-  /// baseline that already contains every earlier session, so it is only charged for the grid
-  /// it adds itself. Preview only: the result is never fed into the control simulation — every
-  /// cycle re-decides ChargeNow from scratch, so a planned session starts when its cycle comes.
-  /// </summary>
+  /// <summary>Preview of the sessions after the current one until the energy is covered (same price scan, each judged against a baseline with all earlier sessions).</summary>
+  /// <param name="baseInput">Simulation input without the load.</param>
+  /// <param name="currentSessions">The load's sessions decided this cycle; the last one is the template.</param>
+  /// <param name="energyNeededWh">Energy still needed in total, Wh.</param>
+  /// <param name="horizonEnd">Latest start without a deadline.</param>
+  /// <param name="deadline">Sessions must end by then; null = none.</param>
+  /// <param name="maxSessions">Most follow-ups to plan.</param>
+  /// <returns>The follow-up sessions; never fed into the control simulation.</returns>
   public static List<ExtraLoad> PlanFollowUpSessions(
     SimulationInput baseInput, IReadOnlyList<ExtraLoad> currentSessions, int energyNeededWh,
     DateTime horizonEnd, DateTime? deadline = null, int maxSessions = 3)
@@ -122,8 +116,8 @@ public static class SessionPlanner
     var sessions = currentSessions.ToList();
     for (int i = 0; i < maxSessions; i++)
     {
-      int plannedWh = (int)sessions.Sum(e => (e.EndTime - e.StartTime).TotalHours * e.PowerW);
-      int remainingMinutes = Math.Max(0, energyNeededWh - plannedWh) * 60 / template.PowerW;
+      int plannedWh = (int)sessions.Sum(e => e.EnergyWh);
+      int remainingMinutes = Energy.Minutes(Math.Max(0, energyNeededWh - plannedWh), template.PowerW);
       if (remainingMinutes < 15) break;
 
       var input = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. sessions]);
@@ -134,17 +128,14 @@ public static class SessionPlanner
       if (from < lastEnd) from = from.AddMinutes(15);
 
       var start = FindBestPriceAwareStart(from, horizonEnd, remainingMinutes,
-        (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([.. input.ExtraLoads, Session(template, s, e)])),
+        (s, e) => input.SimulateWith(template.Between(s, e)),
         baseline, deadline);
       if (start is null) break;
 
-      var next = Session(template, start.Value.Start, start.Value.Start.AddMinutes(remainingMinutes));
+      var next = template.Between(start.Value.Start, start.Value.Start.AddMinutes(remainingMinutes));
       sessions.Add(next);
       planned.Add(next);
     }
     return planned;
   }
-
-  private static ExtraLoad Session(ExtraLoad template, DateTime start, DateTime end) =>
-    new() { Name = template.Name, Priority = template.Priority, StartTime = start, EndTime = end, PowerW = template.PowerW };
 }

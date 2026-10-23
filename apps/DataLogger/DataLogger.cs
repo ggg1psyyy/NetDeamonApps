@@ -332,38 +332,8 @@ namespace PVControl
     /// <paramref name="changes"/> are (time, state) in time order; the first one is the state at
     /// the period start (HA history starts with it, stamped earlier or at the start).
     /// </summary>
-    public static double MinutesInState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to, Func<string, bool> match)
-    {
-      double minutes = 0;
-      for (int i = 0; i < changes.Count; i++)
-      {
-        var start = changes[i].Time < from ? from : changes[i].Time;
-        var end = i + 1 < changes.Count ? changes[i + 1].Time : to;
-        if (end > to) end = to;
-        if (end > start && match(changes[i].State))
-          minutes += (end - start).TotalMinutes;
-      }
-      return minutes;
-    }
-
-    /// <summary>Time-weighted mean of a value over [<paramref name="from"/>, <paramref name="to"/>)
-    /// (each value holds until the next change); null without any value.</summary>
-    public static double? TimeWeightedAverage(IReadOnlyList<(DateTime Time, double? Value)> changes, DateTime from, DateTime to)
-    {
-      double sum = 0, weight = 0;
-      for (int i = 0; i < changes.Count; i++)
-      {
-        if (changes[i].Value is not { } v) continue;
-        var start = changes[i].Time < from ? from : changes[i].Time;
-        var end = i + 1 < changes.Count ? changes[i + 1].Time : to;
-        if (end > to) end = to;
-        if (end <= start) continue;
-        double w = (end - start).TotalMinutes;
-        sum += v * w;
-        weight += w;
-      }
-      return weight > 0 ? sum / weight : null;
-    }
+    public static double MinutesInState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to, Func<string, bool> match) =>
+      StepFunction.Pieces(changes, from, to).Where(p => match(p.Value)).Sum(p => p.Held.TotalMinutes);
 
     /// <summary>The state held longest in the period (e.g. the heat pump mode of an hour).</summary>
     public static string? PrevailingState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to) =>
@@ -520,7 +490,7 @@ namespace PVControl
           ? p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString()
           : null;
       double? Minutes(List<SensorData>? h, string on) => h is null ? null : MinutesInState(States(h), from, to, s => s == on);
-      double? Average(List<SensorData>? h) => h is null ? null : TimeWeightedAverage(Numbers(h), from, to);
+      double? Average(List<SensorData>? h) => h is null ? null : StepFunction.TimeWeightedAverage(Numbers(h), from, to);
 
       var mode = History(_config.HeatPumpModeEntity);
       var heating = History(_config.HeatingActiveEntity);
@@ -541,7 +511,7 @@ namespace PVControl
         double periodMinutes = (to - from).TotalMinutes;
         roomsHeating = roomHistories.Sum(h => MinutesInState(h.Select(s => (s.LastChanged, Attribute(s, "hvac_action") ?? "")).ToList(), from, to, a => a == "heating")) / periodMinutes;
         var setpoints = roomHistories
-          .Select(h => TimeWeightedAverage(h.Select(s => (s.LastChanged,
+          .Select(h => StepFunction.TimeWeightedAverage(h.Select(s => (s.LastChanged,
             double.TryParse(Attribute(s, "temperature"), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList(), from, to))
           .Where(v => v is not null).Select(v => v!.Value).ToList();
         roomSetpoint = setpoints.Count > 0 ? setpoints.Average() : null;

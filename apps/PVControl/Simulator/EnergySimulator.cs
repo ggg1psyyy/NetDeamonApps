@@ -6,43 +6,18 @@ using NetDeamon.apps.PVControl;
 namespace NetDeamon.apps.PVControl.Simulator;
 
 /// <summary>
-/// Forward-stepping two-day energy simulator.
-///
-/// The key insight this solves: the old BatterySoCPrediction integrated PV minus load naively,
-/// so it had no idea that the system would force-charge at 3 am. That made "what will the SoC
-/// be in 8 hours?" unreliable whenever charging decisions were going to happen in between.
-///
-/// The time window always covers exactly two full calendar days — today 00:00 through tomorrow
-/// 23:45 — matching the EPEX Spot price publication cycle (current day always known; next day
-/// published around 14:00–15:00 and immediately usable). The simulation starts at the current
-/// quarter-hour slot and runs to tomorrow's midnight; past slots of today are back-filled by
-/// HouseEnergy.RunSimulation() using the net-energy prediction in reverse.
-///
-/// This simulator steps through every 15-minute slot from now to end of tomorrow. At each slot it:
-///   1. Computes a BASE future SoC (PV – load, no charging) as a look-ahead.
-///   2. Asks "would the real algorithm charge now?" using that base look-ahead.
-///   3. Decides the inverter mode (same logic as the old CalculateNewInverterMode).
-///   4. Computes the resulting energy flows (battery delta, grid import/export).
-///   5. Steps the simulated SoC forward.
-///
-/// Because the mode decision and the SoC update happen together at each step, future slots
-/// already reflect charging that was scheduled in earlier slots — giving an accurate SoC
-/// timeline that accounts for all system decisions.
-///
-/// The first slot's InverterState becomes the live inverter command.
-/// Extra loads (car charging etc.) can be injected to see their impact on the plan.
+/// Simulates the house in 15-min slots from now to the end of tomorrow. Per slot: a look-ahead
+/// without charging (base SoC), the charge need from it, the inverter mode, the energy flows, the
+/// next SoC. Later slots therefore see the charging decided before them; the first slot's mode is
+/// the live inverter command.
 /// </summary>
 public static class EnergySimulator
 {
-  private const int SlotMinutes = 15;
-  private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
+  private const int SlotMinutes = TimeRange.SlotMinutes;
 
-  /// <summary>
-  /// Runs the full simulation and returns one <see cref="SimulationSlot"/> per 15-minute
-  /// interval from <see cref="SimulationInput.StartTime"/> (rounded to the nearest quarter-hour)
-  /// through the end of tomorrow — i.e. today + tomorrow as two full calendar days.
-  /// This window matches the EPEX Spot price data range and the PredictionContainer layout.
-  /// </summary>
+  /// <summary>Runs the simulation.</summary>
+  /// <param name="input">Start state, forecasts, prices, extra loads and settings.</param>
+  /// <returns>One slot per 15 min from the running quarter through the end of tomorrow, with derived values.</returns>
   public static SimulationResult Simulate(SimulationInput input)
   {
     var slots = new List<SimulationSlot>();
@@ -54,16 +29,13 @@ public static class EnergySimulator
     int currentSoc = input.StartSocPercent;
     // Track battery energy in exact Wh to avoid accumulated rounding error from % ↔ Wh conversions.
     // currentSoc (%) is derived from this for mode decisions and slot output only.
-    int currentEnergyWh = input.StartSocPercent * input.BatteryCapacityWh / 100;
+    int currentEnergyWh = input.SocToWh(input.StartSocPercent);
     var currentMode = input.CurrentMode;
 
     for (var slotTime = startSlot; slotTime < endSlot; slotTime = slotTime.AddMinutes(SlotMinutes))
     {
       // Energy values for this slot (Wh per 15-min period; the running slot only its rest)
-      double fraction = input.SlotFraction(slotTime);
-      int pvWh = (int)(input.PVPredictionWh.GetValueOrDefault(slotTime, 0) * fraction);
-      int loadWh = (int)(input.LoadPredictionWh.GetValueOrDefault(slotTime, 0) * fraction);
-      int extraLoadWh = (int)(input.ExtraLoadWh(slotTime) * fraction);
+      var (pvWh, loadWh, extraLoadWh) = input.SlotEnergyWh(slotTime);
       int totalLoadWh = loadWh + extraLoadWh;
 
       // --- Step 1: base look-ahead SoC (no charging) for this slot onward ---
@@ -90,20 +62,28 @@ public static class EnergySimulator
           (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
            newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input);
-      var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, fraction);
+      var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, input.SlotFraction(slotTime));
 
       slots.Add(new SimulationSlot(slotTime, currentSoc, newMode, pvWh, loadWh, extraLoadWh, battChargeWh, battDischargeWh, gridImportWh, gridExportWh));
 
       // --- Step 5: advance SoC for the next slot ---
       // Keep Wh exact; derive % only for mode decisions (integer division, no rounding).
       currentEnergyWh = Math.Clamp(currentEnergyWh + battChargeWh - battDischargeWh, 0, input.BatteryCapacityWh);
-      currentSoc = currentEnergyWh * 100 / input.BatteryCapacityWh;
+      currentSoc = input.WhToSoc(currentEnergyWh);
     }
 
     return new SimulationResult(slots, input);
   }
 
   // ── NeedToCharge charge target ──────────────────────────────────────────────────────────
+  /// <summary>Target SoC of a NeedToCharge grid charge: lifts the unclamped trough before the next PV peak to floor + forecast margin + <see cref="ChargeTargetBufferPct"/>.</summary>
+  /// <param name="currentSoc">Simulated SoC now, %.</param>
+  /// <param name="slotTime">Current slot.</param>
+  /// <param name="endSlot">End of the simulation.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="need">Charge need (fallback for the trough).</param>
+  /// <param name="input">Simulation input.</param>
+  /// <returns>Target SoC, % (at most 100).</returns>
   private static int DeficitChargeTargetSoc(
     int currentSoc, DateTime slotTime, DateTime endSlot,
     Dictionary<DateTime, int> baseFutureSoC, NeedToChargeResult need, SimulationInput input)
@@ -144,43 +124,28 @@ public static class EnergySimulator
     return Math.Min(100, currentSoc + deficit);
   }
 
-  /// <summary>
-  /// A NeedToCharge grid charge lifts the trough this far above floor + forecast margin (the
-  /// start level), so it ends clearly above it with the live SoC's 1 % resolution.
-  /// </summary>
+  /// <summary>A NeedToCharge charge lifts the trough this far above floor + forecast margin, %.</summary>
   public const int ChargeTargetBufferPct = 1;
 
-  /// <summary>
-  /// A NeedToCharge grid charge starts only this far below floor + forecast margin (never below
-  /// the floor itself). With <see cref="ChargeTargetBufferPct"/> above it that's a 2 % band
-  /// between start and stop — a charge that ended needs a real 2 % drop of the trough to start
-  /// again, not a 1 % SoC tick (on 2026-10-19 a 1 % band gave 28 grid charges of 30–60 s between
-  /// 03:20 and 04:37). The band lies around the target, not on top of it: until 2026-10-22 a
-  /// 5 % band was added to the target, every charge bought ~0.6 kWh extra and the morning low
-  /// landed at floor + 9 % (29 % with a 20 % floor). No time lock: 15-min prices can differ
-  /// wildly, a restart may be needed in the cheap running quarter.
-  /// </summary>
+  /// <summary>A NeedToCharge charge starts only this far below floor + forecast margin (never below the floor), %; with <see cref="ChargeTargetBufferPct"/> a 2 % band between start and stop.</summary>
   public const int StartBelowPct = 1;
 
-  /// <summary>
-  /// Extra SoC (%) for forecast errors, growing with the time until the low the charge has to
-  /// cover: +1 % per 2 h, at most <see cref="MaxForecastMarginPct"/>. On 2026-10-22 the night used
-  /// ~340 W instead of the forecast ~260 W; the 02:00 charge (floor + 5 % at 09:00) fell ~3 % short
-  /// and was topped up at 07:45 for 0.426 €/kWh instead of 0.32.
-  /// </summary>
+  /// <summary>Extra SoC for forecast errors: +1 % per 2 h until the low, at most <see cref="MaxForecastMarginPct"/>.</summary>
+  /// <param name="untilLow">Time from now to the low the charge has to cover.</param>
+  /// <returns>Margin, %.</returns>
   public static int ForecastMarginPct(TimeSpan untilLow) =>
     Math.Clamp((int)Math.Round(untilLow.TotalHours / 2, MidpointRounding.AwayFromZero), 0, MaxForecastMarginPct);
 
+  /// <summary>Upper limit of <see cref="ForecastMarginPct"/>, %.</summary>
   public const int MaxForecastMarginPct = 4;
 
-  /// <summary>
-  /// A NeedToCharge grid charge only pays off when the window's cheapest quarter is cheaper than
-  /// the hours the battery would otherwise have to bridge (from the latest charge time until PV
-  /// takes over), round-trip losses included. Otherwise the floor is held with grid_only, which
-  /// buys only the load in those hours. Live 2026-10-22 07:45: only 07:xx (0.426 €/kWh) was left
-  /// before PV, the hours to bridge cost 0.43 — a 7.4 kW charge bought energy no cheaper than
-  /// the load it replaced.
-  /// </summary>
+  /// <summary>Whether a grid charge pays off against holding the floor with grid_only: the window's cheapest price beats the mean price of the hours to bridge, round-trip losses included.</summary>
+  /// <param name="window">Price entries the charge may use.</param>
+  /// <param name="upcoming">All upcoming price entries.</param>
+  /// <param name="need">Charge need (latest charge time).</param>
+  /// <param name="pvTakeover">When PV takes over the house.</param>
+  /// <param name="input">Simulation input (efficiency).</param>
+  /// <returns>True if charging is cheaper, or nothing to compare.</returns>
   private static bool ChargingBeatsHolding(List<PriceTableEntry> window, List<PriceTableEntry> upcoming,
     NeedToChargeResult need, DateTime pvTakeover, SimulationInput input)
   {
@@ -194,29 +159,28 @@ public static class EnergySimulator
   }
 
   // ── Base future SoC ─────────────────────────────────────────────────────────────────────
-  // Integrates PV – totalLoad (including extra loads) from fromSlot onward without applying
-  // any inverter decisions. This gives the "worst case" trajectory used to judge whether
-  // charging must be scheduled: if the base SoC drops below the minimum before PV can
-  // recover it, we need to force-charge from the grid.
-
+  /// <summary>SoC look-ahead without inverter decisions: PV − load − extra loads per slot (the worst case for the charge need).</summary>
+  /// <param name="currentSocPercent">Start SoC, %.</param>
+  /// <param name="startSlot">First slot.</param>
+  /// <param name="endSlot">End (exclusive).</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="clampAtZero">False: let the energy go negative to see the true depth of a deficit.</param>
+  /// <returns>SoC at the start of each slot, %.</returns>
   private static Dictionary<DateTime, int> ComputeBaseFutureSoC(
     int currentSocPercent, DateTime startSlot, DateTime endSlot, SimulationInput input,
     bool clampAtZero = true)
   {
     var result = new Dictionary<DateTime, int>();
-    int energy = currentSocPercent * input.BatteryCapacityWh / 100;
+    int energy = input.SocToWh(currentSocPercent);
     int minEnergy = clampAtZero ? 0 : int.MinValue / 2; // avoid overflow when adding pv-load-extra
 
     for (var t = startSlot; t < endSlot; t = t.AddMinutes(SlotMinutes))
     {
-      double fraction = input.SlotFraction(t); // same rest-of-slot as the simulation itself
-      int pv = (int)(input.PVPredictionWh.GetValueOrDefault(t, 0) * fraction);
-      int load = (int)(input.LoadPredictionWh.GetValueOrDefault(t, 0) * fraction);
-      int extra = (int)(input.ExtraLoadWh(t) * fraction);
+      var (pv, load, extra) = input.SlotEnergyWh(t); // same slot energies as the simulation itself
       // Store SoC at the START of the slot (before applying energy) so the base look-ahead
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
       // % can go negative here when clampAtZero is false — that's intentional, see call site.
-      result[t] = energy * 100 / input.BatteryCapacityWh;
+      result[t] = input.WhToSoc(energy);
       energy = Math.Clamp(energy + pv - load - extra, minEnergy, input.BatteryCapacityWh);
     }
 
@@ -224,12 +188,16 @@ public static class EnergySimulator
   }
 
   // ── NeedToCharge ────────────────────────────────────────────────────────────────────────
-  // Mirrors the live NeedToChargeFromExternal logic.
-  // We find when (and at what SoC) the base trajectory first drops below the minimum,
-  // then check whether a PV recovery (reaching 100 %) happens before that point.
-  // If no recovery is coming in time we flag NeedToCharge and report the latest safe
-  // moment to start charging (10 % earlier than the critical time, rounded to 15-min slots).
-
+  /// <summary>
+  /// Whether the battery needs a grid charge: the look-ahead reaches floor + forecast margin
+  /// (− <see cref="StartBelowPct"/> unless already charging) before PV refills it.
+  /// </summary>
+  /// <param name="currentSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="currentMode">Mode of the previous slot (charging continues to the target).</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <returns>Need, the SoC at the critical point and the latest charge time (10 % lead).</returns>
   private static NeedToChargeResult ComputeNeedToCharge(
     int currentSoc, Dictionary<DateTime, int> baseFutureSoC,
     InverterState currentMode, SimulationInput input, DateTime now)
@@ -276,22 +244,20 @@ public static class EnergySimulator
   }
 
   // ── Mode decision ────────────────────────────────────────────────────────────────────────
-  // Pure-function equivalent of HouseEnergy.CalculateNewInverterMode.
-  // All inputs are passed explicitly so this can run without any live HA state.
-  //
-  // Negative import price is a hard early-exit: grid is paying us to consume, nothing else
-  // competes with that.
-  //
-  // Negative export price is a MODIFIER (InverterState.ExportAllowed = false), not an early
-  // exit. It used to hard-return house_only, which silently prevented EnableCheapForceCharge
-  // and the NeedToCharge safety net from ever running during a negative-export window — even
-  // though neither of them needs to export anything. Since negative export prices and cheap
-  // import prices both come from the same cause (midday solar oversupply), this starved the
-  // cheap-charge feature on every sunny day, exactly when it mattered most. Exporting and
-  // grid-charging are orthogonal, so suppressing export no longer suppresses the rest of the
-  // chain below it:
-  //   opportunistic discharge → user force-charge slot → need-to-charge → normal
-
+  /// <summary>
+  /// Inverter mode of a slot. Order: negative import price → opportunistic discharge → user force
+  /// charge → NeedToCharge → normal; a negative export price only disables export.
+  /// </summary>
+  /// <param name="currentMode">Mode of the previous slot (hysteresis).</param>
+  /// <param name="need">Charge need of this slot.</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="endSlot">End of the simulation.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  /// <returns>The mode with its reason.</returns>
   private static InverterState ComputeMode(
     InverterState currentMode, NeedToChargeResult need, SimulationInput input,
     DateTime now, DateTime endSlot, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC,
@@ -316,7 +282,7 @@ public static class EnergySimulator
       if (cheaperImportComingToday)
         return new InverterState(InverterModes.normal, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false, exportAllowed: false);
 
-      int pvPowerW = pvWhSlot * 4; // convert Wh/slot → W
+      int pvPowerW = Energy.SlotW(pvWhSlot);
       var mode = (simulatedSoc <= 95 || pvPowerW < 100)
         ? InverterModes.force_charge_grid_only
         : InverterModes.normal; // avoid exporting PV at negative export prices
@@ -359,8 +325,8 @@ public static class EnergySimulator
       double maxSocDurationCalc = ComputeMaxSocDuration(todayBaseSoC);
 
       bool inPVPeriod = input.IsInPVPeriod(now);
-      int pvPowerW = pvWhSlot * 4;
-      int loadPowerW = totalLoadWhSlot * 4;
+      int pvPowerW = Energy.SlotW(pvWhSlot);
+      int loadPowerW = Energy.SlotW(totalLoadWhSlot);
 
       // Case A: during PV peak, battery will hit 100 % anyway → export the overflow now
       // at today's price (even if not a daily maximum) rather than wasting it.
@@ -386,7 +352,7 @@ public static class EnergySimulator
       var sellMaxima = input.ExportPrices.GetLocalMaxima(end: now.Date.AddDays(1))
         .OrderByDescending(t => t.Price).Take(2).ToList();
 
-      if (sellMaxima.Any(t => t.StartTime <= now && t.EndTime > now)
+      if (sellMaxima.Any(t => t.Covers(now))
           && (exportPriceNow >= input.ForceChargeMaxPrice || input.ImportPrices.NegativeImportUpcoming(now)))
       {
         // Near solar time we can go lower (absolute minimum), otherwise stay at preferred
@@ -506,7 +472,7 @@ public static class EnergySimulator
       // Exact boundary comparison: simulation slots are always on quarter-hour boundaries.
       // Runs every slot of every simulation, so it ranks `now` in one pass instead of sorting.
       bool inWindow = false;
-      int nowIndex = window.FindIndex(p => now >= p.StartTime && now < p.EndTime);
+      int nowIndex = window.FindIndex(p => p.Covers(now));
       if (nowIndex >= 0)
       {
         var nowEntry = window[nowIndex];
@@ -523,8 +489,8 @@ public static class EnergySimulator
         if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
-          int maxChargeWh = Math.Max(1, input.MaxChargePowerAmps * ChargeVoltage / 4);
-          int neededWh = Math.Max(0, targetSoc - simulatedSoc) * input.BatteryCapacityWh / 100;
+          int maxChargeWh = Math.Max(1, input.MaxChargeWhPerSlot());
+          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
           int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
           inWindow = cheaperUnderMax < quartersNeeded;
         }
@@ -564,31 +530,33 @@ public static class EnergySimulator
   }
 
   // ── Energy flow calculation ───────────────────────────────────────────────────────────────
-  // Given the chosen mode and the predicted PV/load for the slot, compute:
-  //   battChargeWh    : Wh flowing into the battery (≥ 0)
-  //   battDischargeWh : Wh flowing out of the battery (≥ 0)
-  //   gridImportWh    : Wh pulled from the grid (≥ 0)
-  //   gridExportWh    : Wh pushed to the grid (≥ 0)
-  // These drive the SoC update and are stored in the SimulationSlot for diagnostics.
-
+  /// <summary>Energy flows of a slot in a mode.</summary>
+  /// <param name="state">Inverter mode.</param>
+  /// <param name="pvWh">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWh">Load incl. extra loads, Wh.</param>
+  /// <param name="currentEnergyWh">Energy in the battery, Wh.</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="chargeTargetSocPercent">Target of a force charge, %.</param>
+  /// <param name="slotFraction">Simulated share of the slot (limits the charge rate).</param>
+  /// <returns>Battery charge, battery discharge, grid import, grid export; each Wh ≥ 0.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ComputeEnergyFlows(
     InverterState state, int pvWh, int totalLoadWh, int currentEnergyWh, SimulationInput input, int chargeTargetSocPercent,
     double slotFraction = 1.0)
   {
     int availEnergy = currentEnergyWh;                              // Wh currently in battery (exact)
     int maxCapacity = input.BatteryCapacityWh;
-    int minEnergy = input.AbsoluteMinSocPercent * maxCapacity / 100; // Wh at absolute minimum
-    // Maximum charge or discharge energy per 15-min slot: amps × 240 V / 4 slots per hour
-    // (the running slot only for its rest, SimulationInput.SlotFraction)
-    int maxChargeWh = (int)(input.MaxChargePowerAmps * ChargeVoltage / 4 * slotFraction);
+    int minEnergy = input.SocToWh(input.AbsoluteMinSocPercent); // Wh at absolute minimum
+    // Maximum charge or discharge energy per 15-min slot (the running slot only for its rest,
+    // SimulationInput.SlotFraction)
+    int maxChargeWh = input.MaxChargeWhPerSlot(slotFraction);
 
     return state.Mode switch
     {
       // force_charge_grid_only must be checked before force_charge in the pattern
       // because C# switch arms are matched in order and both modes share the same name prefix
-      InverterModes.force_charge or InverterModes.force_charge_grid_only
-        when state.Mode == InverterModes.force_charge_grid_only
-        => ForceChargeGridOnly(totalLoadWh, availEnergy, maxCapacity, maxChargeWh, chargeTargetSocPercent),
+      // PV disconnected (negative import price): the grid covers house load and battery charging
+      InverterModes.force_charge_grid_only
+        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, chargeTargetSocPercent),
 
       InverterModes.force_charge
         => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, chargeTargetSocPercent),
@@ -596,29 +564,29 @@ public static class EnergySimulator
       InverterModes.force_discharge
         => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
 
-      // Battery idle; PV covers load, grid covers any shortfall, surplus PV exported
+      // Battery idle (no charge/discharge rate): PV covers load, grid any shortfall, surplus exported
       InverterModes.grid_only
-        => (0, 0, Math.Max(0, totalLoadWh - pvWh), Math.Max(0, pvWh - totalLoadWh)),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh: 0, minEnergy),
 
+      // PV surplus straight to the grid instead of the battery; the battery still covers a deficit
       InverterModes.feedin_priority
-        => FeedinPriority(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, batteryChargeEnable: false),
 
       _ // normal, automatic, reset — all follow the standard PV-first flow
         => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, state.BatteryChargeEnable, state.ExportAllowed),
     };
   }
 
-  /// <summary>
-  /// Standard mode: PV covers house load first.
-  /// Any surplus charges the battery (up to max charge rate and capacity), unless
-  /// <paramref name="batteryChargeEnable"/> is false — in which case the surplus is curtailed
-  /// instead, preserving battery room for a deferred cheap/negative-price grid-charge window.
-  /// Any remaining surplus is exported to the grid, unless <paramref name="exportAllowed"/> is
-  /// false (negative export price), in which case it is curtailed rather than exported.
-  /// If PV is insufficient, the battery discharges to cover the deficit (never below
-  /// <paramref name="minEnergy"/>, matching the inverter's own minimum SoC setting);
-  /// any remaining deficit is imported from the grid.
-  /// </summary>
+  /// <summary>PV covers the load; surplus charges the battery, then is exported; a deficit comes from the battery down to the floor, then the grid.</summary>
+  /// <param name="pvWh">PV, Wh.</param>
+  /// <param name="totalLoadWh">Load, Wh.</param>
+  /// <param name="availEnergy">Energy in the battery, Wh.</param>
+  /// <param name="maxCapacity">Battery capacity, Wh.</param>
+  /// <param name="maxChargeWh">Charge/discharge limit of the slot, Wh; 0 = battery idle (grid_only).</param>
+  /// <param name="minEnergy">Floor, Wh.</param>
+  /// <param name="batteryChargeEnable">False: surplus is not charged (feedin_priority, waiting for a negative price).</param>
+  /// <param name="exportAllowed">False: surplus is curtailed (negative export price).</param>
+  /// <returns>Battery charge, battery discharge, grid import, grid export, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) Normal(
     int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy,
     bool batteryChargeEnable = true, bool exportAllowed = true)
@@ -638,16 +606,18 @@ public static class EnergySimulator
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 
-  /// <summary>
-  /// Force-charge from grid at maximum rate.
-  /// PV still covers house load and any PV surplus also goes into the battery,
-  /// reducing the grid draw needed to hit the charge rate target.
-  /// Charging stops when the battery reaches ForceChargeTargetSoC.
-  /// </summary>
+  /// <summary>Charges at the maximum rate up to the target; PV covers the load and adds to the charge, the grid the rest.</summary>
+  /// <param name="pvWh">PV, Wh; 0 for force_charge_grid_only.</param>
+  /// <param name="totalLoadWh">Load, Wh.</param>
+  /// <param name="availEnergy">Energy in the battery, Wh.</param>
+  /// <param name="maxCapacity">Battery capacity, Wh.</param>
+  /// <param name="maxChargeWh">Charge limit of the slot, Wh.</param>
+  /// <param name="targetSocPercent">Target SoC, %.</param>
+  /// <returns>Battery charge, 0, grid import, 0, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceCharge(
     int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int targetSocPercent)
   {
-    int targetEnergy = Math.Min(targetSocPercent, 100) * maxCapacity / 100;
+    int targetEnergy = Soc.ToWh(Math.Min(targetSocPercent, 100), maxCapacity);
     int pvSurplus = Math.Max(0, pvWh - totalLoadWh);
     // How much grid charging is needed to hit the rate limit (limited by how far we are from target)
     int gridChargeNeeded = Math.Min(maxChargeWh, Math.Max(0, targetEnergy - availEnergy));
@@ -658,26 +628,13 @@ public static class EnergySimulator
     return (battCharge, 0, gridImportWh, 0);
   }
 
-  /// <summary>
-  /// Force-charge with PV disconnected (used when import price is negative).
-  /// The inverter isolates the PV strings, so no solar energy is available.
-  /// Grid covers both house load and battery charging at maximum rate.
-  /// </summary>
-  private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceChargeGridOnly(
-    int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int targetSocPercent)
-  {
-    int targetEnergy = Math.Min(targetSocPercent, 100) * maxCapacity / 100;
-    int battCharge = Math.Min(maxChargeWh, Math.Max(0, targetEnergy - availEnergy));
-    // Everything comes from the grid: house load + battery charge (PV is disconnected)
-    return (battCharge, 0, battCharge + totalLoadWh, 0);
-  }
-
-  /// <summary>
-  /// Force-discharge battery to the grid at maximum rate (opportunistic export at price peak).
-  /// PV generation also goes to the grid.
-  /// House load is covered from the battery discharge; any remaining deficit from the grid.
-  /// Discharge is limited by the absolute minimum SoC floor.
-  /// </summary>
+  /// <summary>Discharges at the maximum rate down to the floor; battery and PV cover the load, the rest is exported.</summary>
+  /// <param name="pvWh">PV, Wh.</param>
+  /// <param name="totalLoadWh">Load, Wh.</param>
+  /// <param name="availEnergy">Energy in the battery, Wh.</param>
+  /// <param name="minEnergy">Floor, Wh.</param>
+  /// <param name="maxChargeWh">Discharge limit of the slot, Wh.</param>
+  /// <returns>0, battery discharge, grid import, grid export, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceDischarge(
     int pvWh, int totalLoadWh, int availEnergy, int minEnergy, int maxChargeWh)
   {
@@ -688,37 +645,13 @@ public static class EnergySimulator
     return (0, battDischarge, gridImportWh, gridExportWh);
   }
 
-  /// <summary>
-  /// Feed-in priority: PV generation is directed to the grid first (to maximise export earnings).
-  /// The battery only discharges to cover any house load that PV cannot satisfy.
-  /// Battery charging from PV does NOT happen in this mode — the inverter feeds PV to grid.
-  /// </summary>
-  private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) FeedinPriority(
-    int pvWh, int totalLoadWh, int availEnergy, int minEnergy, int maxChargeWh)
-  {
-    // PV surplus goes straight to grid
-    int gridExportWh = Math.Max(0, pvWh - totalLoadWh);
-    // Any deficit is covered by the battery first, then grid
-    int deficit = Math.Max(0, totalLoadWh - pvWh);
-    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, availEnergy - minEnergy));
-    return (0, battDischarge, deficit - battDischarge, gridExportWh);
-  }
-
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────
 
-  /// <summary>
-  /// Finds the start of the cheapest contiguous export-price window today during which PV is
-  /// available, wide enough for natural charging to bring the battery to full.
-  ///
-  /// Window width (whole hours) is derived from <paramref name="baseFutureSoC"/>: how long
-  /// normal PV charging takes from the current simulated SoC to 99 %. The cheapest contiguous
-  /// block of that many price hours, within today's remaining PV window, is the "valley" —
-  /// the optimal moment to pause feedin_priority so free PV energy refills the battery at the
-  /// lowest opportunity cost. The fully-charged battery can then be discharged at peak prices.
-  ///
-  /// Returns null when the battery will not reach 99 % today or there are insufficient PV
-  /// price hours to form a valid window.
-  /// </summary>
+  /// <summary>Start of today's cheapest export-price block within the PV window that is long enough for PV to fill the battery (when to leave feedin_priority).</summary>
+  /// <param name="now">Current slot.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead; its first 99 % sets the block length.</param>
+  /// <param name="input">Simulation input.</param>
+  /// <returns>Block start; null if the battery doesn't get full today or too few PV price hours remain.</returns>
   private static DateTime? FindChargingValleyStart(
     DateTime now, Dictionary<DateTime, int> baseFutureSoC, SimulationInput input)
   {
@@ -742,7 +675,7 @@ public static class EnergySimulator
     // valid for all 15-min slots within it — without this, StartTime < now at 13:15 would
     // exclude the 13:00 entry and push valleyStart to 14:00, re-engaging feedin_priority for
     // the remaining 45 min of the already-started charging window.
-    var nowHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0);
+    var nowHour = now.Floor(60);
     var pvHours = input.ExportPrices
       .Where(p => p.StartTime >= nowHour
                && p.StartTime.Date == now.Date
@@ -764,12 +697,9 @@ public static class EnergySimulator
     return best;
   }
 
-  /// <summary>
-  /// How many hours the battery stays at or above 99 % SoC in the given base forecast.
-  /// A long plateau means we can afford to discharge opportunistically without risking
-  /// running short — PV will refill the battery before it matters.
-  /// Returns 0 if the SoC never reaches 99 %.
-  /// </summary>
+  /// <summary>How long the SoC stays at ≥ 99 % from its first maximum on.</summary>
+  /// <param name="socDict">SoC by slot.</param>
+  /// <returns>Hours; 0 if 99 % is never reached.</returns>
   private static double ComputeMaxSocDuration(Dictionary<DateTime, int> socDict)
   {
     var maxEntry = socDict.FirstMaxOrDefault();

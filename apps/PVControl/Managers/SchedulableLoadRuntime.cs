@@ -90,11 +90,17 @@ namespace NetDeamon.apps.PVControl.Managers
       && EnforceReadyByEntity.TryGetStateValue(out bool enforced) && enforced
       && TryParseReadyBy(ReadyByEntity.State, out var t) ? t : null;
 
-    /// <summary>Parses "H:mm", "HH:mm", "H:mm:ss" or "HH:mm:ss" (HA's time format).</summary>
+    /// <summary>Parses a ready-by time in HA's formats (H:mm, HH:mm, with or without seconds).</summary>
+    /// <param name="text">Time text.</param>
+    /// <param name="time">The time; default on failure.</param>
+    /// <returns>False if the text is no time.</returns>
     public static bool TryParseReadyBy(string? text, out TimeOnly time) =>
       TimeOnly.TryParseExact(text?.Trim(), ["H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
 
-    /// <summary>The next moment after <paramref name="now"/> the clock shows <paramref name="time"/>.</summary>
+    /// <summary>The next moment the clock shows a time.</summary>
+    /// <param name="time">Time of day.</param>
+    /// <param name="now">Current time.</param>
+    /// <returns>Today at <paramref name="time"/> if still ahead, else tomorrow.</returns>
     public static DateTime NextOccurrence(TimeOnly time, DateTime now)
     {
       var today = now.Date + time.ToTimeSpan();
@@ -162,7 +168,7 @@ namespace NetDeamon.apps.PVControl.Managers
       get
       {
         int pw = EffectivePowerW;
-        return pw > 0 ? EnergyNeededWh * 60 / pw : 0;
+        return pw > 0 ? Energy.Minutes(EnergyNeededWh, pw) : 0;
       }
     }
 
@@ -179,18 +185,19 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>Human-readable explanation of the current ChargeNow decision.</summary>
     public string ChargeReason { get; internal set; } = "Not initialized";
 
-    /// <summary><see cref="ChargeReason"/> as of <paramref name="now"/>, for display.</summary>
+    /// <summary><see cref="ChargeReason"/> for display, with the latch minutes counted live.</summary>
+    /// <param name="now">Current time.</param>
     public string ChargeReasonAt(DateTime now) => WithLiveLatchMinutes(ChargeReason, now, SessionStartTime, SessionStopTime);
 
     static readonly System.Text.RegularExpressions.Regex LatchMinutes =
       new(@"(\d+)/(\d+) min min-(on|off)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    /// <summary>
-    /// The reason text is built when the schedule search runs, which is only when it's due
-    /// (ReplanPolicy) — a latch's "x/15 min min-on" stayed at the minute of that search between
-    /// searches ("1/15", then "6/15"). This counts x live: min-on since the session start, min-off
-    /// since the stop, at most the latch length.
-    /// </summary>
+    /// <summary>Replaces "x/y min min-on|off" in a reason with the live minutes (the reason is built only when the search runs).</summary>
+    /// <param name="reason">Reason text.</param>
+    /// <param name="now">Current time.</param>
+    /// <param name="sessionStart">Session start (min-on counts from here).</param>
+    /// <param name="sessionStop">Session stop (min-off counts from here).</param>
+    /// <returns>The reason, x at most y; unchanged without a latch or the time it counts from.</returns>
     public static string WithLiveLatchMinutes(string reason, DateTime now, DateTime? sessionStart, DateTime? sessionStop) =>
       LatchMinutes.Replace(reason, m =>
       {
@@ -238,10 +245,12 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>Clears the min-off latch (e.g. the load became available again).</summary>
     public void ClearOffLatch() => SessionStopTime = null;
 
-    /// <summary>
-    /// End of the min-off latch, or null when it doesn't hold: no recorded stop, disabled, already
-    /// over, or bypassed because mode or settings changed since the stop.
-    /// </summary>
+    /// <summary>End of the min-off latch.</summary>
+    /// <param name="stopTime">When the load stopped; null = no recorded stop.</param>
+    /// <param name="minOffMinutes">Minimum off time; 0 = disabled.</param>
+    /// <param name="now">Current time.</param>
+    /// <param name="sameModeAndSettings">False: mode or settings changed since the stop, the latch is bypassed.</param>
+    /// <returns>The end; null when the latch doesn't hold.</returns>
     public static DateTime? OffLatchUntil(DateTime? stopTime, int minOffMinutes, DateTime now, bool sameModeAndSettings)
     {
       if (stopTime is null || minOffMinutes <= 0 || !sameModeAndSettings) return null;
@@ -249,7 +258,10 @@ namespace NetDeamon.apps.PVControl.Managers
       return now < until ? until : null;
     }
 
-    /// <summary>Moves sessions so none starts before <paramref name="notBefore"/>, keeping their length.</summary>
+    /// <summary>Moves sessions so none starts before a time, keeping their length.</summary>
+    /// <param name="sessions">Sessions.</param>
+    /// <param name="notBefore">Earliest start.</param>
+    /// <returns>The sessions; unchanged ones are the same objects.</returns>
     public static List<ExtraLoad> DelayUntil(IEnumerable<ExtraLoad> sessions, DateTime notBefore) =>
       sessions.Select(e => e.StartTime >= notBefore ? e : new ExtraLoad
       {
@@ -266,10 +278,12 @@ namespace NetDeamon.apps.PVControl.Managers
 
     private string? _replanRequest;
 
-    /// <summary>Forces a replan on the next cycle (user changes, new prices, …). The first reason wins.</summary>
+    /// <summary>Forces a replan on the next cycle; the first reason wins.</summary>
+    /// <param name="reason">Why (shown as the plan reason).</param>
     public void RequestReplan(string reason) => _replanRequest ??= reason;
 
     /// <summary>Returns and clears a pending replan request.</summary>
+    /// <returns>The reason; null if none.</returns>
     public string? TakeReplanRequest()
     {
       var r = _replanRequest;
@@ -287,6 +301,8 @@ namespace NetDeamon.apps.PVControl.Managers
     /// </summary>
     public List<ExtraLoad> PlannedSessions { get; internal set; } = [];
 
+    /// <summary>Live state of a load, starting from its configuration.</summary>
+    /// <param name="config">The load's YAML configuration.</param>
     public SchedulableLoadRuntime(SchedulableLoadConfig config)
     {
       Config = config;

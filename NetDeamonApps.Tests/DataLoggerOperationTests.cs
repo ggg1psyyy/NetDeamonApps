@@ -1,3 +1,4 @@
+using NetDeamon.apps;
 using PVControl;
 using Xunit;
 
@@ -32,8 +33,8 @@ public class DataLoggerOperationTests
   {
     // 15 min at 25 °C, 15 min unknown, 30 min at 31 °C → (15·25 + 30·31) / 45.
     (DateTime, double?)[] changes = [(From.AddMinutes(-5), 25), (From.AddMinutes(15), null), (From.AddMinutes(30), 31)];
-    Assert.Equal((15 * 25 + 30 * 31) / 45.0, DataLogger.TimeWeightedAverage(changes, From, To)!.Value, 6);
-    Assert.Null(DataLogger.TimeWeightedAverage([(From, (double?)null)], From, To));
+    Assert.Equal((15 * 25 + 30 * 31) / 45.0, StepFunction.TimeWeightedAverage(changes, From, To)!.Value, 6);
+    Assert.Null(StepFunction.TimeWeightedAverage([(From, (double?)null)], From, To));
   }
 
   [Fact]

@@ -6,74 +6,62 @@ using NetDeamon.apps.PVControl;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
-/// <summary>
-/// Complete output of a single <see cref="EnergySimulator.Simulate"/> run.
-///
-/// Wraps the raw per-slot timeline and pre-computes all derived values that were
-/// previously scattered across HouseEnergy (SimWillReachMaxSocToday, SimOvernightMinSocOk,
-/// HasNewGrid, IsGridCheap) and PVWindows (FirstRelevantPVEnergyToday/Tomorrow,
-/// CurrentPVPeriod) so callers never have to re-derive them from a raw slot list.
-///
-/// PV window boundaries are computed from the full prediction dictionaries (not only the
-/// simulated slots), so they are correct even when the simulation starts mid-day.
-/// </summary>
-/// <summary>
-/// Implements <see cref="IReadOnlyList{SimulationSlot}"/> so callers can iterate slots
-/// directly (e.g. LINQ, foreach, indexer) without going through the <see cref="Slots"/> property.
-/// </summary>
+/// <summary>Result of one <see cref="EnergySimulator.Simulate"/> run: the slot timeline (also as the list itself) and values derived from it.</summary>
 public class SimulationResult : IReadOnlyList<SimulationSlot>
 {
   private readonly SimulationInput _input;
-  private const int PvNetThresholdWh = 50;
 
   // ── Core timeline ─────────────────────────────────────────────────────────────────────
-  /// <summary>Per-slot simulation timeline from start time through end of tomorrow.</summary>
+  /// <summary>One slot per 15 min from the start through the end of tomorrow.</summary>
   public IReadOnlyList<SimulationSlot> Slots { get; }
 
   // IReadOnlyList<SimulationSlot> delegation — lets callers treat SimulationResult as a slot list
+  /// <summary>Number of slots.</summary>
   public int Count => Slots.Count;
+  /// <summary>Slot by index.</summary>
+  /// <param name="index">0 = the running slot.</param>
   public SimulationSlot this[int index] => Slots[index];
+  /// <summary>Enumerates the slots in time order.</summary>
   public IEnumerator<SimulationSlot> GetEnumerator() => Slots.GetEnumerator();
   System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => ((System.Collections.IEnumerable)Slots).GetEnumerator();
 
   // ── PV window boundaries ──────────────────────────────────────────────────────────────
-  /// <summary>First slot today where net PV (PV − load) exceeds 50 Wh. Null if no PV today.</summary>
+  /// <summary>First slot today with relevant PV (<see cref="SimulationInput.RelevantPVEdge"/>); null if none.</summary>
   public DateTime? FirstRelevantPVEnergyToday { get; }
 
-  /// <summary>Last slot today where net PV exceeds 50 Wh. Null if no PV today.</summary>
+  /// <summary>Last slot today with relevant PV; null if none.</summary>
   public DateTime? LastRelevantPVEnergyToday { get; }
 
-  /// <summary>First slot tomorrow where net PV exceeds 50 Wh. Null if no PV tomorrow.</summary>
+  /// <summary>First slot tomorrow with relevant PV; null if none.</summary>
   public DateTime? FirstRelevantPVEnergyTomorrow { get; }
 
-  /// <summary>Last slot tomorrow where net PV exceeds 50 Wh. Null if no PV tomorrow.</summary>
+  /// <summary>Last slot tomorrow with relevant PV; null if none.</summary>
   public DateTime? LastRelevantPVEnergyTomorrow { get; }
 
-  /// <summary>Whether simulation start time is before, inside, or after today's solar window.</summary>
+  /// <summary>PV period at the start (<see cref="SimulationInput.PVPeriodAt"/>).</summary>
   public PVPeriods CurrentPVPeriod { get; }
 
   // ── SoC peaks (simulation-derived) ────────────────────────────────────────────────────
-  /// <summary>True if any simulated slot today shows SoC ≥ 99 %.</summary>
+  /// <summary>True if a slot today reaches SoC ≥ 99 %.</summary>
   public bool WillReachMaxSocToday { get; }
 
-  /// <summary>True if any simulated slot tomorrow shows SoC ≥ 99 %.</summary>
+  /// <summary>True if a slot tomorrow reaches SoC ≥ 99 %.</summary>
   public bool WillReachMaxSocTomorrow { get; }
 
-  /// <summary>Total simulated time today during which SoC is at or above 99 % (15-min steps).</summary>
+  /// <summary>Total time today at SoC ≥ 99 %.</summary>
   public TimeSpan MaxSocDurationToday { get; }
 
   // ── Overnight SoC floor ───────────────────────────────────────────────────────────────
   /// <summary>
-  /// Lowest SoC (%) reached in the relevant overnight window:
-  /// — BeforePV (pre-dawn): StartTime → FirstRelevantPVEnergyToday.
-  ///   Captures the current early-morning drain before today's sunrise.
-  /// — InPVPeriod / AfterPV: LastRelevantPVEnergyToday → FirstRelevantPVEnergyTomorrow.
-  ///   Captures tonight's dark window after today's PV ends.
-  /// Returns 100 when no overnight window exists within this simulation.
+  /// Lowest SoC (%) of the dark window: before today's PV from the start to today's first PV slot,
+  /// otherwise from today's last to tomorrow's first PV slot; 100 if there is none.
   /// </summary>
   public int OvernightMinSocReached { get; }
 
   // ── Construction ──────────────────────────────────────────────────────────────────────
+  /// <summary>Wraps a simulated timeline and derives its values.</summary>
+  /// <param name="slots">The simulated slots.</param>
+  /// <param name="input">The input they were simulated from.</param>
   internal SimulationResult(List<SimulationSlot> slots, SimulationInput input)
   {
     _input = input;
@@ -81,21 +69,16 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
     var today    = input.StartTime.Date;
     var tomorrow = today.AddDays(1);
-    var pv       = input.PVPredictionWh;
-    var load     = input.LoadPredictionWh;
 
     // PV windows from the full prediction dictionaries so boundaries cover the whole day
     // even when the simulation starts mid-day (e.g. sunrise at 07:00 when started at 14:00).
-    FirstRelevantPVEnergyToday    = PvEdge(pv, load, today,    first: true);
-    LastRelevantPVEnergyToday     = PvEdge(pv, load, today,    first: false);
-    FirstRelevantPVEnergyTomorrow = PvEdge(pv, load, tomorrow, first: true);
-    LastRelevantPVEnergyTomorrow  = PvEdge(pv, load, tomorrow, first: false);
+    FirstRelevantPVEnergyToday    = input.RelevantPVEdge(today,    first: true);
+    LastRelevantPVEnergyToday     = input.RelevantPVEdge(today,    first: false);
+    FirstRelevantPVEnergyTomorrow = input.RelevantPVEdge(tomorrow, first: true);
+    LastRelevantPVEnergyTomorrow  = input.RelevantPVEdge(tomorrow, first: false);
 
     var now = input.StartTime;
-    CurrentPVPeriod =
-      (FirstRelevantPVEnergyToday is null || now < FirstRelevantPVEnergyToday) ? PVPeriods.BeforePV :
-      (LastRelevantPVEnergyToday  is null || now > LastRelevantPVEnergyToday)  ? PVPeriods.AfterPV  :
-      PVPeriods.InPVPeriod;
+    CurrentPVPeriod = input.PVPeriodAt(now);
 
     // SoC peaks from simulation
     WillReachMaxSocToday    = slots.Any(s => s.Time.Date == today    && s.SoC >= 99);
@@ -138,68 +121,45 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   // ── Derived predicates ─────────────────────────────────────────────────────────────────
 
-  /// <summary>
-  /// True if the overnight SoC floor stays at or above the required minimum.
-  /// Uses <see cref="SimulationInput.PreferredMinSocPercent"/> when
-  /// <see cref="SimulationInput.EnforcePreferredSoc"/> is set;
-  /// uses <see cref="SimulationInput.AbsoluteMinSocPercent"/> otherwise.
-  /// </summary>
+  /// <summary>Whether the dark window stays at or above the floor in force (<see cref="SimulationInput.GetEffectiveMinSoC"/>).</summary>
   public bool IsOvernightMinSocOk() =>
     OvernightMinSocReached >= _input.GetEffectiveMinSoC();
 
-  /// <summary>
-  /// Slots where this simulation imports more grid energy than <paramref name="baseline"/> —
-  /// the grid use the extra load causes. Compared by energy, not by inverter mode: the load can
-  /// add import to a slot the baseline already supplies from the grid (force_charge, or
-  /// grid_only holding the battery at its floor), which a slot-set comparison can't see.
-  /// </summary>
+  /// <summary>Slots importing more energy than the baseline (by energy, not by mode).</summary>
+  /// <param name="baseline">Same input without the load in question.</param>
+  /// <returns>Slot starts.</returns>
   private IEnumerable<DateTime> NewGridSlotsVs(SimulationResult baseline)
   {
     var baseImportWh = baseline.Slots.ToDictionary(s => s.Time, s => s.GridImportWh);
     return Slots.Where(s => s.GridImportWh > baseImportWh.GetValueOrDefault(s.Time, 0)).Select(s => s.Time);
   }
 
-  /// <summary>True if the extra load causes any grid import vs <paramref name="baseline"/>.</summary>
+  /// <summary>Whether the load causes extra grid import.</summary>
+  /// <param name="baseline">Same input without the load in question.</param>
+  /// <returns>True if any slot imports more than in the baseline.</returns>
   public bool HasNewGridVs(SimulationResult baseline) => NewGridSlotsVs(baseline).Any();
 
-  /// <summary>
-  /// True if every slot with extra grid import (vs <paramref name="baseline"/>) is priced at or
-  /// below <see cref="SimulationInput.ForceChargeMaxPrice"/>. True when there is none.
-  /// </summary>
+  /// <summary>Whether all extra grid import is at or below <see cref="SimulationInput.ForceChargeMaxPrice"/>.</summary>
+  /// <param name="baseline">Same input without the load in question.</param>
+  /// <returns>True also if there is no extra import; false for a slot without price.</returns>
   public bool IsGridCheapVs(SimulationResult baseline)
-    => NewGridSlotsVs(baseline).All(t => _input.ImportPrices.Any(p =>
-        p.StartTime <= t && p.EndTime > t && p.Price <= _input.ForceChargeMaxPrice));
+    => NewGridSlotsVs(baseline).All(t => _input.ImportPrices.TryGetPrice(t, out float p) && p <= _input.ForceChargeMaxPrice);
 
   /// <summary>
-  /// Extra grid cost (€) of this simulation vs <paramref name="baseline"/>: import cost minus
-  /// export earnings over the whole horizon, plus the battery energy this run leaves missing at
-  /// the end valued at the mean import price — it would have to be bought back (otherwise a plan
-  /// that just ends with an emptier battery would look cheaper). Lost export counts: battery
-  /// energy a load uses tonight is refilled by PV tomorrow that would otherwise be exported.
-  /// Slots without a published price use the mean of the published ones — 0 would make import
-  /// after the price horizon look free.
+  /// Extra grid cost vs the baseline: import cost − export earnings over the horizon (lost export
+  /// counts), plus the battery energy missing at the end at the mean import price.
   /// </summary>
+  /// <param name="baseline">Same input without the load in question.</param>
+  /// <returns>€; prices via <see cref="PriceList.GetPriceOrMean"/>, PV valued at the export price (<see cref="SourceShares.Cost"/>).</returns>
   public float NetGridCostVs(SimulationResult baseline)
   {
-    float missingEndKwh = (baseline.Slots[^1].SoC - Slots[^1].SoC) * _input.BatteryCapacityWh / 100f / 1000f;
+    float missingEndKwh = _input.SocToWh(baseline.Slots[^1].SoC - Slots[^1].SoC) / 1000f;
     return OwnGridCost - baseline.OwnGridCost + missingEndKwh * _input.ImportPrices.Mean;
   }
 
   private float? _ownGridCost;
+  /// <summary>Import cost − export earnings of this run, €.</summary>
   private float OwnGridCost => _ownGridCost ??= Slots.Sum(s =>
     new SourceShares(Pv: -s.GridExportWh / 1000f, Grid: s.GridImportWh / 1000f, Battery: 0)
       .Cost(_input.ImportPrices.GetPriceOrMean(s.Time), batteryPrice: 0, pvPrice: _input.ExportPrices.GetPriceOrMean(s.Time)));
-
-  // ── Helpers ────────────────────────────────────────────────────────────────────────────
-  private static DateTime? PvEdge(
-    Dictionary<DateTime, int> pv,
-    Dictionary<DateTime, int> load,
-    DateTime date,
-    bool first)
-  {
-    var candidates = pv
-      .Where(k => k.Key.Date == date && k.Value - load.GetValueOrDefault(k.Key, 0) > PvNetThresholdWh)
-      .Select(k => (DateTime?)k.Key);
-    return first ? candidates.FirstOrDefault() : candidates.LastOrDefault();
-  }
 }

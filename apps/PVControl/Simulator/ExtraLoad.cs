@@ -2,48 +2,42 @@ using System;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
-/// <summary>
-/// Represents a known extra load that is not captured in the historical load prediction —
-/// e.g. car charging, warm-water heat pump, washing machine running on a schedule.
-/// The simulator adds this load on top of the base house-load prediction for the relevant slots,
-/// so the SoC forecast and mode decisions account for the additional energy draw.
-/// </summary>
+/// <summary>A load on top of the base load forecast (EV session, warm-water heating), added to the simulated slots it covers.</summary>
 public class ExtraLoad
 {
-  /// <summary>Human-readable name shown in diagnostics (e.g. "EV Charger").</summary>
+  /// <summary>Name for diagnostics, e.g. "EV Charger".</summary>
   public string Name { get; init; } = "";
 
-  /// <summary>
-  /// Scheduling priority integer (higher = wins in conflict resolution).
-  /// Emergency mode always overrides regardless of this value. For future use.
-  /// </summary>
+  /// <summary>Priority (higher wins); not used by the simulation yet.</summary>
   public int Priority { get; init; } = 10;
 
-  /// <summary>Wall-clock time when this load switches on.</summary>
+  /// <summary>Switch-on time.</summary>
   public DateTime StartTime { get; init; }
 
-  /// <summary>Wall-clock time when this load switches off.</summary>
+  /// <summary>Switch-off time (exclusive).</summary>
   public DateTime EndTime { get; init; }
 
-  /// <summary>Constant power draw in Watts while active.</summary>
+  /// <summary>Constant power while running, W.</summary>
   public int PowerW { get; init; }
 
-  /// <summary>
-  /// Returns the energy consumed by this load within the given 15-minute slot, in Wh.
-  /// Handles partial overlap: if the load starts or ends mid-slot the proportional
-  /// energy is returned (e.g. a load that starts 7.5 min into the slot contributes half).
-  /// Returns 0 if the load is completely outside this slot.
-  /// </summary>
-  public int GetWhForSlot(DateTime slotStart)
-  {
-    var slotEnd = slotStart.AddMinutes(15);
+  /// <summary>Energy of the load within a 15-min slot (partial overlap pro rata).</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>Wh; 0 outside the slot.</returns>
+  public int GetWhForSlot(DateTime slotStart) =>
+    (int)Energy.Wh(PowerW, TimeRange.Overlap(slotStart, slotStart + TimeRange.Slot, StartTime, EndTime));
 
-    // No overlap with this slot
-    if (EndTime <= slotStart || StartTime >= slotEnd)
-      return 0;
+  /// <summary>Energy of the whole session, Wh.</summary>
+  public double EnergyWh => Energy.Wh(PowerW, EndTime - StartTime);
 
-    // Clamp to slot boundaries and convert overlap duration to hours → Wh
-    var overlapTicks = Math.Min(slotEnd.Ticks, EndTime.Ticks) - Math.Max(slotStart.Ticks, StartTime.Ticks);
-    return (int)(new TimeSpan(overlapTicks).TotalHours * PowerW);
-  }
+  /// <summary>Whether the load runs at a time.</summary>
+  /// <param name="t">Time to test.</param>
+  /// <returns>True if StartTime ≤ <paramref name="t"/> &lt; EndTime.</returns>
+  public bool Covers(DateTime t) => TimeRange.Contains(StartTime, EndTime, t);
+
+  /// <summary>The same load (name, priority, power) in another time range.</summary>
+  /// <param name="start">Switch-on time.</param>
+  /// <param name="end">Switch-off time.</param>
+  /// <returns>A new load.</returns>
+  public ExtraLoad Between(DateTime start, DateTime end) =>
+    new() { Name = Name, Priority = Priority, StartTime = start, EndTime = end, PowerW = PowerW };
 }

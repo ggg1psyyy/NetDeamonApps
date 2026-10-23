@@ -5,96 +5,75 @@ using NetDeamon.apps.PVControl;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
-/// <summary>
-/// All inputs required by <see cref="EnergySimulator.Simulate"/>.
-/// This is a pure-data object with no dependencies on Home Assistant or any live state —
-/// the caller (HouseEnergy.RunSimulation) is responsible for reading current sensor values
-/// and populating this before each simulation run.
-/// Keeping the simulator input/output free of HA types makes the logic independently testable.
-/// </summary>
+/// <summary>Everything <see cref="EnergySimulator.Simulate"/> needs, free of HA types (filled by HouseEnergy.RunSimulation, or by tests).</summary>
 public class SimulationInput
 {
-  /// <summary>
-  /// The real wall-clock time at which the simulation starts.
-  /// It is rounded down to the nearest 15-minute boundary internally,
-  /// so the first slot aligns with the current quarter-hour.
-  /// </summary>
+  /// <summary>Start of the simulation (now); the first slot is the quarter it lies in, simulated only from here.</summary>
   public required DateTime StartTime { get; init; }
 
-  /// <summary>Current battery state of charge in %, read from the BatterySoC sensor.</summary>
+  /// <summary>Battery state of charge at <see cref="StartTime"/>, %.</summary>
   public required int StartSocPercent { get; init; }
 
-  /// <summary>Usable battery capacity in Wh (read from inverter or set in config).</summary>
+  /// <summary>Usable battery capacity, Wh.</summary>
   public required int BatteryCapacityWh { get; init; }
 
-  /// <summary>
-  /// Hard floor SoC the inverter should never discharge below, in %.
-  /// Typically the inverter's own minimum reserve plus a small safety buffer.
-  /// </summary>
+  /// <summary>Hard SoC floor the battery never discharges below, %.</summary>
   public required int AbsoluteMinSocPercent { get; init; }
 
-  /// <summary>
-  /// User-configured preferred minimum SoC, in %.
-  /// Only enforced when <see cref="EnforcePreferredSoc"/> is true; otherwise the system
-  /// is allowed to go as low as <see cref="AbsoluteMinSocPercent"/> to wait for cheaper prices.
-  /// </summary>
+  /// <summary>Preferred SoC floor, %; a hard floor only with <see cref="EnforcePreferredSoc"/>.</summary>
   public required int PreferredMinSocPercent { get; init; }
 
-  /// <summary>
-  /// When true the preferred SoC acts as a hard floor (same as AbsoluteMinSocPercent).
-  /// When false the system may dip below preferred SoC if the next cheap window arrives soon.
-  /// </summary>
+  /// <summary>True: <see cref="PreferredMinSocPercent"/> is the floor; false: <see cref="AbsoluteMinSocPercent"/>.</summary>
   public required bool EnforcePreferredSoc { get; init; }
 
-  /// <summary>
-  /// Maximum grid-to-battery charge current in Amps (matches PVCC_Config.MaxBatteryChargePower).
-  /// Converted to watts internally as Amps × 240 V.
-  /// </summary>
+  /// <summary>Maximum battery charge/discharge current, A (× 230 V = <see cref="MaxChargePowerW"/>).</summary>
   public required int MaxChargePowerAmps { get; init; }
 
-  /// <summary>
-  /// Round-trip inverter efficiency (0–1). Used when estimating how long charging will take.
-  /// A value of 0.9 means 10 % of grid energy is lost as heat during charge/discharge.
-  /// </summary>
+  /// <summary>Inverter efficiency one way, 0…1 (round trip = squared).</summary>
   public required float InverterEfficiency { get; init; }
 
-  /// <summary>
-  /// Hourly import price table (EPEX Spot + taxes + network fees), in ct/kWh.
-  /// Covers today and — once EPEX publishes them around 13:00 — tomorrow's prices. Live
-  /// (HouseEnergy) the rest up to the end of tomorrow is estimated (PriceList.WithEstimatedPrices);
-  /// <see cref="PublishedPricesUntil"/> is where the published prices end.
-  /// </summary>
+  /// <summary>Gross import prices, €/kWh; unpublished slots up to the end of tomorrow estimated (<see cref="PriceList.WithEstimatedPrices"/>).</summary>
   public required PriceList ImportPrices { get; init; }
 
-  /// <summary>
-  /// End of the published prices (later prices in <see cref="ImportPrices"/>/<see cref="ExportPrices"/>
-  /// are estimates). Price-driven plans that commit to a slot (EV sessions) don't plan beyond it.
-  /// Null: all prices are published (e.g. tests).
-  /// </summary>
+  /// <summary>End of the published prices (later ones are estimates); null = all published (tests).</summary>
   public DateTime? PublishedPricesUntil { get; init; }
 
-  /// <summary>Where price-driven plans may look: <see cref="PublishedPricesUntil"/>, else the end of the prices.</summary>
+  /// <summary>How far price-driven plans that commit to a slot (EV sessions) may look.</summary>
+  /// <param name="fallback">Used when there are no prices at all.</param>
+  /// <returns><see cref="PublishedPricesUntil"/>, else the end of <see cref="ImportPrices"/>, else <paramref name="fallback"/>.</returns>
   public DateTime PriceHorizonEnd(DateTime fallback) =>
     PublishedPricesUntil ?? ImportPrices.End ?? fallback;
 
-  /// <summary>
-  /// Share of the slot starting at <paramref name="slotStart"/> that is still ahead: the running
-  /// slot (the simulation's first, <see cref="StartTime"/> floored) only from StartTime on, every
-  /// other slot in full. Simulating the running slot in full from the current SoC added energy
-  /// that had already flowed — 12 min into a quarter with 2 kW PV surplus ≈ +4 % SoC that vanished
-  /// at the next quarter: 2026-10-22 14:15:15 that restarted a grid charge stopped at 14:12.
-  /// </summary>
-  internal double SlotFraction(DateTime slotStart)
+  /// <summary>Share of a slot that is still ahead: the running slot only from <see cref="StartTime"/> on.</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>0…1; 1 for every later slot.</returns>
+  internal double SlotFraction(DateTime slotStart) => TimeRange.SlotFraction(slotStart, StartTime, DateTime.MaxValue);
+
+  /// <summary>Energies of a slot, the running slot only its rest (<see cref="SlotFraction"/>).</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>PV, base load and extra loads, Wh.</returns>
+  internal (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart)
   {
-    var first = StartTime.RoundToNearestQuarterHour();
-    return slotStart == first ? (first.AddMinutes(15) - StartTime).TotalMinutes / 15.0 : 1.0;
+    double fraction = SlotFraction(slotStart);
+    return ((int)(PVPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
+            (int)(LoadPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
+            (int)(ExtraLoadWh(slotStart) * fraction));
   }
 
+  /// <summary>Simulates with additional loads.</summary>
+  /// <param name="loads">Loads added to <see cref="ExtraLoads"/>.</param>
+  /// <returns>The simulation result.</returns>
+  public SimulationResult SimulateWith(params IEnumerable<ExtraLoad> loads) =>
+    EnergySimulator.Simulate(WithExtraLoads([.. ExtraLoads, .. loads]));
+
   private Dictionary<DateTime, int>? _extraLoadWhBySlot;
-  /// <summary>Total ExtraLoads energy (Wh) in the 15-min slot starting at <paramref name="slotStart"/>, computed once per input.</summary>
+  /// <summary>Energy of all <see cref="ExtraLoads"/> in a slot (indexed once per input).</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>Wh.</returns>
   internal int ExtraLoadWh(DateTime slotStart) =>
     (_extraLoadWhBySlot ??= BuildExtraLoadWhBySlot()).GetValueOrDefault(slotStart);
 
+  /// <summary>Energy of all <see cref="ExtraLoads"/> by slot start, Wh.</summary>
   private Dictionary<DateTime, int> BuildExtraLoadWhBySlot()
   {
     var bySlot = new Dictionary<DateTime, int>();
@@ -105,127 +84,138 @@ public class SimulationInput
   }
 
   private PriceList? _quarterHourlyImportPrices;
-  /// <summary>ImportPrices as quarter-hour entries, computed once per input (the simulator needs them every slot).</summary>
+  /// <summary><see cref="ImportPrices"/> as 15-min entries (built once per input).</summary>
   internal PriceList QuarterHourlyImportPrices => _quarterHourlyImportPrices ??= ImportPrices.NormalizeToQuarterHourly();
 
-  /// <summary>
-  /// Hourly export/feed-in price table, in ct/kWh.
-  /// Either the resolved import netto prices (scaled), an independent variable price series,
-  /// or a fixed feed-in tariff, depending on ExportPriceSameAsImport/ExportPriceFixed in config.
-  /// </summary>
+  /// <summary>Gross export prices, €/kWh (fixed tariff, scaled import prices or their own series); estimated like <see cref="ImportPrices"/>.</summary>
   public required PriceList ExportPrices { get; init; }
 
-  /// <summary>
-  /// Historical-average house load per 15-minute slot, in Wh.
-  /// Produced by HourlyWeightedAverageLoadPrediction from the SQLite energy history DB.
-  /// Keys are quarter-hour-aligned DateTime values starting from today's midnight.
-  /// </summary>
+  /// <summary>Base house load forecast per 15-min slot start, Wh.</summary>
   public required Dictionary<DateTime, int> LoadPredictionWh { get; init; }
 
-  /// <summary>
-  /// Forecast PV generation per 15-minute slot, in Wh.
-  /// Produced by OpenMeteoSolarForecastPrediction from the HA forecast entities.
-  /// Keys are quarter-hour-aligned DateTime values starting from today's midnight.
-  /// </summary>
+  /// <summary>PV forecast per 15-min slot start, Wh.</summary>
   public required Dictionary<DateTime, int> PVPredictionWh { get; init; }
 
-  /// <summary>
-  /// Optional list of additional loads not captured in the historical load prediction
-  /// (e.g. car charging, scheduled appliances). The simulator adds their energy draw
-  /// on top of <see cref="LoadPredictionWh"/> for each affected slot.
-  /// </summary>
+  /// <summary>Loads on top of <see cref="LoadPredictionWh"/> (EV sessions, warm-water heatings).</summary>
   public List<ExtraLoad> ExtraLoads { get; init; } = [];
 
-  /// <summary>
-  /// When true the user has activated the "force charge at cheapest price" switch,
-  /// instructing the system to fill the battery to <see cref="ForceChargeTargetSocPercent"/>
-  /// during the cheapest import window of the day regardless of the SoC forecast.
-  /// </summary>
+  /// <summary>User switch: charge to <see cref="ForceChargeTargetSocPercent"/> in the cheapest window.</summary>
   public required bool EnableCheapForceCharge { get; init; }
 
-  /// <summary>
-  /// When true the system may force-discharge the battery to the grid during the two
-  /// daily price maxima, as long as the SoC forecast shows we can still reach 100 % later
-  /// and stay above the minimum floor.
-  /// </summary>
+  /// <summary>Allows discharging to the grid at the day's price peaks when the SoC forecast allows it.</summary>
   public required bool OpportunisticDischarge { get; init; }
 
-  /// <summary>
-  /// The import price ceiling (€/kWh) above which opportunistic discharge is triggered.
-  /// Also used as the upper limit for user-initiated force charge: we never force-charge
-  /// at a price above this value.
-  /// </summary>
+  /// <summary>Import price limit, €/kWh: grid charging only at or below it; opportunistic discharge at or above it.</summary>
   public required float ForceChargeMaxPrice { get; init; }
 
-  /// <summary>
-  /// Target SoC % for user-initiated force charging (ForceCharge switch).
-  /// Charging stops once this level is reached. Independently, NeedToCharge logic
-  /// always charges toward 96–100 %.
-  /// </summary>
+  /// <summary>Target SoC of the user force charge, %.</summary>
   public required int ForceChargeTargetSocPercent { get; init; }
 
-  /// <summary>
-  /// The inverter mode that was active at the end of the previous simulation run.
-  /// Passed into the simulator so the first slot inherits hysteresis state
-  /// (e.g. knowing we were already in force_charge prevents unnecessary mode flips).
-  /// </summary>
+  /// <summary>Inverter mode at the start (continues hysteresis, e.g. an ongoing force_charge).</summary>
   public required InverterState CurrentMode { get; init; }
 
   // ── Derived helpers ─────────────────────────────────────────────────────────────────────
 
   private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
 
-  /// <summary>Effective minimum SoC: always at least AbsoluteMin, at most Preferred.</summary>
+  /// <summary>Maximum battery charge/discharge power, W.</summary>
+  public int MaxChargePowerW => MaxChargePowerAmps * ChargeVoltage;
+
+  /// <summary>Maximum battery charge/discharge energy in a slot.</summary>
+  /// <param name="fraction">Simulated share of the slot (<see cref="SlotFraction"/>).</param>
+  /// <returns>Wh.</returns>
+  public int MaxChargeWhPerSlot(double fraction = 1.0) => (int)(Energy.SlotWh(MaxChargePowerW) * fraction);
+
+  /// <summary>Time to charge at the maximum power (<see cref="Soc.ChargeMinutes"/>).</summary>
+  /// <param name="startSoC">Start SoC, %.</param>
+  /// <param name="endSoC">End SoC, %.</param>
+  /// <returns>Minutes.</returns>
+  public int CalculateChargingDuration(int startSoC, int endSoC) =>
+    Soc.ChargeMinutes(startSoC, endSoC, BatteryCapacityWh, InverterEfficiency, MaxChargePowerW);
+
+  /// <summary>Energy of a SoC with this battery (<see cref="Soc.ToWh"/>).</summary>
+  /// <param name="socPercent">SoC or SoC difference, %.</param>
+  /// <returns>Wh.</returns>
+  public int SocToWh(int socPercent) => Soc.ToWh(socPercent, BatteryCapacityWh);
+  /// <summary>SoC of an energy with this battery (<see cref="Soc.FromWh"/>).</summary>
+  /// <param name="wh">Energy, Wh.</param>
+  /// <returns>%.</returns>
+  public int WhToSoc(int wh) => Soc.FromWh(wh, BatteryCapacityWh);
+
+  /// <summary>Preferred floor, at least the absolute one, %.</summary>
   public int GetPreferredMinSoC() =>
     Math.Max(PreferredMinSocPercent, AbsoluteMinSocPercent);
 
-  /// <summary>Effective floor SoC respecting the EnforcePreferredSoc setting.</summary>
+  /// <summary>The floor in force (<see cref="EnforcePreferredSoc"/>), %.</summary>
   public int GetEffectiveMinSoC() =>
     EnforcePreferredSoc ? PreferredMinSocPercent : AbsoluteMinSocPercent;
 
-  /// <summary>
-  /// True if the current time is between the first and last slot where PV net generation
-  /// exceeds 50 Wh (i.e. PV minus house load is meaningfully positive).
-  /// </summary>
-  public bool IsInPVPeriod(DateTime now)
+  /// <summary>Whether a time lies in the day's PV window (<see cref="PVPeriodAt"/>).</summary>
+  /// <param name="now">Time to check.</param>
+  /// <returns>True between the day's first and last relevant PV slot.</returns>
+  public bool IsInPVPeriod(DateTime now) => PVPeriodAt(now) == PVPeriods.InPVPeriod;
+
+  /// <summary>Before, inside or after the day's PV window: between the first and last <see cref="RelevantPVEdge"/> (cloudy slots in between are inside).</summary>
+  /// <param name="time">Time to check.</param>
+  /// <returns>BeforePV also if the day has no relevant PV.</returns>
+  public PVPeriods PVPeriodAt(DateTime time)
   {
-    var firstPV = GetFirstRelevantPVTime(now.Date, now);
-    var lastPV = GetLastRelevantPVTime(now.Date);
-    return now >= firstPV && now <= lastPV;
+    var first = RelevantPVEdge(time.Date, first: true);
+    var last = RelevantPVEdge(time.Date, first: false);
+    return first is null || time < first ? PVPeriods.BeforePV
+      : last is null || time > last ? PVPeriods.AfterPV
+      : PVPeriods.InPVPeriod;
   }
 
-  /// <summary>
-  /// First slot on the given date (on or after <paramref name="from"/>) where net PV
-  /// (PV minus load) exceeds 50 Wh — the point where solar generation meaningfully
-  /// exceeds consumption and the battery starts charging from PV.
-  /// Falls back to a far-future date if no such slot exists (treats it as "no PV today").
-  /// </summary>
-  public DateTime GetFirstRelevantPVTime(DateTime date, DateTime from)
+  /// <summary>Net PV (PV − load) per slot above which PV is relevant, Wh.</summary>
+  public const int RelevantPVNetWh = 50;
+
+  /// <summary>First or last slot of a day with net PV above <see cref="RelevantPVNetWh"/> (whole-day forecasts).</summary>
+  /// <param name="date">Day.</param>
+  /// <param name="first">True = first slot, false = last.</param>
+  /// <param name="from">Only slots from here on; default = the whole day.</param>
+  /// <returns>Slot start; null if none.</returns>
+  public DateTime? RelevantPVEdge(DateTime date, bool first, DateTime from = default)
   {
-    var fallback = date.AddDays(2).AddMinutes(-1);
-    return PVPredictionWh
+    var candidates = PVPredictionWh
       .Where(k => k.Key.Date == date && k.Key >= from
-                  && k.Value - LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
-      .Select(k => k.Key).DefaultIfEmpty(fallback).First();
+                  && k.Value - LoadPredictionWh.GetValueOrDefault(k.Key, 0) > RelevantPVNetWh)
+      .Select(k => (DateTime?)k.Key);
+    return first ? candidates.FirstOrDefault() : candidates.LastOrDefault();
   }
 
-  /// <summary>Last slot on the given date where net PV exceeds 50 Wh (solar day end).</summary>
-  public DateTime GetLastRelevantPVTime(DateTime date)
-  {
-    var fallback = date.AddDays(2).AddMinutes(-1);
-    return PVPredictionWh
-      .Where(k => k.Key.Date == date
-                  && k.Value - LoadPredictionWh.GetValueOrDefault(k.Key, 0) > 50)
-      .Select(k => k.Key).DefaultIfEmpty(fallback).Last();
-  }
+  /// <summary>Next start of relevant PV (<see cref="RelevantPVEdge"/>, first).</summary>
+  /// <param name="date">Day.</param>
+  /// <param name="from">Only slots from here on.</param>
+  /// <returns>Slot start; far future (date + 2 days − 1 min) if none.</returns>
+  public DateTime GetFirstRelevantPVTime(DateTime date, DateTime from) =>
+    RelevantPVEdge(date, first: true, from) ?? date.AddDays(2).AddMinutes(-1);
 
-  /// <summary>Returns a copy of this input with only the ExtraLoads list replaced.</summary>
+  /// <summary>End of the day's relevant PV (<see cref="RelevantPVEdge"/>, last).</summary>
+  /// <param name="date">Day.</param>
+  /// <returns>Slot start; far future (date + 2 days − 1 min) if none.</returns>
+  public DateTime GetLastRelevantPVTime(DateTime date) =>
+    RelevantPVEdge(date, first: false) ?? date.AddDays(2).AddMinutes(-1);
+
+  /// <summary>Copy with other extra loads.</summary>
+  /// <param name="loads">Replaces <see cref="ExtraLoads"/>.</param>
+  /// <returns>The copy.</returns>
   public SimulationInput WithExtraLoads(List<ExtraLoad> loads) => Copy(loads, ImportPrices, ExportPrices, PublishedPricesUntil);
 
-  /// <summary>Returns a copy of this input with other price lists (and their published end).</summary>
+  /// <summary>Copy with other prices.</summary>
+  /// <param name="import">Replaces <see cref="ImportPrices"/>.</param>
+  /// <param name="export">Replaces <see cref="ExportPrices"/>.</param>
+  /// <param name="publishedUntil">Replaces <see cref="PublishedPricesUntil"/>.</param>
+  /// <returns>The copy.</returns>
   public SimulationInput WithPrices(PriceList import, PriceList export, DateTime? publishedUntil = null) =>
     Copy(ExtraLoads, import, export, publishedUntil);
 
+  /// <summary>Copy with the given loads and prices, everything else the same.</summary>
+  /// <param name="loads">Extra loads.</param>
+  /// <param name="import">Import prices.</param>
+  /// <param name="export">Export prices.</param>
+  /// <param name="publishedUntil">End of the published prices.</param>
+  /// <returns>The copy.</returns>
   private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil) => new()
   {
     StartTime = StartTime,
@@ -248,14 +238,4 @@ public class SimulationInput
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
     CurrentMode = CurrentMode,
   };
-
-  /// <summary>
-  /// Estimates how many minutes it takes to charge from <paramref name="startSoC"/> to
-  /// <paramref name="endSoC"/> at the configured charge current and inverter efficiency.
-  /// Formula: requiredEnergy = (endSoC – startSoC) × capacity × efficiency;
-  ///          duration = requiredEnergy / (amps × volts) × 60 min/h.
-  /// </summary>
-  public int CalculateChargingDuration(int startSoC, int endSoC) =>
-    (int)((float)(endSoC - startSoC) / 100 * BatteryCapacityWh * InverterEfficiency
-          / (MaxChargePowerAmps * ChargeVoltage) * 60);
 }

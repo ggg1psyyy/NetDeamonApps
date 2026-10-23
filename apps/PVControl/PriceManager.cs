@@ -26,9 +26,9 @@ namespace NetDeamon.apps.PVControl
       _independentExportPriceListCache = new();
     }
 
-    /// <summary>Fetches and normalizes a netto price list from a resolved entity's "data"
-    /// attribute (the ha_epex_spot forecast array shape). Returns an empty list if the entity
-    /// is null or has no valid data.</summary>
+    /// <summary>Netto prices from a price entity's "data" attribute (ha_epex_spot format), quarter-hourly.</summary>
+    /// <param name="sourceEntity">Price entity; null gives an empty list.</param>
+    /// <returns>The prices in time order; empty without valid data.</returns>
     private static PriceList FetchNettoPriceList(Entity? sourceEntity)
     {
       if (sourceEntity is not null && sourceEntity.TryGetJsonAttribute("data", out JsonElement data)
@@ -41,18 +41,17 @@ namespace NetDeamon.apps.PVControl
       return new PriceList();
     }
 
-    /// <summary>End of the price data in a source's "data" attribute; null without valid data.</summary>
+    /// <summary>End of the price data of a source.</summary>
+    /// <param name="sourceEntity">Price entity with a "data" attribute.</param>
+    /// <returns>Latest EndTime; null without valid data.</returns>
     public static System.DateTime? DataEnd(Entity? sourceEntity) =>
       sourceEntity is not null && sourceEntity.TryGetJsonAttribute("data", out JsonElement data)
         && data.Deserialize<System.Collections.Generic.List<PriceTableEntry>>() is { Count: > 0 } list
         ? list.Max(p => p.EndTime) : null;
 
-    /// <summary>
-    /// Which price source to use: the one whose data reaches furthest, so whichever source
-    /// publishes tomorrow first wins; on a tie the earlier one in the list. Null if no source has
-    /// data. The sources carry the same EPEX prices (with the configured resolution applied they
-    /// agree to 0.001 ct), only their interval and publication time differ.
-    /// </summary>
+    /// <summary>Which price source to use: the one whose data reaches furthest (tie: the earlier one).</summary>
+    /// <param name="dataEnds">End of each source's data (<see cref="DataEnd"/>), in configured order.</param>
+    /// <returns>Index of the source; null if none has data.</returns>
     public static int? FurthestSource(System.Collections.Generic.IReadOnlyList<System.DateTime?> dataEnds)
     {
       int? best = null;
@@ -93,7 +92,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Network fee component of <see cref="PriceListImport"/> (tax-inclusive), per slot,
     /// with any active <see cref="PVConfig.ImportPriceNetworkPeriods"/> override applied.</summary>
     public PriceList PriceListNetworkImport =>
-      new(PriceListNettoImport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, NetworkPriceAt(p.StartTime) * (1 + PVCC_Config.ImportPriceTax))));
+      new(PriceListNettoImport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, NetworkImportGrossAt(p.StartTime))));
 
     /// <summary>Brutto import prices (netto × multiplier + addition + network) × (1 + tax).</summary>
     public PriceList PriceListImport =>
@@ -113,7 +112,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Network fee component of <see cref="PriceListExport"/> (tax-inclusive), per slot.
     /// Empty when <see cref="PVConfig.ExportPriceFixed"/> is true.</summary>
     public PriceList PriceListNetworkExport =>
-      new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, PVCC_Config.ExportPriceNetwork * (1 + PVCC_Config.ExportPriceTax))));
+      new(PriceListNettoExport.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, GrossPrice(0, 0, 0, PVCC_Config.ExportPriceNetwork, PVCC_Config.ExportPriceTax))));
 
     /// <summary>Brutto export prices — either a fixed feed-in tariff (entity, falling back to a
     /// static value), or scaled netto (reused from import, or an independent export price series).</summary>
@@ -135,33 +134,60 @@ namespace NetDeamon.apps.PVControl
 
     // ── Brutto price calculations ────────────────────────────────────────────────────────────
 
-    /// <summary>Returns the first period whose month+hour window contains <paramref name="t"/>, or null.</summary>
+    /// <summary>The network price period active at a time.</summary>
+    /// <param name="t">Time to check.</param>
+    /// <returns>The first period whose month/hour window contains <paramref name="t"/>; null if none.</returns>
     private NetworkPricePeriod? ActivePeriodAt(System.DateTime t) =>
       PVCC_Config.ImportPriceNetworkPeriods?.FirstOrDefault(p => p.IsActiveAt(t));
 
-    /// <summary>Returns the effective network import price at the given time,
-    /// applying any matching <see cref="PVConfig.ImportPriceNetworkPeriods"/> override.</summary>
+    /// <summary>Network import price (netto) at a time.</summary>
+    /// <param name="t">Time to check.</param>
+    /// <returns>The active period's price, else <see cref="PVConfig.ImportPriceNetwork"/>; €/kWh.</returns>
     private float NetworkPriceAt(System.DateTime t) =>
       ActivePeriodAt(t)?.Price ?? PVCC_Config.ImportPriceNetwork;
 
-    /// <summary>Name of the currently active network price period, or "Standard" if none.</summary>
+    /// <summary>Name of the active network price period; "Standard" if none.</summary>
     public string ActiveNetworkPricePeriodName =>
       ActivePeriodAt(System.DateTime.Now)?.Name ?? "Standard";
 
-    public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice, System.DateTime? at = null) =>
-      (nettoPrice * PVCC_Config.ImportPriceMultiplier + PVCC_Config.ImportPriceAddition
-        + (inclNetworkPrice ? NetworkPriceAt(at ?? System.DateTime.Now) : 0)) * (1 + PVCC_Config.ImportPriceTax);
+    /// <summary>The one gross price formula, for import and export: (netto × multiplier + addition + network) × (1 + tax).</summary>
+    /// <param name="netto">Netto market price in €/kWh.</param>
+    /// <param name="multiplier">Factor on the market price.</param>
+    /// <param name="addition">Supplier addition in €/kWh.</param>
+    /// <param name="network">Network fee in €/kWh; 0 to exclude it.</param>
+    /// <param name="tax">Tax rate, e.g. 0.2.</param>
+    /// <returns>Gross price in €/kWh.</returns>
+    public static float GrossPrice(float netto, float multiplier, float addition, float network, float tax) =>
+      (netto * multiplier + addition + network) * (1 + tax);
 
+    /// <summary>Gross import price (<see cref="GrossPrice"/> with the import tariff).</summary>
+    /// <param name="nettoPrice">Netto market price in €/kWh.</param>
+    /// <param name="inclNetworkPrice">Include the network fee.</param>
+    /// <param name="at">Time for the network price period; null = now.</param>
+    /// <returns>Gross price in €/kWh.</returns>
+    public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice, System.DateTime? at = null) =>
+      GrossPrice(nettoPrice, PVCC_Config.ImportPriceMultiplier, PVCC_Config.ImportPriceAddition,
+        inclNetworkPrice ? NetworkPriceAt(at ?? System.DateTime.Now) : 0, PVCC_Config.ImportPriceTax);
+
+    /// <summary>Gross export price (<see cref="GrossPrice"/> with the export tariff).</summary>
+    /// <param name="nettoPrice">Netto market price in €/kWh.</param>
+    /// <param name="inclNetworkPrice">Include the export network fee.</param>
+    /// <returns>Gross price in €/kWh.</returns>
     public float CalculateBruttoPriceExport(float nettoPrice, bool inclNetworkPrice) =>
-      (nettoPrice * PVCC_Config.ExportPriceMultiplier + PVCC_Config.ExportPriceAddition
-        + (inclNetworkPrice ? PVCC_Config.ExportPriceNetwork : 0)) * (1 + PVCC_Config.ExportPriceTax);
+      GrossPrice(nettoPrice, PVCC_Config.ExportPriceMultiplier, PVCC_Config.ExportPriceAddition,
+        inclNetworkPrice ? PVCC_Config.ExportPriceNetwork : 0, PVCC_Config.ExportPriceTax);
+
+    /// <summary>Network fee of the import price incl. tax.</summary>
+    /// <param name="t">Time for the network price period.</param>
+    /// <returns>€/kWh.</returns>
+    private float NetworkImportGrossAt(System.DateTime t) => GrossPrice(0, 0, 0, NetworkPriceAt(t), PVCC_Config.ImportPriceTax);
 
     // ── Component price breakdowns (need config, no dedicated PriceList) ────────────────────
 
-    /// <summary>Brutto import price at current time, excluding network fee.</summary>
+    /// <summary>Gross import price now without the network fee, €/kWh.</summary>
     public float CurrentEnergyImportPriceEnergyOnly => CalculateBruttoPriceImport(PriceListNettoImport.GetPrice(System.DateTime.Now), false);
 
-    /// <summary>Network fee component of the current import price (tax-inclusive), with any active period override applied.</summary>
-    public float CurrentEnergyImportPriceNetworkOnly => NetworkPriceAt(System.DateTime.Now) * (1 + PVCC_Config.ImportPriceTax);
+    /// <summary>Network fee of the import price now incl. tax, €/kWh.</summary>
+    public float CurrentEnergyImportPriceNetworkOnly => NetworkImportGrossAt(System.DateTime.Now);
   }
 }

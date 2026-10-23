@@ -723,12 +723,12 @@ namespace NetDeamon.apps.PVControl
           .Select(s => new
           {
             datetime = s.Key.ToISO8601(),
-            charging = allSessions.Any(e => s.Key >= e.StartTime && s.Key < e.EndTime),
+            charging = allSessions.Any(e => e.Covers(s.Key)),
           }).ToList();
         // Derived from the actual planned window(s), not TargetLevel — FindLoadWindow's search
         // is often capped short of the full target (PV window, price, SoC gates), so echoing
         // TargetLevel would overstate the real outcome in exactly the cases this is meant to show.
-        float plannedWh = allSessions.Sum(e => (float)(e.EndTime - e.StartTime).TotalHours * e.PowerW);
+        float plannedWh = (float)allSessions.Sum(e => e.EnergyWh);
         float? chargeEndPredictedSoc = allSessions.Count > 0 && load.EnergyPerLevelKwh > 0
           ? load.CurrentLevel + plannedWh / 1000f / load.EnergyPerLevelKwh
           : null;
@@ -783,9 +783,9 @@ namespace NetDeamon.apps.PVControl
       {
         avg_battery_charge_or_discharge_Power = _house.Battery.CurrentAverageBatteryChargeDischargePower.ToString(CultureInfo.InvariantCulture) + " W",
         avg_house_load_now = _house.CurrentAverageHouseLoad.ToString(CultureInfo.InvariantCulture) + " W",
-        predicted_house_load_now = _house.Prediction_Load.CurrentValue * 4 + " W",
+        predicted_house_load_now = Energy.SlotW(_house.Prediction_Load.CurrentValue) + " W",
         avg_pv_power_now = _house.CurrentAveragePVPower.ToString(CultureInfo.InvariantCulture) + " W",
-        predicted_pv_power_now = _house.Prediction_PV.CurrentValue * 4 + " W",
+        predicted_pv_power_now = Energy.SlotW(_house.Prediction_PV.CurrentValue) + " W",
         current_SoC = _house.Battery.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);

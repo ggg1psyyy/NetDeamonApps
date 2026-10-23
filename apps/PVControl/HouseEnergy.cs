@@ -279,7 +279,7 @@ namespace NetDeamon.apps.PVControl
           continue;
         float diff = energy - schedLoad.LastEnergySum;
         // Clamp: a single delta larger than 2 h at the load's typical power is a sensor glitch.
-        float maxDiff = Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW) * 2f / 1000f;
+        float maxDiff = (float)Energy.Wh(Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW), TimeSpan.FromHours(2)) / 1000f;
         if (diff > maxDiff)
         {
           PVCC_Logger.LogWarning("Ignoring implausibly large energy delta {Diff:F3} kWh (>{Max:F3}) for {Name} — likely sensor glitch",
@@ -444,7 +444,7 @@ namespace NetDeamon.apps.PVControl
       var baseResult = EnergySimulator.Simulate(baseInput);
 
       // House load staying off its forecast means the plans assumed a load that isn't happening.
-      if (_loadDeviation.Observe(now, CurrentAverageHouseLoad, Prediction_Load.CurrentValue * 4))
+      if (_loadDeviation.Observe(now, CurrentAverageHouseLoad, Energy.SlotW(Prediction_Load.CurrentValue)))
         RequestReplan("house load off forecast");
 
       // Warm water first: the tank needs heating whatever the other loads do, so the loads below
@@ -604,7 +604,9 @@ namespace NetDeamon.apps.PVControl
       { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerW config", null); return; }
 
       int energyNeededWh = load.EnergyNeededWh;
-      int durationMinutes = energyNeededWh * 60 / chargeRateW;
+      int durationMinutes = load.DurationMinutes; // chargeRateW = load.EffectivePowerW
+      // The load as a session template: SetResult/simulations take session.Between(start, end).
+      var session = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, PowerW = chargeRateW };
 
       // Emergency: always charge immediately, no simulation check.
       if (load.Mode == LoadSchedulingMode.Emergency)
@@ -633,11 +635,7 @@ namespace NetDeamon.apps.PVControl
       // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
       // RunSim returns a full SimulationResult so predicates can use its derived properties
       // (WillReachMaxSocToday, IsOvernightMinSocOk, HasNewGridVs, IsGridCheapVs) directly.
-      SimulationResult RunSimFrom(DateTime start, DateTime end)
-      {
-        var testLoad = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start, EndTime = end, PowerW = chargeRateW };
-        return EnergySimulator.Simulate(baseInput.WithExtraLoads([.. baseInput.ExtraLoads, testLoad]));
-      }
+      SimulationResult RunSimFrom(DateTime start, DateTime end) => baseInput.SimulateWith(session.Between(start, end));
       SimulationResult RunSim(DateTime end) => RunSimFrom(currentSlot, end);
 
       // True when a session from `start` to `end` is long enough to avoid the min-window
@@ -735,7 +733,7 @@ namespace NetDeamon.apps.PVControl
           if (elapsedMin < load.Config.MinWindowMinutes)
           {
             var latchedLoads = previousLoads
-              .Select(e => new ExtraLoad { Name = e.Name, Priority = e.Priority, StartTime = currentSlot, EndTime = e.EndTime, PowerW = e.PowerW })
+              .Select(e => e.Between(currentSlot, e.EndTime))
               .ToList();
             SetResult(latchedLoads, true,
               $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
@@ -778,7 +776,7 @@ namespace NetDeamon.apps.PVControl
               if (end is not null && MeetsMinWindow(tomorrowPVStart.Value, end.Value))
               {
                 SetResult(
-                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = tomorrowPVStart.Value, EndTime = end.Value, PowerW = chargeRateW }],
+                  [session.Between(tomorrowPVStart.Value, end.Value)],
                   false,
                   $"Scheduled tomorrow (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
                   end);
@@ -821,7 +819,7 @@ namespace NetDeamon.apps.PVControl
               if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
               {
                 SetResult(
-                  [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
+                  [session.Between(recoverySlot, end.Value)],
                   false,
                   $"Optimal: SoC {currentSoC}% < preferred {preferred}% — expected start ~{recoverySlot:HH:mm}", end);
                 return;
@@ -846,7 +844,7 @@ namespace NetDeamon.apps.PVControl
           sim.WillReachMaxSocToday && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
         if (mainEnd is not null)
         {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = mainEnd.Value, PowerW = chargeRateW }],
+          SetResult([session.Between(currentSlot, mainEnd.Value)],
             true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", mainEnd);
         }
       }
@@ -913,7 +911,7 @@ namespace NetDeamon.apps.PVControl
                 {
                   // Last call — waiting any longer risks not finishing before sunrise. Start now.
                   SetResult(
-                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = end, PowerW = chargeRateW }],
+                    [session.Between(currentSlot, end)],
                     true,
                     $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
                     end);
@@ -923,7 +921,7 @@ namespace NetDeamon.apps.PVControl
                   // Still time to spare — defer the start to minimize how long the battery sits
                   // drawn down overnight.
                   SetResult(
-                    [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = start.Value, EndTime = end, PowerW = chargeRateW }],
+                    [session.Between(start.Value, end)],
                     false,
                     $"Scheduled ~{start.Value:HH:mm} ({load.Mode} {load.Config.Name}: deferring to minimize overnight battery drawdown time)",
                     end);
@@ -1004,7 +1002,7 @@ namespace NetDeamon.apps.PVControl
                   if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
                   {
                     SetResult(
-                      [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = recoverySlot, EndTime = end.Value, PowerW = chargeRateW }],
+                      [session.Between(recoverySlot, end.Value)],
                       false, $"{reason} — expected start ~{recoverySlot:HH:mm}", end);
                     return;
                   }
@@ -1044,7 +1042,7 @@ namespace NetDeamon.apps.PVControl
         var stepEnd = FindMax(tomorrowMax, sim => sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
         if (stepEnd is not null)
         {
-          SetResult([new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = currentSlot, EndTime = stepEnd.Value, PowerW = chargeRateW }],
+          SetResult([session.Between(currentSlot, stepEnd.Value)],
             true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", stepEnd);
         }
       }
@@ -1073,7 +1071,7 @@ namespace NetDeamon.apps.PVControl
         };
         bool startNow = p.Start <= currentSlot;
         SetResult(
-          [new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = p.Start, EndTime = end, PowerW = chargeRateW }],
+          [session.Between(p.Start, end)],
           startNow,
           startNow
             ? $"Charging (PriorityPlus {load.Config.Name}: {why}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"

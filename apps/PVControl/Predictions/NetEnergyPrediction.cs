@@ -5,6 +5,7 @@ using static NetDeamon.apps.PVControl.PVControlCommon;
 
 namespace NetDeamon.apps.PVControl.Predictions
 {
+  /// <summary>Net energy forecast per slot: PV − load, both corrected by the live running averages.</summary>
   public class NetEnergyPrediction : Prediction
   {
     private readonly Prediction _SolarForecast;
@@ -14,8 +15,13 @@ namespace NetDeamon.apps.PVControl.Predictions
     private readonly bool _AdjustToRunningAverage;
     private readonly Func<int>? _actualPVWh;
 
-    /// <param name="actualPVWh">Today's PV energy so far (Wh) — the same smoothed value the
-    /// simulation uses; without it the raw TodayPVEnergyEntity.</param>
+    /// <summary>Creates and fills the prediction.</summary>
+    /// <param name="solarForecast">PV forecast.</param>
+    /// <param name="loadPrediction">Base load forecast.</param>
+    /// <param name="currentLoad">Live house load average (5 min).</param>
+    /// <param name="currentPV">Live PV average (15 min).</param>
+    /// <param name="adjustToRunningAverage">Apply the live corrections; off without averages.</param>
+    /// <param name="actualPVWh">Today's PV energy so far, Wh (smoothed, as the simulation uses); null = the raw TodayPVEnergyEntity.</param>
     public NetEnergyPrediction(Prediction solarForecast, Prediction loadPrediction,
       RunningIntAverage currentLoad, RunningIntAverage currentPV,
       bool adjustToRunningAverage = true, Func<int>? actualPVWh = null)
@@ -31,6 +37,9 @@ namespace NetDeamon.apps.PVControl.Predictions
       Initialize("NetEnergy Prediction");
     }
 
+    /// <summary>PV − load per slot of today and tomorrow, both corrected (missing PV counts as 0).</summary>
+    /// <param name="now">Current time.</param>
+    /// <returns>Net energy by slot start, Wh.</returns>
     protected override Dictionary<DateTime, int> PopulateData(DateTime now)
     {
       Dictionary<DateTime, int> result = [];
@@ -66,24 +75,19 @@ namespace NetDeamon.apps.PVControl.Predictions
       return result.OrderBy(o => o.Key).ToDictionary();
     }
 
-    /// <summary>Forecast energy (Wh) in the last 15 min below which the near-term correction uses
-    /// the absolute live average instead of the ratio live/forecast (dawn: the ratio is noise).
-    /// 150 Wh ≈ 600 W forecast; picked by the 10-day backtest (50: morning error 130 Wh, 150 with
-    /// the absolute fallback: 106, absolute only: 111).</summary>
+    /// <summary>Forecast energy of the last 15 min below which the near-term PV correction uses the absolute live average instead of the ratio live/forecast, Wh (backtest: ARCHITECTURE).</summary>
     public const double NearTermRatioMinWh = 150;
 
-    private static double OverlapFraction(DateTime slotStart, DateTime from, DateTime to) =>
-      Math.Max(0, (Math.Min(to.Ticks, slotStart.AddMinutes(15).Ticks) - Math.Max(from.Ticks, slotStart.Ticks)) / (double)TimeSpan.FromMinutes(15).Ticks);
-
     /// <summary>
-    /// PV overload: applies a day-scale ratio (actual PV energy today / sum of forecast slots
-    /// from midnight to now) to all remaining today slots, then ramps the near-term 4 slots
-    /// from the live 15-min average (as a ratio to the forecast, see below) down to the
-    /// day-scaled values.  Tomorrow is untouched.
-    /// The ratio is blended with 1.0 (= no correction) based on how many forecast-positive
-    /// slots have been observed today (confidence 0→1 over the first 6 solar slots ≈ 1.5 h
-    /// after sunrise).  This prevents early-morning noise from scaling the whole day.
+    /// Corrects the PV forecast with live data: today's remaining slots × the day ratio (actual /
+    /// forecast PV so far, faded in over the first 6 solar slots), and the next 4 slots ramped from
+    /// the live ratio (or the absolute live average at dawn) to that. Tomorrow is unchanged.
     /// </summary>
+    /// <param name="raw">PV forecast by slot start, Wh.</param>
+    /// <param name="shortAvgW">Live PV average of the last 15 min, W.</param>
+    /// <param name="actualPVEnergyWh">PV energy today so far, Wh.</param>
+    /// <param name="now">Current time; the correction starts with the running slot.</param>
+    /// <returns>A corrected copy, Wh.</returns>
     public static Dictionary<DateTime, int> WithRunningAvgCorrection(
       Dictionary<DateTime, int> raw, int shortAvgW, int actualPVEnergyWh, DateTime now)
     {
@@ -101,7 +105,7 @@ namespace NetDeamon.apps.PVControl.Predictions
       // (part of the jump that restarted a stopped grid charge, see SimulationInput.SlotFraction).
       int forecastSumWh = (int)raw
         .Where(kvp => kvp.Key >= today && kvp.Key < now)
-        .Sum(kvp => kvp.Value * Math.Clamp((now - kvp.Key).TotalMinutes / 15.0, 0.0, 1.0));
+        .Sum(kvp => kvp.Value * TimeRange.SlotFraction(kvp.Key, today, now));
 
       // Compute raw day-scale ratio; skip before meaningful generation has been forecast
       double ratio = 1.0;
@@ -137,8 +141,8 @@ namespace NetDeamon.apps.PVControl.Predictions
       // forecast in the window (dawn) the ratio is noise — then the absolute average as before.
       double windowForecastWh = raw
         .Where(kvp => kvp.Key < now && kvp.Key.AddMinutes(15) > now.AddMinutes(-15))
-        .Sum(kvp => kvp.Value * OverlapFraction(kvp.Key, now.AddMinutes(-15), now));
-      double shortWh = shortAvgW / 4.0; // the 15-min average = energy of the last 15 min
+        .Sum(kvp => kvp.Value * TimeRange.SlotFraction(kvp.Key, now - TimeRange.Slot, now));
+      double shortWh = Energy.Wh(shortAvgW, TimeRange.Slot); // the 15-min average = energy of the last 15 min
       bool useRatio = shortAvgW >= 0 && windowForecastWh >= NearTermRatioMinWh;
       double shortRatio = useRatio ? Math.Clamp(shortWh / windowForecastWh, 0.0, 3.0) : 0;
 
@@ -149,7 +153,7 @@ namespace NetDeamon.apps.PVControl.Predictions
       // Tomorrow (and CurrentPVPeriod) for everything downstream that relies on them. A skipped
       // slot still counts toward the 4 — it's already correct, there's nothing to ramp. (The ratio
       // keeps a zero forecast at zero by itself.)
-      int shortAvgPerSlot = shortAvgW / 4;
+      int shortAvgPerSlot = Energy.SlotWh(shortAvgW);
       int slotsToCorrect  = 4;
       int remaining       = slotsToCorrect;
       foreach (var key in result.Keys.OrderBy(k => k).ToList())
@@ -168,14 +172,18 @@ namespace NetDeamon.apps.PVControl.Predictions
     }
 
     /// <summary>
-    /// Load overload: ramps the next 4 slots from the 5-min running average down to the raw
-    /// prediction.  No day-scale applied (load follows historical patterns, not weather).
+    /// Corrects the load forecast with live data: the next slots ramped from the live average to the forecast (no day scale).
     /// </summary>
+    /// <param name="raw">Load forecast by slot start, Wh.</param>
+    /// <param name="avgW">Live house load average, W.</param>
+    /// <param name="now">Current time; the correction starts with the running slot.</param>
+    /// <param name="slotsToCorrect">Slots of the ramp.</param>
+    /// <returns>A corrected copy, Wh.</returns>
     public static Dictionary<DateTime, int> WithRunningAvgCorrection(
       Dictionary<DateTime, int> raw, int avgW, DateTime now, int slotsToCorrect = 4)
     {
       var result      = new Dictionary<DateTime, int>(raw);
-      int avgPerSlot  = avgW / 4;
+      int avgPerSlot  = Energy.SlotWh(avgW);
       int remaining   = slotsToCorrect;
       var start       = now.RoundToNearestQuarterHour(); // same first slot as the PV overload
       foreach (var key in result.Keys.OrderBy(k => k).ToList())

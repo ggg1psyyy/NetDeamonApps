@@ -61,7 +61,7 @@ public sealed class WeatherLoadPrediction : Prediction
       while (reader.Read())
       {
         var end = DateTimeOffset.Parse(reader.GetString(0), System.Globalization.CultureInfo.InvariantCulture).LocalDateTime;
-        rows.Add((new DateTime(end.Year, end.Month, end.Day, end.Hour, 0, 0), reader.GetString(1)));
+        rows.Add((end.Floor(60), reader.GetString(1)));
       }
       rows.Reverse();
       _mode.Seed(rows);
@@ -177,7 +177,7 @@ public sealed class WeatherLoadPrediction : Prediction
     foreach (var r in rows)
     {
       var local = r.Timestamp.Kind == DateTimeKind.Utc ? r.Timestamp.ToLocalTime() : r.Timestamp;
-      var hour = new DateTime(local.Year, local.Month, local.Day, local.Hour, 0, 0);
+      var hour = local.Floor(60);
       if (hour < from || hour >= now) continue;
       double excluded = _excludeColumns.Sum(c => c switch
       {

@@ -72,6 +72,14 @@ of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
   included — or under `ForceChargeMaxPrice`. Otherwise the floor is held with `grid_only`,
   which buys only the load.
 
+**Mode order** (`ComputeMode`): negative import price → opportunistic discharge → user force
+charge → NeedToCharge → normal. A negative export price is not a step but a modifier
+(`InverterState.ExportAllowed = false`): it used to return house_only early, which blocked the
+cheap force charge and the NeedToCharge safety net during every negative-export window — and
+negative export and cheap import come from the same cause (midday solar surplus), so it starved
+the cheap charge on exactly the sunny days it mattered. Exporting and grid charging are
+independent, so only export is suppressed.
+
 **This same function is called many times per cycle** — once as a baseline, then once per
 schedulable load candidate window, then once more for the final combined result.
 
@@ -547,6 +555,19 @@ Energy-Charts' quarters vs Awattar's hours differed by at most 0.001 ct over 48 
 provider bills hourly (`ImportPriceResolution: Hourly`), so a 15-min source never brings finer
 prices. The health check's `price_source` now means "a source has no data at all" instead of
 "not the first one is used".
+
+**One calculation, one function** (2026-10-23). A sweep for formulas written more than once
+moved them into `apps/Calculations.cs` (time ranges, W/Wh, SoC/Wh, charge time, weighted mean,
+step functions) or onto the type they belong to (`PriceList.TryGetPrice`, `ExtraLoad.Between`/
+`EnergyWh`, `SimulationInput.SlotEnergyWh`/`RelevantPVEdge`/`MaxChargeWhPerSlot`/`SimulateWith`).
+The simulator's inverter modes are now parameter sets of two flows: `grid_only` = `Normal` with
+no charge rate, `feedin_priority` = `Normal` without battery charging, `force_charge_grid_only`
+= `ForceCharge` without PV. The separate `FeedinPriority` copy lacked `Normal`'s
+`Max(0, energy − floor)`, so below the floor it "discharged" a negative amount.
+`IsInPVPeriod` (decides `feedin_priority`) and `CurrentPVPeriod` are one calculation,
+`SimulationInput.PVPeriodAt`: between the day's first and last relevant PV slot. `IsInPVPeriod`
+took the first edge from the slot itself on, which made it "this slot has net PV" — a cloudy
+slot at midday counted as outside the PV period.
 
 **What a kWh cost** (`SourceShares`, `PriceList.GetPriceOrMean`). The battery's average stored
 cost and the extra loads' cost totals used two separate source splits: the battery counted a

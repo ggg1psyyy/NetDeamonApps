@@ -1,3 +1,4 @@
+using NetDeamon.apps;
 using System.Globalization;
 using NetDeamon.apps.PVControl.WarmWater;
 using Xunit;
@@ -145,7 +146,7 @@ public class TankModelTests : TestBase
   {
     var t0 = new DateTime(2026, 10, 1, 0, 0, 0);
     // 1000 W from before the start until 10 min, then 2000 W until the end at 30 min.
-    double? avg = WarmWaterController.TimeWeightedAverage([(t0.AddMinutes(-5), 1000), (t0.AddMinutes(10), 2000)], t0, t0.AddMinutes(30));
+    double? avg = StepFunction.TimeWeightedAverage([(t0.AddMinutes(-5), 1000), (t0.AddMinutes(10), 2000)], t0, t0.AddMinutes(30));
     Assert.Equal(1000 * 10.0 / 30 + 2000 * 20.0 / 30, avg!.Value, 6);
   }
 

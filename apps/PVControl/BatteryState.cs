@@ -20,6 +20,8 @@ public class BatteryState
   /// <summary>Set after construction once Prediction_BatterySoC is available.</summary>
   public Prediction? SoCPrediction { get; set; }
 
+  /// <summary>Starts the 1-min battery power average from the current reading.</summary>
+  /// <exception cref="NullReferenceException">The battery power entity is not configured.</exception>
   public BatteryState()
   {
     _battChargeAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
@@ -32,6 +34,8 @@ public class BatteryState
     EnforcePreferredSoC = false;
   }
 
+  /// <summary>Adds a battery power reading to the 1-min average.</summary>
+  /// <param name="value">Battery power, W (positive = charging).</param>
   public void AddBatteryPowerValue(int value) => _battChargeAverage.AddValue(value);
 
   /// <summary>How long the last good SoC is used through a sensor dropout; after that the SoC is
@@ -39,6 +43,7 @@ public class BatteryState
   public static readonly TimeSpan SoCMaxHold = TimeSpan.FromMinutes(2);
   private readonly HeldReading _soc = new(SoCMaxHold);
 
+  /// <summary>Reads the SoC sensor into the held reading (null when unknown).</summary>
   private void ReadSoC() =>
     _soc.Update(DateTime.Now, PVCC_Config.BatterySoCEntity is not null && PVCC_Config.BatterySoCEntity.TryGetStateValue(out int soc) ? soc : null);
 
@@ -53,7 +58,9 @@ public class BatteryState
     }
   }
 
-  /// <summary>No SoC reading for longer than <see cref="SoCMaxHold"/> (or none at all yet).</summary>
+  /// <summary>Whether there was no SoC reading for longer than <see cref="SoCMaxHold"/> (or none yet).</summary>
+  /// <param name="now">Current time.</param>
+  /// <returns>True if the SoC is unavailable.</returns>
   public bool IsSoCUnavailable(DateTime now)
   {
     ReadSoC();
@@ -150,26 +157,18 @@ public class BatteryState
   public int AvailablePower => 0;
   public int AvailableEnergy => 0;
 
-  public int CalculateBatteryEnergyAtSoC(int soc, int minSoC = -1)
-  {
-    float s = (float)soc / 100;
-    float ms = minSoC < 0 ? (float)PreferredMinimalSoC / 100 : (float)minSoC / 100;
-    float e = BatteryCapacity * s - BatteryCapacity * ms;
-    return (int)e;
-  }
+  /// <summary>Energy above a floor at a SoC.</summary>
+  /// <param name="soc">SoC, %.</param>
+  /// <param name="minSoC">Floor, %; −1 = the preferred minimum.</param>
+  /// <returns>Wh (negative below the floor).</returns>
+  public int CalculateBatteryEnergyAtSoC(int soc, int minSoC = -1) =>
+    Soc.ToWh(soc - (minSoC < 0 ? PreferredMinimalSoC : minSoC), BatteryCapacity);
 
-  public int CalculateChargingDurationWh(int startSoC, int endSoC, int pow)
-  {
-    float sS = (float)startSoC / 100;
-    float eS = (float)endSoC / 100;
-    float reqEnergy = (eS - sS) * BatteryCapacity * InverterEfficiency;
-    float duration = reqEnergy / pow;
-    return (int)(duration * 60);
-  }
-
-  public int CalculateChargingDurationA(int startSoC, int endSoC, int amps, int volts = 240)
-  {
-    int pow = amps * volts;
-    return CalculateChargingDurationWh(startSoC, endSoC, pow);
-  }
+  /// <summary>Time to charge or discharge between two SoCs at a power (<see cref="Soc.ChargeMinutes"/>).</summary>
+  /// <param name="startSoC">Start SoC, %.</param>
+  /// <param name="endSoC">End SoC, %.</param>
+  /// <param name="pow">Power, W (negative = discharging).</param>
+  /// <returns>Minutes.</returns>
+  public int CalculateChargingDurationWh(int startSoC, int endSoC, int pow) =>
+    Soc.ChargeMinutes(startSoC, endSoC, BatteryCapacity, InverterEfficiency, pow);
 }

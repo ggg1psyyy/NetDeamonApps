@@ -35,7 +35,7 @@ public sealed class WeatherForecast(LoadForecastConfig config)
 
   public static double? TemperatureAt(IReadOnlyList<HourlyWeather> hours, DateTime local)
   {
-    var hourStart = new DateTime(local.Year, local.Month, local.Day, local.Hour, 0, 0);
+    var hourStart = local.Floor(60);
     foreach (var h in hours)
       if (h.Local == hourStart) return h.Temperature;
     return null;

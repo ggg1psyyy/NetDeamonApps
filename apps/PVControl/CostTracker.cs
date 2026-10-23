@@ -7,6 +7,7 @@ using Math = System.Math;
 
 namespace NetDeamon.apps.PVControl;
 
+/// <summary>Tracks energy costs in HA sensors: import/export sums, the battery's average stored cost.</summary>
 public class CostTracker
 {
   // Plausible range for battery average cost. Values outside this are floating-point
@@ -45,6 +46,8 @@ public class CostTracker
 
   public float BatteryAvgCostPerKwh => _batteryAvgCostPerKwh;
 
+  /// <summary>Starts from the current daily import/export counters.</summary>
+  /// <exception cref="NullReferenceException">The daily energy entities are not configured.</exception>
   public CostTracker()
   {
     if (PVCC_Config.DailyExportEnergyEntity is null || PVCC_Config.DailyImportEnergyEntity is null)
@@ -55,6 +58,9 @@ public class CostTracker
       _lastImportEnergySum = lastImportEnergySum / 1000;
   }
 
+  /// <summary>Adds an amount to a sum sensor.</summary>
+  /// <param name="entity">Sum sensor (€); null = nothing to do.</param>
+  /// <param name="deltaEur">Amount to add in €.</param>
   private async Task AddToSumEntityAsync(Entity? entity, float deltaEur)
   {
     if (entity is null) return;
@@ -63,6 +69,7 @@ public class CostTracker
     await PVCC_EntityManager.SetStateAsync(entity.EntityId, (current + deltaEur).ToString(CultureInfo.InvariantCulture));
   }
 
+  /// <summary>Sets the net cost sensor to import cost − export earnings.</summary>
   private async Task UpdateNetCostEntityAsync()
   {
     if (SumImportExportNetCostEntity is null || SumImportCostBruttoEntity is null || SumExportEarningsEntity is null) return;
@@ -71,12 +78,10 @@ public class CostTracker
     await PVCC_EntityManager.SetStateAsync(SumImportExportNetCostEntity.EntityId, (imp - exp).ToString(CultureInfo.InvariantCulture));
   }
 
-  /// <summary>
-  /// Called when the battery input energy sensor changes. Uses the actual energy delta
-  /// to update the running average cost per kWh stored in the battery. The delta is priced by
-  /// <paramref name="sources"/> (<see cref="SourceShares.ForBatteryCharge"/>: PV free, the grid
-  /// share at the import price) — the same calculation as the extra loads' costs.
-  /// </summary>
+  /// <summary>Blends the energy charged since the last reading into the battery's average cost.</summary>
+  /// <param name="batteryInputKwh">Battery input counter (kWh, daily; resets at midnight).</param>
+  /// <param name="sources">Sources of the charge (<see cref="SourceShares.ForBatteryCharge"/>); PV is free.</param>
+  /// <param name="importPrices">Gross import prices.</param>
   public async Task OnBatteryInputEnergyChangedAsync(float batteryInputKwh, SourceShares sources, PriceList importPrices)
   {
     float currentKwh = batteryInputKwh; // sensor reports in kWh
@@ -100,43 +105,62 @@ public class CostTracker
     if (!PVCC_Config.BatterySoCEntity.TryGetStateValue(out int socPct) ||
         !PVCC_Config.BatteryCapacityEntity.TryGetStateValue(out int capWh))
       return;
-    _batteryAvgCostPerKwh = BlendAverageCost(socPct * capWh / 100f / 1000f, _batteryAvgCostPerKwh, deltaKwh, sourcePrice);
+    _batteryAvgCostPerKwh = BlendAverageCost(Soc.ToWh(socPct, capWh) / 1000f, _batteryAvgCostPerKwh, deltaKwh, sourcePrice);
     if (_batteryAvgCostEntity != null)
       await PVCC_EntityManager.SetStateAsync(_batteryAvgCostEntity.EntityId,
         _batteryAvgCostPerKwh.ToString(CultureInfo.InvariantCulture));
   }
 
-  /// <summary>Weighted average: the stored energy at its average cost blended with the new charge at its price, clamped to the plausible range.</summary>
+  /// <summary>New average cost after a charge, clamped to the plausible range.</summary>
+  /// <param name="storedKwh">Energy in the battery before the charge, kWh (at least 0.1).</param>
+  /// <param name="avgCostPerKwh">Average cost of that energy, €/kWh.</param>
+  /// <param name="deltaKwh">Energy charged, kWh.</param>
+  /// <param name="pricePerKwh">Cost of the charged energy, €/kWh.</param>
+  /// <returns>Weighted mean, €/kWh.</returns>
   public static float BlendAverageCost(float storedKwh, float avgCostPerKwh, float deltaKwh, float pricePerKwh)
   {
-    storedKwh = Math.Max(0.1f, storedKwh);
-    return Math.Clamp((storedKwh * avgCostPerKwh + deltaKwh * pricePerKwh) / (storedKwh + deltaKwh),
+    return Math.Clamp((float)Mean.Weighted(avgCostPerKwh, Math.Max(0.1f, storedKwh), pricePerKwh, deltaKwh),
       BatteryAvgCostMinEurPerKwh, BatteryAvgCostMaxEurPerKwh);
   }
 
-  /// <summary>Called when the daily export energy sensor changes. Accumulates export earnings.</summary>
+  /// <summary>Adds the export since the last reading at the current export price to the earnings sum.</summary>
+  /// <param name="export">Daily export counter in Wh.</param>
+  /// <param name="exportPrices">Gross export prices.</param>
   public async Task OnExportEnergyChangedAsync(float export, PriceList exportPrices)
   {
-    float diff = (export / 1000) - _lastExportEnergySum;
+    float diff = CounterDeltaKwh(ref _lastExportEnergySum, export);
     if (diff > 0)
     {
-      await AddToSumEntityAsync(SumExportEarningsEntity, diff * exportPrices.GetPrice(DateTime.Now));
+      await AddToSumEntityAsync(SumExportEarningsEntity, diff * exportPrices.GetPriceOrMean(DateTime.Now));
       await UpdateNetCostEntityAsync();
     }
-    _lastExportEnergySum = export / 1000;
   }
 
-  /// <summary>Called when the daily import energy sensor changes. Accumulates import costs.</summary>
+  /// <summary>Adds the import since the last reading to the import cost sums (gross, energy only, network only).</summary>
+  /// <param name="import">Daily import counter in Wh.</param>
+  /// <param name="importPrices">Gross import prices.</param>
+  /// <param name="energyOnlyPrice">Current gross price without network fee, €/kWh.</param>
+  /// <param name="networkOnlyPrice">Current network fee incl. tax, €/kWh.</param>
   public async Task OnImportEnergyChangedAsync(float import, PriceList importPrices, float energyOnlyPrice, float networkOnlyPrice)
   {
-    float diff = (import / 1000) - _lastImportEnergySum;
+    float diff = CounterDeltaKwh(ref _lastImportEnergySum, import);
     if (diff > 0)
     {
-      await AddToSumEntityAsync(SumImportCostBruttoEntity, diff * importPrices.GetPrice(DateTime.Now));
+      await AddToSumEntityAsync(SumImportCostBruttoEntity, diff * importPrices.GetPriceOrMean(DateTime.Now));
       await AddToSumEntityAsync(SumImportCostEnergyOnlyEntity, diff * energyOnlyPrice);
       await AddToSumEntityAsync(SumImportCostNetworkOnlyEntity, diff * networkOnlyPrice);
       await UpdateNetCostEntityAsync();
     }
-    _lastImportEnergySum = import / 1000;
+  }
+
+  /// <summary>Energy since the last reading of a daily counter.</summary>
+  /// <param name="lastKwh">Last reading in kWh; set to this reading.</param>
+  /// <param name="counterWh">This reading in Wh.</param>
+  /// <returns>kWh since the last reading; negative at the midnight reset.</returns>
+  private static float CounterDeltaKwh(ref float lastKwh, float counterWh)
+  {
+    float diff = counterWh / 1000 - lastKwh;
+    lastKwh = counterWh / 1000;
+    return diff;
   }
 }

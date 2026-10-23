@@ -247,9 +247,9 @@ public sealed class WarmWaterController
         {
           var (okP, powerHistory) = await PVCC_ApiManager.GetEntityHistoryAsync(Config.PowerEntity, a, ct, getMinimal: true, endDateTime: b);
           if (okP)
-            power = TimeWeightedAverage(powerHistory
+            power = StepFunction.TimeWeightedAverage(powerHistory
               .Where(h => double.TryParse(h.State, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
-              .Select(h => (h.LastChanged.ToLocalTime(), double.Parse(h.State, CultureInfo.InvariantCulture))).ToList(), a, b);
+              .Select(h => (h.LastChanged.ToLocalTime(), (double?)double.Parse(h.State, CultureInfo.InvariantCulture))).ToList(), a, b);
         }
         runs.Add(new HeatingRun(a, b, ValueAt(temps, a), ValueAt(temps, b), power));
       }
@@ -292,20 +292,6 @@ public sealed class WarmWaterController
     return v;
   }
 
-  /// <summary>Time-weighted mean of step values over [start, end); null without values.</summary>
-  public static double? TimeWeightedAverage(IReadOnlyList<(DateTime Time, double Value)> values, DateTime start, DateTime end)
-  {
-    if (values.Count == 0 || end <= start) return null;
-    double sum = 0;
-    for (int i = 0; i < values.Count; i++)
-    {
-      var from = values[i].Time < start ? start : values[i].Time;
-      var to = i + 1 < values.Count ? values[i + 1].Time : end;
-      if (to > end) to = end;
-      if (to > from) sum += values[i].Value * (to - from).TotalSeconds;
-    }
-    return sum / (end - start).TotalSeconds;
-  }
 
   // ── HA entities ───────────────────────────────────────────────────────────────────────────
   public IEnumerable<Entity> CommandEntities =>

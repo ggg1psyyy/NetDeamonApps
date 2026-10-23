@@ -629,6 +629,20 @@ public class SimulatorTests : TestBase
   }
 
   [Fact]
+  public void PVPeriod_CloudySlotAtMidday_IsStillInside()
+  {
+    // One cloudy slot (no net PV) at 12:00 between 08:00 and 18:00 PV: still the PV period —
+    // the simulation's IsInPVPeriod and the result's CurrentPVPeriod are one calculation.
+    var input = BuildInputDayPV(new DateTime(2025, 6, 15, 12, 0, 0), startSocPct: 50, pvWhPerSlot: 2000);
+    input.PVPredictionWh[new DateTime(2025, 6, 15, 12, 0, 0)] = 0;
+
+    Assert.True(input.IsInPVPeriod(new DateTime(2025, 6, 15, 12, 0, 0)));
+    Assert.Equal(PVPeriods.InPVPeriod, EnergySimulator.Simulate(input).CurrentPVPeriod);
+    Assert.Equal(PVPeriods.BeforePV, input.PVPeriodAt(new DateTime(2025, 6, 15, 7, 45, 0)));
+    Assert.Equal(PVPeriods.AfterPV, input.PVPeriodAt(new DateTime(2025, 6, 15, 18, 0, 0)));
+  }
+
+  [Fact]
   public void OvernightMin_BeforePV_UsesPreDawnWindow()
   {
     // Regression: before the fix, OvernightMinSocReached used LastPVToday→FirstPVTomorrow.

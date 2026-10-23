@@ -52,9 +52,9 @@ namespace NetDeamon.apps.PVControl.Managers
       _start = null;
     }
 
-    /// <summary>Weighted mean of the stored value (as if over PriorWeightLevels) and the measurement.</summary>
+    /// <summary>Weighted mean of the stored value (as if over PriorWeightLevels) and the measurement (per level, over levelDelta).</summary>
     public static float Blend(float stored, float measuredKwh, float levelDelta) =>
-      (stored * PriorWeightLevels + measuredKwh) / (PriorWeightLevels + levelDelta);
+      (float)Mean.Weighted(stored, PriorWeightLevels, measuredKwh / levelDelta, levelDelta);
   }
 
   /// <summary>

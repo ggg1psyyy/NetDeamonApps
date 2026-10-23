@@ -12,12 +12,13 @@ namespace NetDeamon.apps.PVControl.Predictions
     private readonly bool _baseLoadOnly;
     private readonly IReadOnlyList<string> _excludeColumns;
 
+    /// <summary>Creates and fills the load forecast from the energy history DB.</summary>
+    /// <param name="dbLocation">Path of the SQLite energy history DB.</param>
+    /// <param name="weightScaling">Age weighting: a day weighs exp(−age in days / weightScaling).</param>
+    /// <param name="baseLoadOnly">Subtract EV charging and warm water from the house load.</param>
     /// <param name="excludeColumns">
-    /// Column names from the hourly DB table to subtract from the house load, so that
-    /// each scheduled load's past energy is not double-counted when it is added back as
-    /// an ExtraLoad in the simulation. Known names: "carcharge", "warmwaterenergy",
-    /// "heatpumpenergy". Has no effect when <paramref name="baseLoadOnly"/> is true
-    /// (which already subtracts carcharge and warmwaterenergy).
+    /// DB columns subtracted from the house load (loads added back as ExtraLoads):
+    /// "carcharge", "warmwaterenergy", "heatpumpenergy". Ignored with <paramref name="baseLoadOnly"/>.
     /// </param>
     public HourlyWeightedAverageLoadPrediction(string dbLocation, float weightScaling = 20f, bool baseLoadOnly = false, IReadOnlyList<string>? excludeColumns = null)
     {
@@ -38,7 +39,7 @@ namespace NetDeamon.apps.PVControl.Predictions
 
       Dictionary<DateTime, int> data = [];
       for (var time = today; time < today.AddDays(2); time = time.AddMinutes(15))
-        data.Add(time, hourly[time.Hour] / 4);
+        data.Add(time, Energy.SlotWh(hourly[time.Hour])); // hourly Wh = mean W
       return data;
     }
 
@@ -57,11 +58,11 @@ namespace NetDeamon.apps.PVControl.Predictions
         .ToList();
     }
 
-    /// <summary>
-    /// Weighted average energy per local hour of day (index 0–23, Wh). A row stamped hh:59:59
-    /// covers hour hh. Older days weigh less: exp(−age in days / weightScaling). Hours without
-    /// history get 0.
-    /// </summary>
+    /// <summary>Weighted average energy per local hour of day; older days weigh less: exp(−age in days / weightScaling).</summary>
+    /// <param name="rows">Hourly rows, Wh (timestamp hh:59:59 covers hour hh; UTC is converted to local).</param>
+    /// <param name="today">Reference day for the age.</param>
+    /// <param name="weightScaling">Age weighting in days.</param>
+    /// <returns>Wh per hour 0–23; 0 for hours without history.</returns>
     public static int[] HourlyWeightedAverages(IEnumerable<(DateTime Timestamp, int Value)> rows, DateTime today, float weightScaling)
     {
       var sums = new double[24];
