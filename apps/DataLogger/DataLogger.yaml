@@ -50,6 +50,12 @@ PVControl.DataLoggerConfig:
   WindSpeedEntity: sensor.wind_geschwindigkeit
   PresenceEntity: person.gipsy
   # Heated living rooms (the cellar is on standby and only logged by HeatingTest).
+  # Heat pump heat output and its electricity per mode (since 2026-10-24, HA templates: heat =
+  # electrical power × COP while the mode's flag is on; never-resetting totals) — COP per mode.
+  HeatEnergyHeatingEntity: sensor.wp_heat_energy_heating
+  HeatEnergyWarmwaterEntity: sensor.wp_heat_energy_warmwater
+  ElecEnergyHeatingEntity: sensor.wp_cop_elec_energy_heating
+  ElecEnergyWarmwaterEntity: sensor.wp_cop_elec_energy_warmwater
   RoomClimateEntities:
     - climate.wohnen_kuche
     - climate.bad

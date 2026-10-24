@@ -258,6 +258,8 @@ One row per hour (`hourly`, stamped hh:59:59) and per day (`daily`): weather (ou
 | `athomeminutes` | `PresenceEntity` | minutes `home` |
 | `roomsheating` | `RoomClimateEntities` (`hvac_action`) | mean number of rooms with an open valve |
 | `roomsetpoint` | `RoomClimateEntities` (setpoint) | mean room setpoint |
+| `heatenergyheating`, `heatenergywarmwater` | `HeatEnergyHeatingEntity`, `HeatEnergyWarmwaterEntity` | heat output (Wh) per mode, counter increase |
+| `heatpumpelecheating`, `heatpumpelecwarmwater` | `ElecEnergyHeatingEntity`, `ElecEnergyWarmwaterEntity` | heat pump electricity (Wh) under the same conditions — COP per mode = heat / electricity |
 
 ---
 

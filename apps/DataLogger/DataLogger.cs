@@ -93,6 +93,12 @@ namespace PVControl
     public Entity? WindSpeedEntity { get; set; }
     public Entity? PresenceEntity { get; set; }
     public List<Entity> RoomClimateEntities { get; set; } = [];
+    // Heat pump heat output and its electricity by mode (schema v7, since 2026-10-24): COP per
+    // mode over any period = heat / electricity, counted under identical conditions in HA.
+    public Entity? HeatEnergyHeatingEntity { get; set; }
+    public Entity? HeatEnergyWarmwaterEntity { get; set; }
+    public Entity? ElecEnergyHeatingEntity { get; set; }
+    public Entity? ElecEnergyWarmwaterEntity { get; set; }
   }
 
   [NetDaemonApp]
@@ -178,6 +184,8 @@ namespace PVControl
         (nameof(_config.CarChargeEntity), _config.CarChargeEntity),
         (nameof(_config.CarDischargeEntity), _config.CarDischargeEntity),
         (nameof(_config.HeatPumpEnergyEntity), _config.HeatPumpEnergyEntity),
+        (nameof(_config.HeatEnergyHeatingEntity), _config.HeatEnergyHeatingEntity), (nameof(_config.HeatEnergyWarmwaterEntity), _config.HeatEnergyWarmwaterEntity),
+        (nameof(_config.ElecEnergyHeatingEntity), _config.ElecEnergyHeatingEntity), (nameof(_config.ElecEnergyWarmwaterEntity), _config.ElecEnergyWarmwaterEntity),
         (nameof(_config.WarmwaterEnergyEntity), _config.WarmwaterEnergyEntity),
         (nameof(_config.HeatPumpModeEntity), _config.HeatPumpModeEntity),
         (nameof(_config.HeatingActiveEntity), _config.HeatingActiveEntity),
@@ -403,6 +411,10 @@ namespace PVControl
         AddFloatTask(averageTasks, _config.CarDischargeEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.HeatPumpEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.WarmwaterEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.HeatEnergyHeatingEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.HeatEnergyWarmwaterEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ElecEnergyHeatingEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ElecEnergyWarmwaterEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         var operation = GetOperationValuesAsync(historyStart, historyEnd);
         await Task.WhenAll(averageTasks);
         var op = await operation;
@@ -427,6 +439,10 @@ namespace PVControl
         int? carDischarge = (int?)(GetFloatTaskResult(averageTasks, _config.CarDischargeEntity) * 1000);
         int? heatpumpEnergy = (int?)(GetFloatTaskResult(averageTasks, _config.HeatPumpEnergyEntity) * 1000);
         int? warmwaterEnergy = (int?)(GetFloatTaskResult(averageTasks, _config.WarmwaterEnergyEntity) * 1000);
+        int? heatHeating = (int?)(GetFloatTaskResult(averageTasks, _config.HeatEnergyHeatingEntity) * 1000);
+        int? heatWarmwater = (int?)(GetFloatTaskResult(averageTasks, _config.HeatEnergyWarmwaterEntity) * 1000);
+        int? elecHeating = (int?)(GetFloatTaskResult(averageTasks, _config.ElecEnergyHeatingEntity) * 1000);
+        int? elecWarmwater = (int?)(GetFloatTaskResult(averageTasks, _config.ElecEnergyWarmwaterEntity) * 1000);
 
 
         (string Column, object? Value)[] values =
@@ -441,6 +457,7 @@ namespace PVControl
           ("heatingmode", op.HeatingMode), ("heatingminutes", op.HeatingMinutes), ("compressorminutes", op.CompressorMinutes),
           ("ecominutes", op.EcoMinutes), ("hptargettemperature", op.TargetTemperature), ("flowtemperature", op.FlowTemperature), ("returntemperature", op.ReturnTemperature),
           ("windspeed", op.WindSpeed), ("athomeminutes", op.AtHomeMinutes), ("roomsheating", op.RoomsHeating), ("roomsetpoint", op.RoomSetpoint),
+          ("heatenergyheating", heatHeating), ("heatenergywarmwater", heatWarmwater), ("heatpumpelecheating", elecHeating), ("heatpumpelecwarmwater", elecWarmwater),
         ];
         var insertCommand = con.CreateCommand();
         insertCommand.CommandText = $"INSERT OR IGNORE INTO {(hours == 1 ? "hourly" : "daily")} ({string.Join(", ", values.Select(v => v.Column))}) " +
@@ -632,12 +649,23 @@ namespace PVControl
         // must not fail with "duplicate column" on the next start and stop all logging.
         foreach (var table in new[] { "hourly", "daily" })
         {
-          string sql = AddOperationColumnsSql(table, await SqliteSchema.ColumnsAsync(con, table));
+          string sql = AddColumnsSql(table, OperationColumns, await SqliteSchema.ColumnsAsync(con, table));
           if (sql.Length > 0)
             await SqliteSchema.ExecuteAsync(con, sql);
         }
         _logger.LogInformation("DataLogger DB migrated to v6: heat pump operation and house state columns added");
         await SqliteSchema.SetVersionAsync(con, 6);
+      }
+      if (actualDBVersion < 7)
+      {
+        foreach (var table in new[] { "hourly", "daily" })
+        {
+          string sql = AddColumnsSql(table, HeatColumns, await SqliteSchema.ColumnsAsync(con, table));
+          if (sql.Length > 0)
+            await SqliteSchema.ExecuteAsync(con, sql);
+        }
+        _logger.LogInformation("DataLogger DB migrated to v7: heat pump heat and electricity per mode added");
+        await SqliteSchema.SetVersionAsync(con, 7);
       }
       await con.CloseAsync();
     }
@@ -652,12 +680,17 @@ namespace PVControl
       "returntemperature REAL", "windspeed REAL", "athomeminutes REAL", "roomsheating REAL", "roomsetpoint REAL",
     ];
 
-    /// <summary>ALTER TABLE statements for the v6 columns a table doesn't have yet.</summary>
+    /// <summary>v7: heat pump heat output and electricity for heating and warm water, Wh (COP = heat / electricity).</summary>
+    public static readonly string[] HeatColumns =
+      ["heatenergyheating INTEGER", "heatenergywarmwater INTEGER", "heatpumpelecheating INTEGER", "heatpumpelecwarmwater INTEGER"];
+
+    /// <summary>ALTER TABLE statements for the columns a table doesn't have yet (a migration step may run again after an interruption).</summary>
     /// <param name="table">Table name.</param>
+    /// <param name="columns">Column definitions ("name TYPE").</param>
     /// <param name="existing">Columns it has.</param>
     /// <returns>SQL; empty if none are missing.</returns>
-    public static string AddOperationColumnsSql(string table, IReadOnlySet<string> existing) =>
-      string.Concat(OperationColumns.Where(c => !existing.Contains(c.Split(' ')[0]))
+    public static string AddColumnsSql(string table, IEnumerable<string> columns, IReadOnlySet<string> existing) =>
+      string.Concat(columns.Where(c => !existing.Contains(c.Split(' ')[0]))
         .Select(c => $"ALTER TABLE {table} ADD COLUMN {c};\n"));
 
     /// <summary>Removes duplicate timestamps (keeping the first row) and adds unique indexes.</summary>

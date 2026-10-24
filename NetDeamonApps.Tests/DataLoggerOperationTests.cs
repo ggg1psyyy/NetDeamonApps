@@ -53,7 +53,7 @@ public class DataLoggerOperationTests
 
   static void Migrate(Microsoft.Data.Sqlite.SqliteCommand c, string table)
   {
-    var sql = DataLogger.AddOperationColumnsSql(table, Columns(c, table).ToHashSet(StringComparer.OrdinalIgnoreCase));
+    var sql = DataLogger.AddColumnsSql(table, DataLogger.OperationColumns, Columns(c, table).ToHashSet(StringComparer.OrdinalIgnoreCase));
     if (sql.Length == 0) return;
     c.CommandText = sql;
     c.ExecuteNonQuery();
@@ -86,6 +86,25 @@ public class DataLoggerOperationTests
     Migrate(c, "hourly");
     Migrate(c, "hourly"); // and once more: nothing left to add
     Assert.Equal(13, Columns(c, "hourly").Length);
-    Assert.Equal("", DataLogger.AddOperationColumnsSql("hourly", Columns(c, "hourly").ToHashSet()));
+    Assert.Equal("", DataLogger.AddColumnsSql("hourly", DataLogger.OperationColumns, Columns(c, "hourly").ToHashSet()));
+  }
+
+  [Fact]
+  public void MigrationV7_AddsTheHeatColumnsAfterV6()
+  {
+    using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+    con.Open();
+    var c = con.CreateCommand();
+    c.CommandText = "CREATE TABLE daily (timestamp TEXT, houseenergy INTEGER)";
+    c.ExecuteNonQuery();
+    foreach (var columns in new[] { DataLogger.OperationColumns, DataLogger.HeatColumns })
+    {
+      c.CommandText = DataLogger.AddColumnsSql("daily", columns, Columns(c, "daily").ToHashSet());
+      if (c.CommandText.Length > 0) c.ExecuteNonQuery();
+    }
+    var all = Columns(c, "daily");
+    Assert.Contains("heatenergyheating", all);
+    Assert.Contains("heatpumpelecwarmwater", all);
+    Assert.Equal(17, all.Length);
   }
 }

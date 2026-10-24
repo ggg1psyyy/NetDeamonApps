@@ -51,7 +51,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion
 - **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`apps/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
-- **`DataLoggerOperationTests`** — DataLogger schema v6: minutes in a state, time-weighted means, prevailing mode, the v6 migration
+- **`DataLoggerOperationTests`** — DataLogger schema v6/v7: minutes in a state, time-weighted means, prevailing mode, the v6 and v7 (heat and electricity per mode) migrations
 - **`PricePublicationTrackerTests`** — when tomorrow's prices first appear (`sensor.pv_control_price_publication`)
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
 - **`RunningSlotTests`** — no jumps at quarter boundaries: the simulation's running slot counts only its rest (`SimulationInput.SlotFraction`), the 0.1-kWh PV energy counter made continuous (`CounterInterpolator`)
@@ -93,3 +93,8 @@ Each app consists of:
 
 ### Configuration
 `appsettings.json` holds HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.
+
+## Follow-ups (remind the user when due)
+
+- **From ~2026-12-05: learn the warm-water efficiency.** `WarmWater.EfficiencyChangePerK` in `PVControl.yaml` is a fixed 0.03 (one rough measurement). DataLogger v7 logs heat and electricity per mode since 2026-10-24 (`heatenergywarmwater` / `heatpumpelecwarmwater`); fit warm-water COP vs outside temperature from the runs and replace the fixed value (or learn it in `WarmWaterController`). Needs enough runs over a spread of outside temperatures.
+- **HeatingTest:** heating switched on 2026-10-24. Arm `switch.heating_test_armed` once the rooms hold their setpoints (a few days later).
