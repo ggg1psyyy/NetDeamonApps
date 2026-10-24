@@ -98,9 +98,11 @@ public static class EnergySimulator
     // chargeTarget = floorSoc + (currentSoc - baseTrough) + buffer
     //             = currentSoc + (floorSoc - baseTrough) + buffer
     // After charging, the base trough shifts up by the same amount, landing above the floor.
-    var pvPeak = baseFutureSoC.FirstMaxOrDefault();
-    // Only use the trough window if PV actually recovers above the floor (avoids edge case
-    // where base trajectory is always declining — no sun — where pvPeak.Key equals the first slot).
+    // The PV peak AFTER the critical point: the first maximum of the whole look-ahead can be a
+    // small bump before it (2026-10-24: afternoon bump, fog the next day — the trough search
+    // ended that afternoon, the deficit came out 0). Without a real recovery above the floor
+    // (no sun) the window is 24 h.
+    var pvPeak = baseFutureSoC.FirstMaxOrDefault(start: need.LatestChargeTime);
     var troughWindowEnd = (pvPeak.Key != default && pvPeak.Value > floorSoc + 10)
       ? pvPeak.Key
       : slotTime.AddHours(24);

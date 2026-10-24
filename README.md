@@ -327,6 +327,7 @@ dotnet test NetDeamonApps.Tests/
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
 | `MorningTopUpTests` | Grid charge on a real night (prices, load forecast): night charge with forecast margin, no top-up at peak price before PV (grid_only holds the floor) |
+| `FoggyDayTopUpTests` | Grid charge before a foggy day: the trough is searched up to the PV peak after the critical point, not a small bump before it |
 | `TankModelTests` | Warm-water tank model fit on 10 days of real history, history helpers |
 | `WarmWaterPlannerTests` | Warm-water plan: heat late vs preheat in cheap slots, max temperature, run in progress, heating prices from the house simulation, outside-temperature efficiency |
 | `HeatingTestTests` | Heating step test: start/skip/alternation, end/abort/disarm, SQLite log incl. restart recovery |

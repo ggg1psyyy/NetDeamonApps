@@ -46,6 +46,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`ReplanPolicyTests`** — when a load's schedule search reruns, house-load deviation trigger, min-off latch
 - **`LevelEnergyLearnerTests`** — learning energy per level unit and charge power
 - **`MorningTopUpTests`** — NeedToCharge grid charge with the real 2026-10-22 night: forecast margin of the night charge, no top-up at peak price when holding the floor is as cheap
+- **`FoggyDayTopUpTests`** — NeedToCharge with a small PV bump before a foggy day (live 2026-10-24): the charge target's trough search runs to the PV peak after the critical point, so the cheap hours really charge from the grid
 - **`TankModelTests`**, **`WarmWaterPlannerTests`**, **`WarmWaterControlTests`** — warm-water tank model fit (real history in `Data/`), the dynamic-program plan and heating prices, the control decision (`WarmWaterController`'s HA calls aren't unit tested)
 - **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion

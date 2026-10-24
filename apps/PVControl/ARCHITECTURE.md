@@ -62,6 +62,15 @@ real 2 % drop of the trough. A time lock against restarts was considered and dro
 prices can differ wildly from one quarter to the next, and a lock could push a needed top-up out
 of the cheap running quarter into a more expensive one.
 
+**Trough up to the PV peak after the critical point** (2026-10-24, heating just switched on, 44 %):
+the charge target lifts the no-charging trajectory's trough before the next PV peak, and that peak
+was the first maximum of the whole look-ahead. A small PV bump in the afternoon before a foggy day
+was that maximum, so the trough search ended the same afternoon and the deficit was 0: the plan
+showed force_charge 13:00–15:00 that took only the PV surplus, then held the floor with grid_only
+from 04:00 until 13:00 the next day at ~0.42 €/kWh instead of charging at 0.353 today. The peak is
+now searched from `LatestChargeTime` on (`FoggyDayTopUpTests`); without a real recovery the
+window stays 24 h.
+
 Two additions since 2026-10-22 (the 02:00 charge fell ~3 % short — the night used ~340 W instead
 of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
 - **Forecast margin** (`ForecastMarginPct`): floor and target are raised by +1 % per 2 h until
