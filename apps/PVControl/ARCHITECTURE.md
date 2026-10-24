@@ -133,6 +133,10 @@ Chosen by backtest (`tools/LoadBacktest`, 376 nights 2025-09 → 2026-10): −15
 - `LoadForecast.Mode`: `Average` (off), `Shadow` (default: computed, published in
   `sensor.pv_control_load_forecast`, not used), `Model` (becomes `Prediction_Load`, so simulation,
   net energy and charge sizing use it; a fallback to the average is a health issue).
+  Switched to `Model` on 2026-10-24, right after the heating was switched on: the average knows
+  nothing about the heating and only follows it over days (20-day age weighting), so the first
+  nights' grid charges would have been sized ~1 kWh short (night forecast 2.99 vs 4.05 kWh). The
+  model had 2 scored nights then, mean error 0.11 kWh vs 0.28 kWh for the average.
 - `HeatPumpModeTracker` — heating on/off and since when: an unavailable mode (KNX dropouts) keeps
   the last known one, and only a real change to a heating mode is "switched on" — HA's
   LastChanged also moves on "unavailable → heating", which would have switched the 48-h scaling

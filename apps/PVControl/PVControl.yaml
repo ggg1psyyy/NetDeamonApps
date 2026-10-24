@@ -151,7 +151,7 @@ NetDeamon.apps.PVControl.PVConfig:
   # PVControl keeps using the hour-of-day average) | Model (PVControl uses it; falls back to the
   # average without weather forecast or history).
   LoadForecast:
-    Mode: Shadow
+    Mode: Model
     # The heat pump heats the house only in these modes; otherwise only its standby is forecast.
     HeatPumpModeEntity: select.warmepumpe_modus
     HeatingModes:
