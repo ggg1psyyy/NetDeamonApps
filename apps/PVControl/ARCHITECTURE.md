@@ -80,6 +80,16 @@ negative export and cheap import come from the same cause (midday solar surplus)
 the cheap charge on exactly the sunny days it mattered. Exporting and grid charging are
 independent, so only export is suppressed.
 
+**Room for negative export** (`NegativeExportFillsBattery`): with import positive but export
+negative (EPEX between about −9 ct and 0 with this tariff), a battery filled from PV in the
+morning has no room left when export turns negative — the PV surplus is curtailed. The valley
+logic of opportunistic discharge (feed in first, charge in the cheapest export window) covers
+this, but only with `enable_opportunistic_export` on, which is off here. So before a negative
+block later today PV surplus is fed in while 70 % (`NegativeExportSurplusShare`, forecast margin)
+of the block's surplus, capped at the charge rate, covers the room to 100 %. It only reorders PV
+use, never discharges to the grid. History: 2026-04-25/26 exported 16 kWh at −9 to −48 ct with a
+full battery (before export suppression); since 2026-09-27 export is suppressed in those hours.
+
 **This same function is called many times per cycle** — once as a baseline, then once per
 schedulable load candidate window, then once more for the final combined result.
 

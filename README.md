@@ -45,6 +45,11 @@ Whether PV surplus may currently be exported is a separate, orthogonal decision 
 so a cheap grid-charge or safety-net top-up can still run even while export is suppressed
 (e.g. during a negative export price window).
 
+Before negative export prices later the same day, PV surplus is fed in while the price is still
+positive (battery charging off, reason `RoomForNegativeExport`) as long as 70 % of the PV surplus
+forecast in the negative hours would fill the battery anyway — the battery then charges in the
+negative hours instead of the PV being curtailed. Independent of opportunistic export.
+
 #### Control entities
 
 | Entity | Description |

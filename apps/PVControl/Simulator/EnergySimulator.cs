@@ -302,6 +302,15 @@ public static class EnergySimulator
     // above resolved to `normal` — every other mode's energy-flow function ignores this flag.
     if (!exportAllowed && input.ImportPrices.NegativeImportUpcoming(now))
       decided.BatteryChargeEnable = false;
+    // Negative export prices later today and PV there would fill the battery anyway: feed the
+    // surplus in now while it still pays, so the battery has room for the PV that would otherwise
+    // be curtailed then. Only in normal mode (feed-in priority/force modes decide on their own).
+    if (exportAllowed && decided.Mode == InverterModes.normal && decided.BatteryChargeEnable
+        && pvWhSlot > totalLoadWhSlot && NegativeExportFillsBattery(input, now, simulatedSoc))
+    {
+      decided.BatteryChargeEnable = false;
+      decided.ModeReason = ForceChargeReasons.RoomForNegativeExport;
+    }
     return decided;
 
     // ── Charge/discharge decision (independent of whether export is currently allowed) ────
@@ -530,6 +539,26 @@ public static class EnergySimulator
   }
 
   // ── Energy flow calculation ───────────────────────────────────────────────────────────────
+  /// <summary>Share of the forecast PV surplus in negative-export slots counted on when keeping battery room for it (forecast margin).</summary>
+  public const double NegativeExportSurplusShare = 0.7;
+
+  /// <summary>Whether the PV surplus in today's coming negative-export slots would fill the battery's remaining room on its own.</summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <returns>True if <see cref="NegativeExportSurplusShare"/> of that surplus (at most the charge rate per slot) covers the room up to 100 %.</returns>
+  private static bool NegativeExportFillsBattery(SimulationInput input, DateTime now, int simulatedSoc)
+  {
+    double surplusWh = 0;
+    for (var t = now.AddMinutes(SlotMinutes); t < now.Date.AddDays(1); t = t.AddMinutes(SlotMinutes))
+    {
+      if (!input.ExportPrices.TryGetPrice(t, out float exportPrice) || exportPrice >= 0) continue;
+      var (pvWh, loadWh, extraWh) = input.SlotEnergyWh(t);
+      surplusWh += Math.Min(Math.Max(0, pvWh - loadWh - extraWh), input.MaxChargeWhPerSlot());
+    }
+    return surplusWh > 0 && surplusWh * NegativeExportSurplusShare >= input.SocToWh(100 - simulatedSoc);
+  }
+
   /// <summary>Energy flows of a slot in a mode.</summary>
   /// <param name="state">Inverter mode.</param>
   /// <param name="pvWh">PV of the slot, Wh.</param>

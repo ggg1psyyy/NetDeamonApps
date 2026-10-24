@@ -60,6 +60,8 @@ namespace NetDeamon.apps
     NextHourCheaper,
     BugFixMode,
     UserMode,
+    /// <summary>PV surplus fed in now (battery not charged) to keep room for PV in coming negative-export hours.</summary>
+    RoomForNegativeExport,
   }
 
   public enum PriceResolution

@@ -381,6 +381,69 @@ public class SimulatorTests : TestBase
     Assert.Equal(0, firstSlot.GridExportWh);
   }
 
+  // ── room for negative export ──────────────────────────────────────────────
+
+  /// <summary>
+  /// Strong PV all day (3000 Wh/slot, load 300), export +8 ct except <paramref name="negFrom"/> →
+  /// <paramref name="negTo"/> at −3 ct; import always positive (20 ct). Charge rate 575 Wh/slot.
+  /// </summary>
+  static SimulationInput NegativeExportDay(DateTime start, int startSoc, int negFrom, int negTo)
+  {
+    var date = start.Date;
+    var load = new Dictionary<DateTime, int>();
+    var pv = new Dictionary<DateTime, int>();
+    for (var t = date; t < date.AddDays(3); t = t.AddMinutes(15))
+    {
+      load[t] = 300;
+      pv[t] = t.Hour is >= 7 and < 18 ? 3000 : 0;
+    }
+    var import = new List<PriceTableEntry>();
+    var export = new List<PriceTableEntry>();
+    for (int h = 0; h < 72; h++)
+    {
+      import.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), 0.20f));
+      export.Add(new PriceTableEntry(date.AddHours(h), date.AddHours(h + 1), h >= negFrom && h < negTo ? -0.03f : 0.08f));
+    }
+    return new SimulationInput
+    {
+      StartTime = start, StartSocPercent = startSoc, BatteryCapacityWh = 10_000,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20, EnforcePreferredSoc = false,
+      MaxChargePowerAmps = 10, InverterEfficiency = 0.9f,
+      ImportPrices = import, ExportPrices = export, LoadPredictionWh = load, PVPredictionWh = pv,
+      EnableCheapForceCharge = false, OpportunisticDischarge = false,
+      ForceChargeMaxPrice = 0.25f, ForceChargeTargetSocPercent = 100,
+      CurrentMode = new InverterState(InverterModes.normal),
+    };
+  }
+
+  [Fact]
+  public void NegativeExportLater_PVWouldFillTheBattery_FeedsInNowAndChargesInTheNegativeHours()
+  {
+    // 09:00, 60 %: 11–15 h negative export; 16 slots × 575 Wh × 0.7 = 6.4 kWh ≥ 4 kWh room.
+    var start = new DateTime(2025, 6, 15, 9, 0, 0);
+    var slots = EnergySimulator.Simulate(NegativeExportDay(start, 60, 11, 15));
+
+    var first = slots[0];
+    Assert.False(first.State.BatteryChargeEnable);
+    Assert.Equal(ForceChargeReasons.RoomForNegativeExport, first.State.ModeReason);
+    Assert.Equal(0, first.BatteryChargeWh);
+    Assert.True(first.GridExportWh > 0);                    // surplus sold at +8 ct
+
+    // The battery fills from PV in the negative hours instead of being full before them.
+    Assert.Equal(60, slots.First(s => s.Time == start.Date.AddHours(11)).SoC);
+    Assert.True(slots.First(s => s.Time == start.Date.AddHours(15)).SoC >= 99);
+  }
+
+  [Fact]
+  public void NegativeExportLater_TooShortToFillTheBattery_ChargesNow()
+  {
+    // Only one negative hour: 4 slots × 575 Wh × 0.7 = 1.6 kWh < 4 kWh room → charge as usual.
+    var start = new DateTime(2025, 6, 15, 9, 0, 0);
+    var first = EnergySimulator.Simulate(NegativeExportDay(start, 60, 13, 14))[0];
+    Assert.True(first.State.BatteryChargeEnable);
+    Assert.True(first.BatteryChargeWh > 0);
+  }
+
   // ── battery charge enable tests ───────────────────────────────────────────
 
   [Fact]
