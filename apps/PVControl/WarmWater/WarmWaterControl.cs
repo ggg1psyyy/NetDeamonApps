@@ -32,11 +32,13 @@ public enum WarmWaterMode
 /// <param name="BoostSawRunning">The heating was seen running since the boost started.</param>
 /// <param name="BoostTimeoutMinutes">A boost ends after this long.</param>
 /// <param name="LastStop">When a one-time heating last stopped (minimum off-time).</param>
+/// <param name="ImportHeadroomW">Grid import left under the import cap, W; null = no cap.</param>
+/// <param name="StartPowerW">Heat pump power of a heating, W (checked against the headroom).</param>
 public readonly record struct ControlInput(
   DateTime Now, double Temp, bool SwitchOn, bool OneTimeActive, double? Setpoint, DateTime? LastCommand, DateTime? LastStart,
   WarmWaterMode Mode, IReadOnlyList<PlannedRun> Runs, double MaxTemp,
   bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes,
-  DateTime? LastStop = null);
+  DateTime? LastStop = null, int? ImportHeadroomW = null, int StartPowerW = 0);
 
 /// <summary>What to do with the heat pump.</summary>
 public enum ControlCommand
@@ -127,9 +129,11 @@ public static class WarmWaterControl
         : ControlDecision.Wait("Waiting for the heat pump"));
     }
 
-    // Switch off: start if needed.
+    // Switch off: start if needed — not while the import cap has no room for the heat pump.
+    string? capFull = c.ImportHeadroomW is { } room && room < c.StartPowerW
+      ? $"Import cap: {room} W left, heating needs {c.StartPowerW} W — waiting" : null;
     if (boosting)
-      return cooledDown
+      return capFull is not null ? ControlDecision.Wait($"Boost: {capFull}") : cooledDown
         ? new(ControlCommand.Start, target, null, $"Boost: start heating to {target:F1} °C")
         : ControlDecision.Wait("Boost: waiting for the heat pump");
     if (c.Mode != WarmWaterMode.Auto)
@@ -143,6 +147,8 @@ public static class WarmWaterControl
       return With(ControlDecision.Wait($"Planned run too small ({c.Temp:F1} → {run.TargetTemp:F1} °C, < {MinRunK:F0} K)"));
     if (c.LastStop is { } stopped && c.Now - stopped < MinOffTime)
       return With(ControlDecision.Wait($"Off-time: no start before {stopped + MinOffTime:HH:mm}"));
+    if (capFull is not null)
+      return With(ControlDecision.Wait($"Plan: {capFull}"));
     return With(cooledDown
       ? new(ControlCommand.Start, target, null, $"Plan: start heating to {target:F1} °C")
       : ControlDecision.Wait("Plan: waiting for the heat pump"));

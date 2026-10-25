@@ -1,8 +1,7 @@
 alias: PV Control - Health
 description: >-
   Notifies when sensor.pv_control_health changes (ok / degraded / error), when PVControl stopped
-  running (last_cycle older than 2 min) and when it runs again. Replace notify.notify with your
-  notify action.
+  running (last_cycle older than 2 min) and when it runs again (ntfy, notify.ha_warnings).
 mode: queued
 triggers:
   - trigger: state
@@ -27,7 +26,9 @@ triggers:
     id: RUNNING
 conditions: []
 actions:
-  - action: notify.notify
+  - action: ntfy.publish
+    target:
+      entity_id: notify.ha_warnings
     data:
       # Reads the sensor, not trigger.to_state: a manual run has no trigger data (then it sends
       # the current status).

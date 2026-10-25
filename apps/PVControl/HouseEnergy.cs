@@ -440,6 +440,8 @@ namespace NetDeamon.apps.PVControl
         ForceChargeMaxPrice = Prices.ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
         CurrentMode = _currentMode,
+        ChargeVoltageV = PVCC_Config.BatteryVoltageV,
+        MaxGridImportW = PVCC_Config.MaxGridImportW,
       };
 
       // Run the baseline simulation once — its grid import and PV window boundaries

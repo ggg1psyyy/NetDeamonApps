@@ -114,17 +114,35 @@ public class SimulationInput
   /// <summary>Inverter mode at the start (continues hysteresis, e.g. an ongoing force_charge).</summary>
   public required InverterState CurrentMode { get; init; }
 
+  /// <summary>Battery voltage while charging, V (W per A of <see cref="MaxChargePowerAmps"/>).</summary>
+  public int ChargeVoltageV { get; init; } = 230;
+
+  /// <summary>Highest grid import allowed in a 15-min slot (mean power), W; 0 = no limit. Grid charging yields to the load.</summary>
+  public int MaxGridImportW { get; init; }
+
   // ── Derived helpers ─────────────────────────────────────────────────────────────────────
 
-  private const int ChargeVoltage = 230; // V — assumed fixed for charge power calculations
-
   /// <summary>Maximum battery charge/discharge power, W.</summary>
-  public int MaxChargePowerW => MaxChargePowerAmps * ChargeVoltage;
+  public int MaxChargePowerW => MaxChargePowerAmps * ChargeVoltageV;
 
   /// <summary>Maximum battery charge/discharge energy in a slot.</summary>
   /// <param name="fraction">Simulated share of the slot (<see cref="SlotFraction"/>).</param>
   /// <returns>Wh.</returns>
   public int MaxChargeWhPerSlot(double fraction = 1.0) => (int)(Energy.SlotWh(MaxChargePowerW) * fraction);
+
+  /// <summary>Grid energy the battery may charge in a slot: the charge limit, less what the load already
+  /// takes from the grid under <see cref="MaxGridImportW"/>.</summary>
+  /// <param name="pvWh">PV of the slot, Wh.</param>
+  /// <param name="loadWh">Load incl. extra loads of the slot, Wh.</param>
+  /// <param name="fraction">Simulated share of the slot (<see cref="SlotFraction"/>).</param>
+  /// <returns>Wh ≥ 0.</returns>
+  public int GridChargeWhPerSlot(int pvWh, int loadWh, double fraction = 1.0)
+  {
+    int max = MaxChargeWhPerSlot(fraction);
+    if (MaxGridImportW <= 0) return max;
+    int capWh = (int)(Energy.SlotWh(MaxGridImportW) * fraction);
+    return Math.Clamp(capWh - Math.Max(0, loadWh - pvWh), 0, max);
+  }
 
   /// <summary>Time to charge at the maximum power (<see cref="Soc.ChargeMinutes"/>).</summary>
   /// <param name="startSoC">Start SoC, %.</param>
@@ -237,5 +255,7 @@ public class SimulationInput
     ForceChargeMaxPrice = ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
     CurrentMode = CurrentMode,
+    ChargeVoltageV = ChargeVoltageV,
+    MaxGridImportW = MaxGridImportW,
   };
 }

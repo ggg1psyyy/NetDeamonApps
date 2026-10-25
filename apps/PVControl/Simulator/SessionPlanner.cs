@@ -112,11 +112,11 @@ public static class SessionPlanner
     return null;
   }
 
-  /// <summary>PriorityPlus price check: the load needs no new grid, or only at/under the price limit.</summary>
+  /// <summary>PriorityPlus price check: the load needs no new grid, or only at/under the price limit — and never over the import limit.</summary>
   /// <param name="sim">Simulation with the load.</param>
   /// <param name="baseline">Simulation without it.</param>
   private static bool PassesPriceCheck(SimulationResult sim, SimulationResult baseline) =>
-    !sim.HasNewGridVs(baseline) || sim.IsGridCheapVs(baseline);
+    (!sim.HasNewGridVs(baseline) || sim.IsGridCheapVs(baseline)) && !sim.ExceedsImportCapVs(baseline);
 
   /// <summary>Longest session from the current slot whose simulation passes a predicate (binary search; the predicate must be monotone).</summary>
   /// <param name="currentSlot">Session start.</param>

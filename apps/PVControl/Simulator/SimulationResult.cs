@@ -134,6 +134,17 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
     return Slots.Where(s => s.GridImportWh > baseImportWh.GetValueOrDefault(s.Time, 0)).Select(s => s.Time);
   }
 
+  /// <summary>Whether the load raises a slot's import above <see cref="SimulationInput.MaxGridImportW"/> (a slot already over it without the load counts only if the load adds to it).</summary>
+  /// <param name="baseline">Same input without the load in question.</param>
+  /// <returns>False without a limit.</returns>
+  public bool ExceedsImportCapVs(SimulationResult baseline)
+  {
+    if (_input.MaxGridImportW <= 0) return false;
+    var baseImportWh = baseline.Slots.ToDictionary(s => s.Time, s => s.GridImportWh);
+    return Slots.Any(s => s.GridImportWh > baseImportWh.GetValueOrDefault(s.Time, 0)
+                          && Energy.SlotW(s.GridImportWh) > _input.MaxGridImportW * _input.SlotFraction(s.Time) + 1);
+  }
+
   /// <summary>Whether the load causes extra grid import.</summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>True if any slot imports more than in the baseline.</returns>

@@ -53,6 +53,8 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`**, **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization, network price periods, gross price composition, unit conversion
 - **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`apps/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
 - **`DataLoggerPeriodTests`** — DataLogger periods as UTC instants: both repeated hours in October, no row for the skipped March hour, 23/25-h days, backfill
+- **`ImportCapTests`** — import cap (SNE-G-V power price): `PriorityCounter` (list order = priority, fallback while the first fails, frozen detection), `QuarterImport`, `MonthPeakTracker`, `ImportCapGuard` (battery throttled first, then extra loads paused, reaction time), `HealthChecks.ImportCap`
+- **`ImportCapSimulationTests`** — the cap in the plan: `SimulationInput.GridChargeWhPerSlot`, force charge with the EV under the cap, `ExceedsImportCapVs` in the PriorityPlus price check, warm-water start waits for room, DataLogger v8 `maxquarterimport`
 - **`DataLoggerOperationTests`** — DataLogger schema v6/v7: minutes in a state, time-weighted means, prevailing mode, the v6 and v7 (heat and electricity per mode) migrations
 - **`PricePublicationTrackerTests`** — when tomorrow's prices first appear (`sensor.pv_control_price_publication`)
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
@@ -84,6 +86,7 @@ Each app consists of:
 - **`Db/`** — LinqToDB ORM over SQLite for cost and history tables
 - **`LoadModel/`** — weather-aware load forecast: `WeatherForecast` (Pirate Weather hourly), `HeatDemandModel` (heat pump energy signature, reusable), `WeatherLoadModel` (= backtested M2), `WeatherLoadPrediction` (Shadow/Model, average as fallback), `NightForecastTracker`; chosen by `tools/LoadBacktest`
 - **`WarmWater/`** — warm-water tank planner: `TankModel` (learned from HA history), `WarmWaterPlanner` (dynamic program over slots × temperature, prices from the house simulation), `WarmWaterControl` (start one-time heatings, boost), `WarmWaterController` (HA side)
+- **`ImportCap/`** — 15-min import cap: `PriorityCounter` (import counters in priority order), `QuarterImport`, `MonthPeakTracker`, `ImportCapGuard` (live decision; the limit goes out as `sensor.pv_control_battery_charge_current_limit`, an HA automation applies it)
 - **`Managers/`** — `SchedulableLoadConfig` (YAML) / `SchedulableLoadRuntime` (live state) per extra load, `ReplanPolicy`, `LevelEnergyLearner`/`ChargePowerLearner`
 - **`ARCHITECTURE.md`** — detailed design notes for PVControl; keep it updated with behaviour changes
 
@@ -96,7 +99,12 @@ Each app consists of:
 ### Configuration
 `appsettings.json` holds HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.
 
+## Home Assistant config (`J:\` = `\\192.168.1.115\config`)
+
+The live HA config is mounted as `J:` (automations in `J:\automations.yaml`, NetDaemon apps in `J:\netdaemon6`). **Read-only by default:** writing, deploying or deleting anything there, and restarting HA or add-ons, only with the user's explicit permission for that action. The repo's `HA/` folder holds the PVControl automations (compare them with the live ones before changing them).
+
 ## Follow-ups (remind the user when due)
 
 - **From ~2026-12-05: learn the warm-water efficiency.** `WarmWater.EfficiencyChangePerK` in `PVControl.yaml` is a fixed 0.03 (one rough measurement). DataLogger v7 logs heat and electricity per mode since 2026-10-24 (`heatenergywarmwater` / `heatpumpelecwarmwater`); fit warm-water COP vs outside temperature from the runs and replace the fixed value (or learn it in `WarmWaterController`). Needs enough runs over a spread of outside temperatures.
+- **Mid-December 2026: power price figures (SNE-T-V).** Once the ct/kW (≤ 10 kW / above) and Linz Netz's start date are published, build the € side of the import cap: `PowerPrice` config, `CostTracker` books Δ(month peak) × ct/kW when the peak rises, `NetGridCostVs` adds the peak increase (the month's peak so far becomes a free soft cap under 9.8 kW).
 - **HeatingTest:** heating switched on 2026-10-24. Arm `switch.heating_test_armed` once the rooms hold their setpoints (a few days later).

@@ -238,8 +238,21 @@ namespace NetDeamon.apps.PVControl
         #endif
       }
     }
-    public Entity TotalImportEnergyEntity { get; set; } = null!;
+    /// <summary>Grid import counters (kWh, never resetting), in priority order: the first is used while it
+    /// works, the next ones only while it fails (<see cref="ImportCap.PriorityCounter"/>).</summary>
+    public List<Entity> TotalImportEnergyEntities { get; set; } = [];
     public Entity TotalExportEnergyEntity { get; set; } = null!;
+
+    /// <summary>Highest mean grid import of any 15-min block, W (the network power price counts the month's
+    /// highest quarter-hour); 0 = no limit.</summary>
+    public int MaxGridImportW { get; set; }
+    /// <summary>How long a requested change takes to show at the meter, s (automation delays, ramps);
+    /// the import cap guard assumes the current power continues that long.</summary>
+    public int ImportCapReactionSeconds { get; set; } = 90;
+    /// <summary>Battery voltage while charging (W per A of the charge current); 230 V without it.</summary>
+    public Entity? BatteryVoltageEntity { get; set; }
+    /// <summary>Battery voltage, V: <see cref="BatteryVoltageEntity"/> in 5-V steps (the plan shouldn't follow every fluctuation), else 230.</summary>
+    public int BatteryVoltageV => BatteryVoltageEntity is not null && BatteryVoltageEntity.TryGetStateValue(out float v) && v > 100 ? (int)Math.Round(v / 5) * 5 : 230;
   }
 
   /// <summary>

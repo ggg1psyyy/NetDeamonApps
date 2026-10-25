@@ -609,6 +609,23 @@ DataLogger and HeatingTest (`SqliteSchema`), DataLogger's hourly/daily catch-up 
 time of day (`TimeRange.NextOccurrence`, ready-by and heating test) and rounding up to a quarter.
 `tools/LoadBacktest` links `Calculations.cs`, so its "App" variant computes exactly what the app does.
 
+**Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
+1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
+highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the
+part up to 10 kW and above it (§6(2)). A single quarter-hour therefore sets the month's power charge. The connection capacity of an existing connection is max(10 kW, contract, mean of the two
+highest monthly 15-min peaks of 2026) (§34); exceeding it can cost a one-time fee per kW (§18(3)).
+Measured 2026-10-25 09:30: 9.50 kW on the utility meter (the inverter's counter: 9.20 — its 0.1-kWh steps, hence the wM-Bus meter first)
+from force charge 7.45 kW + EV 1.92 kW + house; last winter's *hourly* means reached 10.3–13.6 kW.
+The battery's grid charge is the one big load that can be turned down smoothly, so it yields first,
+then the EV (on/off only), then warm-water starts. The limit goes out as a sensor and the user's
+automation applies it, like every other PVControl output; `MaxBatteryChargeCurrrentValue` stays the
+hardware maximum (the Solax number now carries the limit; the old `MaxBatteryChargeCurrentEntity`
+YAML key never bound because of the property's spelling). The guard works on the meter's energy
+so far, not on power: only the quarter's mean counts, so a short spike can be balanced within it.
+Nothing reacts at once (EV automation 1 min, inverter write, ramps): one reaction time instead
+of per-device rules. A counter that doesn't change is valid (no import), so a source only fails
+when unavailable or frozen while a later one counts (NetDaemon has no `last_reported`).
+
 **DataLogger periods are UTC instants** (`DataLogger.DuePeriods`). At the end of summer time
 (2026-10-25) the logger stepped in local clock time: 01:59:59+02:00 + 1 h is the naive 02:59:59,
 which .NET reads as winter time, so the summer-time 02:00 hour was never logged and the

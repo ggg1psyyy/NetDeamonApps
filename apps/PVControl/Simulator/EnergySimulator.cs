@@ -500,7 +500,7 @@ public static class EnergySimulator
         if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
-          int maxChargeWh = Math.Max(1, input.MaxChargeWhPerSlot());
+          int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
           int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
           int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
           inWindow = cheaperUnderMax < quartersNeeded;
@@ -587,10 +587,10 @@ public static class EnergySimulator
       // because C# switch arms are matched in order and both modes share the same name prefix
       // PV disconnected (negative import price): the grid covers house load and battery charging
       InverterModes.force_charge_grid_only
-        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, chargeTargetSocPercent),
+        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(0, totalLoadWh, slotFraction), chargeTargetSocPercent),
 
       InverterModes.force_charge
-        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, chargeTargetSocPercent),
+        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(pvWh, totalLoadWh, slotFraction), chargeTargetSocPercent),
 
       InverterModes.force_discharge
         => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
@@ -642,7 +642,7 @@ public static class EnergySimulator
   /// <param name="totalLoadWh">Load, Wh.</param>
   /// <param name="availEnergy">Energy in the battery, Wh.</param>
   /// <param name="maxCapacity">Battery capacity, Wh.</param>
-  /// <param name="maxChargeWh">Charge limit of the slot, Wh.</param>
+  /// <param name="maxChargeWh">Grid charge limit of the slot, Wh (<see cref="SimulationInput.GridChargeWhPerSlot"/>).</param>
   /// <param name="targetSocPercent">Target SoC, %.</param>
   /// <returns>Battery charge, 0, grid import, 0, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceCharge(

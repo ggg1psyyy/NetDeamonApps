@@ -171,7 +171,7 @@ namespace NetDeamon.apps.PVControl
                 GridExport = 0,
                 GridImport = 0,
                 GridExportTotal = PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float export) ? export : 0.0f,
-                GridImportTotal = PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float import) ? import : 0.0f,
+                GridImportTotal = (float)(ReadImportCounters().FirstOrDefault(v => v is not null) ?? 0),
                 BasePrice = 0,
                 ExportPriceProvider = 0,
                 ExportPriceTotal = 0,
@@ -558,6 +558,115 @@ namespace NetDeamon.apps.PVControl
     }
     #endregion
 
+    #region Import cap
+    private Entity? _chargeLimitEntity, _importQuarterEntity, _importMonthPeakEntity;
+    private ImportCap.QuarterImport? _quarterImportField;
+    private ImportCap.QuarterImport _quarterImport => _quarterImportField ??= new(PVCC_Config.TotalImportEnergyEntities.Count);
+    private readonly ImportCap.MonthPeakTracker _monthPeak = new();
+    private ImportCap.GuardDecision _importCap;
+    private double? _chargeLimitPublished;
+    private DateTime _importSensorsPublished;
+    private ImportCap.QuarterResult? _lastOverCap;
+    private double?[]? _costImportSince;
+
+    /// <summary>The import counters in priority order (kWh); null where one has no usable reading.</summary>
+    private static List<double?> ReadImportCounters() => PVCC_Config.TotalImportEnergyEntities
+      .Select(e => e.TryGetStateValue(out float v) && v > 0 ? v * e.GetUnitMultiplicator() / 1000.0 : (double?)null).ToList();
+
+    /// <summary>Restores the month's import peak from the sensor after a restart.</summary>
+    private void RestoreMonthPeak()
+    {
+      try
+      {
+        if (_importMonthPeakEntity is not null && _importMonthPeakEntity.TryGetStateValue(out float kw)
+            && _importMonthPeakEntity.TryGetJsonAttribute("quarter_start", out System.Text.Json.JsonElement start)
+            && start.GetString() is { } text)
+          _monthPeak.Restore(new ImportCap.QuarterResult(Extensions.FromISO8601(text), kw));
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Import cap: month peak not restored");
+      }
+    }
+
+    /// <summary>
+    /// One import cap cycle: the counters, the finished quarter and the month's peak, then the guard's
+    /// decision (<see cref="ImportCap.ImportCapGuard"/>) and its sensors. The battery limit goes out as
+    /// sensor.pv_control_battery_charge_current_limit (an HA automation applies it).
+    /// </summary>
+    /// <param name="now">Current time.</param>
+    private async Task ImportCapCycleAsync(DateTime now)
+    {
+      if (PVCC_Config.TotalImportEnergyEntities.Count == 0) return;
+      if (_quarterImport.Update(now, ReadImportCounters()) is { } finished)
+      {
+        int capW = PVCC_Config.MaxGridImportW;
+        if (capW > 0 && finished.AvgKw * 1000 > capW)
+        {
+          _lastOverCap = finished;
+          PVCC_Logger.LogWarning("Import cap: quarter {Start:HH:mm} imported {Kw:F2} kW (cap {Cap:F1} kW)", finished.Start, finished.AvgKw, capW / 1000.0);
+        }
+        if (_monthPeak.Observe(finished))
+          PVCC_Logger.LogInformation("Import peak this month: {Kw:F2} kW ({Start:dd.MM HH:mm})", finished.AvgKw, finished.Start);
+      }
+
+      double maxA = PVCC_Config.MaxBatteryChargePower;
+      var running = _house.SchedulableLoads.Where(l => l.ChargeNow).ToList();
+      _importCap = PVCC_Config.MaxGridImportW <= 0
+        ? new ImportCap.GuardDecision(maxA, false, int.MaxValue, int.MaxValue, 0, "import cap off")
+        : ImportCap.ImportCapGuard.Decide(new ImportCap.GuardInput(
+            CapW: PVCC_Config.MaxGridImportW,
+            ElapsedSeconds: _quarterImport.ElapsedSeconds(now),
+            ImportedWh: _quarterImport.ImportedWh,
+            GridImportW: PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid) ? Math.Max(0, -grid) : 0,
+            HouseLoadW: PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int house) ? house : 0,
+            PvW: PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv) ? pv : 0,
+            ExtraLoadsW: _house.SchedulableLoads.Sum(l => l.PowerAverage?.GetAverage() ?? 0),
+            ExtraLoadsOn: running.Count > 0,
+            ExtraLoadsNominalW: running.Sum(l => l.LearnedPowerW),
+            ExtraLoadsPaused: _importCap.PauseExtraLoads,
+            MaxChargeA: maxA,
+            VoltageV: PVCC_Config.BatteryVoltageV,
+            ReactionSeconds: PVCC_Config.ImportCapReactionSeconds));
+
+      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitPublished, _importCap.ChargeLimitA, maxA);
+      if (_chargeLimitEntity is null || (limitA == _chargeLimitPublished && now - _importSensorsPublished < TimeSpan.FromMinutes(1)))
+        return;
+      if (limitA != _chargeLimitPublished)
+        PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F1} A ({Reason})", _chargeLimitPublished?.ToString("F1") ?? "-", limitA, _importCap.Reason);
+      _chargeLimitPublished = limitA;
+      _importSensorsPublished = now;
+      await PVCC_EntityManager.SetStateAsync(_chargeLimitEntity.EntityId, limitA.ToString("F1", CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetAttributesAsync(_chargeLimitEntity.EntityId, new
+      {
+        reason = _importCap.Reason,
+        cap_kw = PVCC_Config.MaxGridImportW / 1000.0,
+        allowed_kw = Math.Round(_importCap.AllowedW / 1000.0, 2),
+        extra_loads_paused = _importCap.PauseExtraLoads,
+        headroom_w = _importCap.HeadroomW,
+        voltage_v = PVCC_Config.BatteryVoltageV,
+      });
+      if (_importQuarterEntity is not null)
+      {
+        int active = _quarterImport.Counter.ActiveIndex;
+        await PVCC_EntityManager.SetStateAsync(_importQuarterEntity.EntityId, _importCap.ProjectedKw.ToString("F2", CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetAttributesAsync(_importQuarterEntity.EntityId, new
+        {
+          quarter_start = _quarterImport.QuarterStart?.ToISO8601(),
+          imported_kwh = _quarterImport.ImportedWh is { } wh ? Math.Round(wh / 1000, 3) : (double?)null,
+          complete = _quarterImport.Complete,
+          counter = active >= 0 ? PVCC_Config.TotalImportEnergyEntities[active].EntityId : "none",
+        });
+      }
+      if (_importMonthPeakEntity is not null && _monthPeak.PeakIn(now) is { } peak)
+      {
+        await PVCC_EntityManager.SetStateAsync(_importMonthPeakEntity.EntityId, peak.AvgKw.ToString("F2", CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetAttributesAsync(_importMonthPeakEntity.EntityId, new { quarter_start = peak.Start.ToISO8601() });
+      }
+    }
+    #endregion
+
+
     #region Health
     private Entity _healthEntity = null!;
     // A problem counts after 30 s (two cycles — a single 15-s sensor blip doesn't), and keeps
@@ -595,6 +704,8 @@ namespace NetDeamon.apps.PVControl
           .Where(e => !e.TryGetStateValue(out float _)).Select(e => e.EntityId).ToList()));
 
       issues.AddRange(HealthChecks.Cycle(_cycleFailures, _lastCycleError));
+      issues.AddRange(HealthChecks.ImportCap(PVCC_Config.MaxGridImportW, _quarterImport.Counter.ActiveIndex,
+        PVCC_Config.TotalImportEnergyEntities.Select(e => e.EntityId).ToList(), _lastOverCap, now));
       issues.AddRange(HealthChecks.WarmWater(_house.WarmWater is not null, _house.WarmWater?.HeatPumpAvailable ?? true));
       issues.AddRange(HealthChecks.WeatherForecast(_house.Weather is not null, _house.Weather?.LastUpdate, now, LoadModel.WeatherForecast.MaxAge));
       issues.AddRange(HealthChecks.LoadForecast(_house.WeatherLoad is not null && ReferenceEquals(_house.Prediction_Load, _house.WeatherLoad), _house.WeatherLoad?.Source));
@@ -678,6 +789,8 @@ namespace NetDeamon.apps.PVControl
     {
       PVCC_Logger.LogTrace("Entering Schedule");
       DateTime now = DateTime.Now;
+      // Independent of the battery SoC: the cap holds even while PVControl doesn't plan.
+      await ImportCapCycleAsync(now);
       // Short SoC dropouts are bridged with the last good value (BatteryState.BatterySoc); after
       // SoCMaxHold nothing is decided from the battery — the inverter runs in its own normal mode.
       if (_house.Battery.IsSoCUnavailable(now))
@@ -727,7 +840,9 @@ namespace NetDeamon.apps.PVControl
       #region Schedulable Loads
       foreach (var load in _house.SchedulableLoads)
       {
-        await PVCC_EntityManager.SetStateAsync(load.ChargeNowEntity.EntityId, load.ChargeNow ? "ON" : "OFF");
+        // The import cap pauses a running load on top of its plan (the plan itself stays).
+        bool capPaused = load.ChargeNow && _importCap.PauseExtraLoads;
+        await PVCC_EntityManager.SetStateAsync(load.ChargeNowEntity.EntityId, load.ChargeNow && !capPaused ? "ON" : "OFF");
         int powerAvgW = load.PowerAverage?.GetAverage() ?? 0;
         int netPvW = _house.CurrentAveragePVPower - Math.Max(0, _house.CurrentAverageHouseLoad - powerAvgW);
         // The whole plan: the current/next session plus any planned follow-ups.
@@ -749,7 +864,7 @@ namespace NetDeamon.apps.PVControl
         var chargeEndPredicted = load.PlannedSessions.Count > 0 ? load.PlannedSessions[^1].EndTime : load.PredictedEnd;
         var attr_load = new
         {
-          charge_status_reason = load.ChargeReasonAt(now),
+          charge_status_reason = capPaused ? $"Import cap: paused ({_importCap.Reason}) — plan: {load.ChargeReasonAt(now)}" : load.ChargeReasonAt(now),
           mode = load.Mode.ToString(),
           target_level = load.TargetLevel,
           current_level = load.CurrentLevel,
@@ -775,6 +890,7 @@ namespace NetDeamon.apps.PVControl
       {
         // Not the cycle's `now`: the plan was just made (up to ~1 s later) and its current run
         // starts at that time — an earlier `now` found no current run and stopped the heating.
+        warmWater.ImportHeadroomW = PVCC_Config.MaxGridImportW > 0 ? _importCap.HeadroomW : null;
         await warmWater.ActAsync(DateTime.Now);
         await warmWater.PublishAsync(now);
       }
@@ -1038,7 +1154,13 @@ namespace NetDeamon.apps.PVControl
       {
         await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
         {
-          PVCC_Config.TotalImportEnergyEntity.TryGetStateValue(out float totalImportEnergy);
+          // Import from the counters in priority order; each counts from its own value at the last
+          // booking (after a restart: the stored total belongs to the counter it fits).
+          var importCounter = _quarterImport.Counter;
+          _costImportSince ??= importCounter.SnapshotFrom(_lastCostsEntry.GridImportTotal ?? 0);
+          float gridImport = (float)(importCounter.IncreaseSince(_costImportSince) ?? 0);
+          float totalImportEnergy = (float)(importCounter.ActiveValue ?? _lastCostsEntry.GridImportTotal ?? 0);
+          _costImportSince = importCounter.Snapshot();
           PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
           var basePriceEntry = _house.Prices.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);
           var basePrice = basePriceEntry.Price;
@@ -1047,7 +1169,7 @@ namespace NetDeamon.apps.PVControl
             Timestamp = _nextQuarterHour,
             GridImportTotal = totalImportEnergy,
             GridExportTotal = totalExportEnergy,
-            GridImport = totalImportEnergy - _lastCostsEntry.GridImportTotal,
+            GridImport = gridImport,
             GridExport = totalExportEnergy - _lastCostsEntry.GridExportTotal,
             BasePrice = basePrice,
             ImportPriceProvider = _house.Prices.CalculateBruttoPriceImport(basePrice, false),
@@ -1115,6 +1237,13 @@ namespace NetDeamon.apps.PVControl
       _pricePublicationEntity = await RegisterSensor("sensor.pv_control_price_publication", "Price publication (tomorrow)", null, "mdi:clock-check-outline",
         reRegister: reset);
       RestorePricePublications();
+      _chargeLimitEntity = await RegisterSensor("sensor.pv_control_battery_charge_current_limit", "Battery charge current limit", "current", "mdi:current-dc",
+        addConfig: new { unit_of_measurement = "A" }, reRegister: reset);
+      _importQuarterEntity = await RegisterSensor("sensor.pv_control_import_quarter", "Import this quarter", "power", "mdi:transmission-tower-import",
+        addConfig: new { unit_of_measurement = "kW" }, reRegister: reset);
+      _importMonthPeakEntity = await RegisterSensor("sensor.pv_control_import_month_peak", "Import peak this month", "power", "mdi:chart-bell-curve",
+        addConfig: new { unit_of_measurement = "kW" }, reRegister: reset);
+      RestoreMonthPeak();
       if (_house.WeatherLoad is not null)
       {
         _loadForecastEntity = await RegisterSensor("sensor.pv_control_load_forecast", "Load forecast (night)", "energy", "mdi:home-thermometer-outline",

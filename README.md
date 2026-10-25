@@ -98,8 +98,35 @@ The house load forecast is the hour-of-day average of the last days (recent days
 | DataLogger | newest hourly row older than 2 h | — |
 | Weather forecast (load model) | none yet or older than 3 h | — |
 | Load forecast (`Mode: Model`) | fell back to the average | — |
+| Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works |
 
-Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on a level change, when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (replace `notify.notify` with your notify action).
+Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on a level change, when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
+
+#### Import cap
+
+The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
+
+1. **Battery grid charging is throttled first:** `sensor.pv_control_battery_charge_current_limit` (A) is what the battery may charge so the quarter's mean stays under the cap. The automation [`HA/Battery.yaml`](HA/Battery.yaml) applies it to `number.solax_battery_charge_max_current` while charging is enabled (30 A if the sensor is missing), and in `force_charge_grid_only` (Solax remote control) also as the push power (limit × battery voltage).
+2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
+3. **Then warm-water heatings wait** until there is room for the heat pump.
+
+Nothing reacts instantly (automation delays such as the EV's 1 min, inverter and car ramps), so the guard assumes the current power keeps flowing for `ImportCapReactionSeconds` (90 s) after any change. A change late in a quarter only takes effect in the next one. The plan respects the cap too: grid charging only gets what the load leaves under it, so NeedToCharge takes more cheap quarters at lower power, and PriorityPlus never plans a load over the cap.
+
+The import is counted from `TotalImportEnergyEntities` in list order. The first counter (the utility meter via wM-Bus) is used while it works. The next one (the inverter) takes over only while the first is unavailable, or frozen while the next keeps counting. A counter that doesn't change is no failure: no import.
+
+| Entity | Content |
+|---|---|
+| `sensor.pv_control_battery_charge_current_limit` | Charge current limit (A); attributes `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
+| `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
+| `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
+
+| Setting | Meaning |
+|---|---|
+| `MaxGridImportW` | Highest mean grid import of any 15-min block, W; 0 = off |
+| `ImportCapReactionSeconds` | How long a requested change takes to show at the meter, s |
+| `TotalImportEnergyEntities` | Grid import counters (kWh) in priority order (also the cost log's import) |
+| `BatteryVoltageEntity` | Battery voltage while charging: W per A of the charge current (230 V without it) |
+| `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A (not the Solax number entity, which carries the cap's limit) |
 
 #### Price entities
 
@@ -260,6 +287,7 @@ One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per loc
 | `roomsetpoint` | `RoomClimateEntities` (setpoint) | mean room setpoint |
 | `heatenergyheating`, `heatenergywarmwater` | `HeatEnergyHeatingEntity`, `HeatEnergyWarmwaterEntity` | heat output (Wh) per mode, counter increase |
 | `heatpumpelecheating`, `heatpumpelecwarmwater` | `ElecEnergyHeatingEntity`, `ElecEnergyWarmwaterEntity` | heat pump electricity (Wh) under the same conditions — COP per mode = heat / electricity |
+| `maxquarterimport` | `ImportTotalEntities` (first with readings) | highest 15-min mean grid import of the hour/day, kW |
 
 ---
 
@@ -343,6 +371,8 @@ dotnet test NetDeamonApps.Tests/
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `DataLoggerPeriodTests` | DataLogger hours and days across both clock changes, backfill of an empty table |
+| `ImportCapTests` | Import cap: counters in priority order with fallback, the running quarter, the month's peak, the guard (battery first, then extra loads, reaction time), health |
+| `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |

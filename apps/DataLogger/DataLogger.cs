@@ -72,6 +72,8 @@ namespace PVControl
     }
 
     public Entity? ImportEnergyEntity { get; set; }
+    /// <summary>Grid import counters (kWh), in priority order: the first with readings in a period gives its highest 15-min import (schema v8).</summary>
+    public List<Entity> ImportTotalEntities { get; set; } = [];
     public Entity? ExportEnergyEntity { get; set; }
     public Entity? HouseEnergyEntity { get; set; }
     public Entity? BatteryChargeEntity { get; set; }
@@ -400,6 +402,7 @@ namespace PVControl
         AddFloatTask(averageTasks, _config.ElecEnergyHeatingEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.ElecEnergyWarmwaterEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         var operation = GetOperationValuesAsync(historyStart, historyEnd);
+        var maxQuarter = GetMaxQuarterImportAsync(historyStart, historyEnd);
         await Task.WhenAll(averageTasks);
         var op = await operation;
         float? tempOutside = GetFloatTaskResult(averageTasks, _config.TemperatureOutsideEntity);
@@ -442,6 +445,7 @@ namespace PVControl
           ("ecominutes", op.EcoMinutes), ("hptargettemperature", op.TargetTemperature), ("flowtemperature", op.FlowTemperature), ("returntemperature", op.ReturnTemperature),
           ("windspeed", op.WindSpeed), ("athomeminutes", op.AtHomeMinutes), ("roomsheating", op.RoomsHeating), ("roomsetpoint", op.RoomSetpoint),
           ("heatenergyheating", heatHeating), ("heatenergywarmwater", heatWarmwater), ("heatpumpelecheating", elecHeating), ("heatpumpelecwarmwater", elecWarmwater),
+          ("maxquarterimport", await maxQuarter),
         ];
         var insertCommand = con.CreateCommand();
         insertCommand.CommandText = $"INSERT OR IGNORE INTO {(daily ? "daily" : "hourly")} ({string.Join(", ", values.Select(v => v.Column))}) " +
@@ -453,6 +457,53 @@ namespace PVControl
       }
       _logger.LogTrace("Finished storing values");
     }
+    /// <summary>Highest 15-min grid import of a period from the first import counter with readings in it (v8).</summary>
+    /// <param name="from">Period start (UTC).</param>
+    /// <param name="to">Period end (UTC, its last second).</param>
+    /// <returns>kW; null without a counter or readings.</returns>
+    private async Task<double?> GetMaxQuarterImportAsync(DateTime from, DateTime to)
+    {
+      foreach (var entity in _config.ImportTotalEntities)
+      {
+        try
+        {
+          var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, endDateTime: to);
+          if (!history.Item1) continue;
+          var readings = history.Item2
+            .Where(s => double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            .Select(s => (s.LastChanged.ToUniversalTime(), double.Parse(s.State!, CultureInfo.InvariantCulture))).ToList();
+          if (MaxQuarterKw(readings, from, to.AddSeconds(1)) is { } kw)
+            return Math.Round(kw, 3);
+        }
+        catch (Exception ex)
+        {
+          _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
+        }
+      }
+      return null;
+    }
+
+    /// <summary>Highest mean import of the 15-min blocks of a period from a kWh counter (resets and glitches as in <see cref="CounterIncrease"/>).</summary>
+    /// <param name="readings">(time, kWh) in time order; the first one may lie before the period.</param>
+    /// <param name="from">Period start, on a quarter.</param>
+    /// <param name="to">Period end (exclusive).</param>
+    /// <returns>kW; null without readings.</returns>
+    public static double? MaxQuarterKw(IReadOnlyList<(DateTime Time, double Kwh)> readings, DateTime from, DateTime to)
+    {
+      if (readings.Count == 0) return null;
+      double? max = null;
+      for (var q = from; q < to; q = q.AddMinutes(TimeRange.SlotMinutes))
+      {
+        var end = q.AddMinutes(TimeRange.SlotMinutes);
+        var values = new List<float> { (float)StepFunction.ValueAt(readings, q) };
+        values.AddRange(readings.Where(r => r.Time > q && r.Time < end).Select(r => (float)r.Kwh));
+        values.Add((float)StepFunction.ValueAt(readings, end));
+        double kw = CounterIncrease(values) * 60.0 / TimeRange.SlotMinutes;
+        max = Math.Max(max ?? 0, kw);
+      }
+      return max;
+    }
+
     /// <summary>Heat pump operation and the house's state over a period (schema v6 columns).</summary>
     private sealed record OperationValues(string? HeatingMode, double? HeatingMinutes, double? CompressorMinutes, double? EcoMinutes,
       double? TargetTemperature, double? FlowTemperature, double? ReturnTemperature, double? WindSpeed, double? AtHomeMinutes, double? RoomsHeating, double? RoomSetpoint);
@@ -654,6 +705,17 @@ namespace PVControl
         _logger.LogInformation("DataLogger DB migrated to v7: heat pump heat and electricity per mode added");
         await SqliteSchema.SetVersionAsync(con, 7);
       }
+      if (actualDBVersion < 8)
+      {
+        foreach (var table in new[] { "hourly", "daily" })
+        {
+          string sql = AddColumnsSql(table, ImportPeakColumns, await SqliteSchema.ColumnsAsync(con, table));
+          if (sql.Length > 0)
+            await SqliteSchema.ExecuteAsync(con, sql);
+        }
+        _logger.LogInformation("DataLogger DB migrated to v8: highest 15-min import added");
+        await SqliteSchema.SetVersionAsync(con, 8);
+      }
       await con.CloseAsync();
     }
 
@@ -670,6 +732,9 @@ namespace PVControl
     /// <summary>v7: heat pump heat output and electricity for heating and warm water, Wh (COP = heat / electricity).</summary>
     public static readonly string[] HeatColumns =
       ["heatenergyheating INTEGER", "heatenergywarmwater INTEGER", "heatpumpelecheating INTEGER", "heatpumpelecwarmwater INTEGER"];
+
+    /// <summary>v8: highest 15-min grid import of the hour/day, kW (the network power price counts the month's highest).</summary>
+    public static readonly string[] ImportPeakColumns = ["maxquarterimport REAL"];
 
     /// <summary>ALTER TABLE statements for the columns a table doesn't have yet (a migration step may run again after an interruption).</summary>
     /// <param name="table">Table name.</param>

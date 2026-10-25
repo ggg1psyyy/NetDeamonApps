@@ -52,6 +52,10 @@ PVControl.DataLoggerConfig:
   # Heated living rooms (the cellar is on standby and only logged by HeatingTest).
   # Heat pump heat output and its electricity per mode (since 2026-10-24, HA templates: heat =
   # electrical power × COP while the mode's flag is on; never-resetting totals) — COP per mode.
+  # Grid import counters (kWh) in priority order, for the highest 15-min import per hour/day (v8)
+  ImportTotalEntities:
+    - sensor.esp_wmbus_0x290340_stromzahler_bezug   # utility meter via wM-Bus (billing meter)
+    - sensor.solax_grid_import_total                # inverter
   HeatEnergyHeatingEntity: sensor.wp_heat_energy_heating
   HeatEnergyWarmwaterEntity: sensor.wp_heat_energy_warmwater
   ElecEnergyHeatingEntity: sensor.wp_cop_elec_energy_heating

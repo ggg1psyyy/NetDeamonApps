@@ -171,6 +171,9 @@ public sealed class WarmWaterController
   static bool? OnOff(Entity e) => e.State?.ToLowerInvariant() switch { "on" => true, "off" => false, _ => null };
 
   // ── Control ────────────────────────────────────────────────────────────────────────────────
+  /// <summary>Grid import left under the import cap for a new heating, W; null = no cap (set by PVControl each cycle).</summary>
+  public int? ImportHeadroomW { get; set; }
+
   /// <summary>The heat pump entities the control needs were readable in the last cycle (health sensor).</summary>
   public bool HeatPumpAvailable { get; private set; } = true;
 
@@ -195,7 +198,8 @@ public sealed class WarmWaterController
     if (_wasActive && !oneTimeActive) _lastStop = now;
     _wasActive = oneTimeActive;
     var decision = WarmWaterControl.Decide(new ControlInput(now, temp, switchOn, oneTimeActive, OneTimeSetpoint, _lastCommand, _lastStart,
-      Mode, Plan.Runs, Config.MaxTemp, BoostOn, BoostTemp, _boostSince, _boostSawRunning, Config.BoostTimeoutMinutes, _lastStop));
+      Mode, Plan.Runs, Config.MaxTemp, BoostOn, BoostTemp, _boostSince, _boostSawRunning, Config.BoostTimeoutMinutes, _lastStop,
+      ImportHeadroomW, (int)Math.Round(Model.PowerW(temp))));
     ControlReason = decision.Reason;
 
     if (decision.EndBoost is { } why)
