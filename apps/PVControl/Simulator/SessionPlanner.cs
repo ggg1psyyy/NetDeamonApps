@@ -150,6 +150,24 @@ public static class SessionPlanner
   }
 
 
+  /// <summary>
+  /// How a session is supplied: from PV and the house battery if that needs no extra grid (like
+  /// Priority), otherwise directly from the grid (<see cref="ExtraLoad.FromGrid"/>: battery held while
+  /// it runs without enough PV) — grid energy doesn't take the detour through the battery.
+  /// </summary>
+  /// <param name="simulate">Simulates with the session added.</param>
+  /// <param name="session">The session (its <see cref="ExtraLoad.FromGrid"/> is ignored).</param>
+  /// <param name="baseline">Simulation without it.</param>
+  /// <returns>The session as supplied and its simulation.</returns>
+  public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline)
+  {
+    var viaBattery = session.WithFromGrid(false);
+    var sim = simulate(viaBattery);
+    if (!sim.HasNewGridVs(baseline)) return (viaBattery, sim);
+    var direct = session.WithFromGrid(true);
+    return (direct, simulate(direct));
+  }
+
   /// <summary>Preview of the sessions after the current one until the energy is covered (same price scan, each judged against a baseline with all earlier sessions).</summary>
   /// <param name="baseInput">Simulation input without the load.</param>
   /// <param name="currentSessions">The load's sessions decided this cycle; the last one is the template.</param>
@@ -182,11 +200,12 @@ public static class SessionPlanner
       var from = lastEnd.Ceiling(TimeRange.SlotMinutes);
 
       var start = FindBestPriceAwareStart(from, horizonEnd, remainingMinutes,
-        (s, e) => input.SimulateWith(template.Between(s, e)),
+        (s, e) => ChooseSupply(l => input.SimulateWith(l), template.Between(s, e), baseline).Sim,
         baseline, deadline);
       if (start is null) break;
 
-      var next = template.Between(start.Value.Start, start.Value.End ?? start.Value.Start.AddMinutes(remainingMinutes));
+      var next = ChooseSupply(l => input.SimulateWith(l),
+        template.Between(start.Value.Start, start.Value.End ?? start.Value.Start.AddMinutes(remainingMinutes)), baseline).Load;
       sessions.Add(next);
       planned.Add(next);
     }

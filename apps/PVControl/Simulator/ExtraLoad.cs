@@ -20,6 +20,10 @@ public class ExtraLoad
   /// <summary>Constant power while running, W.</summary>
   public int PowerW { get; init; }
 
+  /// <summary>Not fed from the house battery: PV surplus first, the rest directly from the grid (the
+  /// battery is held while it runs) — battery wear and round-trip losses. PriorityPlus's grid sessions.</summary>
+  public bool FromGrid { get; init; }
+
   /// <summary>Energy of the load within a 15-min slot (partial overlap pro rata).</summary>
   /// <param name="slotStart">Start of the slot.</param>
   /// <returns>Wh; 0 outside the slot.</returns>
@@ -39,5 +43,11 @@ public class ExtraLoad
   /// <param name="end">Switch-off time.</param>
   /// <returns>A new load.</returns>
   public ExtraLoad Between(DateTime start, DateTime end) =>
-    new() { Name = Name, Priority = Priority, StartTime = start, EndTime = end, PowerW = PowerW };
+    new() { Name = Name, Priority = Priority, StartTime = start, EndTime = end, PowerW = PowerW, FromGrid = FromGrid };
+
+  /// <summary>The same load, fed from PV and the grid only or also from the battery.</summary>
+  /// <param name="fromGrid">See <see cref="FromGrid"/>.</param>
+  /// <returns>A new load.</returns>
+  public ExtraLoad WithFromGrid(bool fromGrid) =>
+    new() { Name = Name, Priority = Priority, StartTime = StartTime, EndTime = EndTime, PowerW = PowerW, FromGrid = fromGrid };
 }

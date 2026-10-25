@@ -63,6 +63,9 @@ public static class EnergySimulator
         if (IsNeedCharge(start))
           (newMode, needToCharge) = (start, startNeed);
       }
+      // A load that never draws the battery (PriorityPlus EV): hold it while PV doesn't cover all loads.
+      if (newMode.Mode == InverterModes.normal && input.BatteryHeldForLoad(slotTime, pvWh, totalLoadWh))
+        newMode = new InverterState(InverterModes.grid_only, ForceChargeReasons.LoadFromGrid, newMode.BatteryChargeEnable, newMode.ExportAllowed);
       currentMode = newMode;
 
       // --- Step 4: compute energy flows for this slot given the chosen mode ---
@@ -199,7 +202,7 @@ public static class EnergySimulator
     if (window.Count == 0 || bridged.Count == 0)
       return true;
     float holdPrice = bridged.Average(p => p.Price);
-    float roundTrip = input.InverterEfficiency * input.InverterEfficiency;
+    float roundTrip = input.RoundTripEfficiency;
     return window.Min(p => p.Price) < holdPrice - Math.Abs(holdPrice) * (1 - roundTrip);
   }
 
@@ -226,7 +229,9 @@ public static class EnergySimulator
       // values align with SimulationSlot.SoC which is also the start-of-slot value.
       // % can go negative here when clampAtZero is false — that's intentional, see call site.
       result[t] = input.WhToSoc(energy);
-      energy = Math.Clamp(energy + pv - load - extra, minEnergy, input.BatteryCapacityWh);
+      // The battery is held while a load that never draws it runs without enough PV (grid_only).
+      if (!input.BatteryHeldForLoad(t, pv, load + extra))
+        energy = Math.Clamp(energy + pv - load - extra, minEnergy, input.BatteryCapacityWh);
     }
 
     return result;

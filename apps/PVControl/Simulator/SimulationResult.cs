@@ -158,14 +158,17 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   /// <summary>
   /// Extra grid cost vs the baseline: import cost − export earnings over the horizon (lost export
-  /// counts), plus the battery energy missing at the end at the mean import price.
+  /// counts), plus the battery energy missing at the end at the mean import price, plus the round-trip
+  /// loss of the extra energy the load takes out of the battery (it has to be put back in).
   /// </summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>€; prices via <see cref="PriceList.GetPriceOrMean"/>, PV valued at the export price (<see cref="SourceShares.Cost"/>).</returns>
   public float NetGridCostVs(SimulationResult baseline)
   {
     float missingEndKwh = _input.SocToWh(baseline.Slots[^1].SoC - Slots[^1].SoC) / 1000f;
-    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * _input.ImportPrices.Mean;
+    float extraDischargeKwh = Math.Max(0, Slots.Sum(s => s.BatteryDischargeWh) - baseline.Slots.Sum(s => s.BatteryDischargeWh)) / 1000f;
+    float roundTripLossKwh = extraDischargeKwh * (1 - _input.RoundTripEfficiency);
+    return OwnGridCost - baseline.OwnGridCost + (missingEndKwh + roundTripLossKwh) * _input.ImportPrices.Mean;
   }
 
   private float? _ownGridCost;

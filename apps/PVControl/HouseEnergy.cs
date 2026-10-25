@@ -1061,7 +1061,13 @@ namespace NetDeamon.apps.PVControl
       {
         // A running session is never stopped just to wait for a cheaper start later. A planned
         // later start from last cycle stays preferred (see FindBestPriceAwareStart).
-        var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult,
+        // A session that needs no extra grid may use the house battery (like Priority); once it imports,
+        // it takes that energy directly from the grid, not via the battery (wear, round-trip losses).
+        ExtraLoad Supplied(DateTime start, DateTime end) =>
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult).Load;
+        SimulationResult RunSuppliedSimFrom(DateTime start, DateTime end) =>
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult).Sim;
+        var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSuppliedSimFrom, baseResult,
           readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
           preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes);
         if (planned is not { } p) return;
@@ -1079,7 +1085,7 @@ namespace NetDeamon.apps.PVControl
         };
         bool startNow = p.Start <= currentSlot;
         SetResult(
-          [session.Between(p.Start, end)],
+          [Supplied(p.Start, end)],
           startNow,
           startNow
             ? $"Charging (PriorityPlus {load.Config.Name}: {why}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"

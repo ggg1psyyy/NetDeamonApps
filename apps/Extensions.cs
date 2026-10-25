@@ -62,6 +62,8 @@ namespace NetDeamon.apps
     UserMode,
     /// <summary>PV surplus fed in now (battery not charged) to keep room for PV in coming negative-export hours.</summary>
     RoomForNegativeExport,
+    /// <summary>Battery held while a load that never draws it runs (PriorityPlus EV from the grid).</summary>
+    LoadFromGrid,
   }
 
   public enum PriceResolution

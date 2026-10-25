@@ -60,8 +60,9 @@ public class SessionPlannerTests : TestBase
 
   static float CheapAfterMidnight(DateTime t) => t >= CheapFrom && t < CheapTo ? 0.20f : 0.40f;
 
+  // PriorityPlus's grid sessions take their energy directly from the grid, not via the battery.
   static ExtraLoad Ev(DateTime start, DateTime end) =>
-    new() { Name = "EV", Priority = 10, StartTime = start, EndTime = end, PowerW = EvW };
+    new() { Name = "EV", Priority = 10, StartTime = start, EndTime = end, PowerW = EvW, FromGrid = true };
 
   static int Wh(IEnumerable<ExtraLoad> sessions) =>
     (int)sessions.Sum(e => (e.EndTime - e.StartTime).TotalHours * e.PowerW);
@@ -86,24 +87,33 @@ public class SessionPlannerTests : TestBase
 
     var planned = SessionPlanner.PlanFollowUpSessions(input, [first], needWh, input.ImportPrices.Max(p => p.EndTime));
 
-    var next = Assert.Single(planned);
-    Assert.True(next.StartTime >= FirstEnd, $"Follow-up starts {next.StartTime:HH:mm}, before the current session ends.");
-    Assert.InRange(Wh([first, next]), needWh - EvW / 4, needWh);
+    // Directly from the grid in the cheap window (00:00–04:00), the rest on PV in the morning — not
+    // one long session that runs on in the battery after the cheap window.
+    Assert.NotEmpty(planned);
+    string sessions = string.Join(" | ", planned.Select(x => $"{x.StartTime:dd HH:mm}-{x.EndTime:dd HH:mm}"));
+    Assert.All(planned, x => Assert.True(x.StartTime >= FirstEnd, $"Follow-up starts before the current session ends: {sessions}"));
+    Assert.InRange(Wh([first, .. planned]), needWh - EvW / 4, needWh);
 
-    // Same acceptance rule the scan uses, against a baseline that already has the first session.
+    // Each one passes the same acceptance rule the scan uses, against a baseline with the sessions before it.
+    var all = new List<ExtraLoad> { first };
+    foreach (var next in planned)
+    {
+      var before = EnergySimulator.Simulate(input.WithExtraLoads([.. all]));
+      var with = EnergySimulator.Simulate(input.WithExtraLoads([.. all, next]));
+      Assert.True(!with.HasNewGridVs(before) || with.IsGridCheapVs(before), sessions);
+      all.Add(next);
+    }
+
+    // No grid import at over-threshold prices — including while the battery is held at its floor
+    // (grid_only) waiting for the cheap window. Continuing straight at 18:15 did exactly that:
+    // ~10.7 kWh at 40 ct from 19:00 to midnight.
     var baseline = EnergySimulator.Simulate(input.WithExtraLoads([first]));
-    var withNext = EnergySimulator.Simulate(input.WithExtraLoads([first, next]));
-    Assert.True(!withNext.HasNewGridVs(baseline) || withNext.IsGridCheapVs(baseline));
-
-    // The follow-up must not buy grid at over-threshold prices — including while the battery is
-    // held at its floor (grid_only) waiting for the cheap window. Continuing straight at 18:15
-    // did exactly that: ~10.7 kWh at 40 ct from 19:00 to midnight.
+    var withAll = EnergySimulator.Simulate(input.WithExtraLoads([.. all]));
     var baseBySlot = baseline.Slots.ToDictionary(s => s.Time);
-    int expensiveExtraImportWh = withNext.Slots
+    int expensiveExtraImportWh = withAll.Slots
       .Where(s => input.ImportPrices.GetPrice(s.Time) > MaxPrice)
       .Sum(s => s.GridImportWh - baseBySlot[s.Time].GridImportWh);
-    Assert.True(expensiveExtraImportWh <= 0,
-      $"Follow-up {next.StartTime:HH:mm}–{next.EndTime:dd. HH:mm} adds {expensiveExtraImportWh} Wh of grid import over threshold.");
+    Assert.True(expensiveExtraImportWh <= 0, $"Follow-ups {sessions} add {expensiveExtraImportWh} Wh of grid import over threshold.");
   }
 
   /// <summary>

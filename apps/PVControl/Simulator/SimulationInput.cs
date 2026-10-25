@@ -66,22 +66,39 @@ public class SimulationInput
   public SimulationResult SimulateWith(params IEnumerable<ExtraLoad> loads) =>
     EnergySimulator.Simulate(WithExtraLoads([.. ExtraLoads, .. loads]));
 
-  private Dictionary<DateTime, int>? _extraLoadWhBySlot;
+  private Dictionary<DateTime, int>? _extraLoadWhBySlot, _fromGridLoadWhBySlot;
   /// <summary>Energy of all <see cref="ExtraLoads"/> in a slot (indexed once per input).</summary>
   /// <param name="slotStart">Start of the slot.</param>
   /// <returns>Wh.</returns>
   internal int ExtraLoadWh(DateTime slotStart) =>
-    (_extraLoadWhBySlot ??= BuildExtraLoadWhBySlot()).GetValueOrDefault(slotStart);
+    (_extraLoadWhBySlot ??= BuildExtraLoadWhBySlot(_ => true)).GetValueOrDefault(slotStart);
 
-  /// <summary>Energy of all <see cref="ExtraLoads"/> by slot start, Wh.</summary>
-  private Dictionary<DateTime, int> BuildExtraLoadWhBySlot()
+  /// <summary>Whether a load that never draws the battery (<see cref="ExtraLoad.FromGrid"/>) runs in a slot.</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  internal bool FromGridLoadRuns(DateTime slotStart) =>
+    (_fromGridLoadWhBySlot ??= BuildExtraLoadWhBySlot(e => e.FromGrid)).GetValueOrDefault(slotStart) > 0;
+
+  /// <summary>Whether the battery is held in a slot: a <see cref="ExtraLoad.FromGrid"/> load runs and PV doesn't
+  /// cover all loads, so the battery neither feeds it nor the house (grid_only) — the inverter can't feed one
+  /// load and not the other.</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <param name="pvWh">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWh">Load incl. extra loads of the slot, Wh.</param>
+  internal bool BatteryHeldForLoad(DateTime slotStart, int pvWh, int totalLoadWh) => pvWh < totalLoadWh && FromGridLoadRuns(slotStart);
+
+  /// <summary>Energy of the <see cref="ExtraLoads"/> by slot start, Wh.</summary>
+  /// <param name="include">Which loads count.</param>
+  private Dictionary<DateTime, int> BuildExtraLoadWhBySlot(Func<ExtraLoad, bool> include)
   {
     var bySlot = new Dictionary<DateTime, int>();
-    foreach (var e in ExtraLoads)
+    foreach (var e in ExtraLoads.Where(include))
       for (var t = e.StartTime.RoundToNearestQuarterHour(); t < e.EndTime; t = t.AddMinutes(15))
         bySlot[t] = bySlot.GetValueOrDefault(t) + e.GetWhForSlot(t);
     return bySlot;
   }
+
+  /// <summary>Share of energy left after a round trip through the battery (charge and discharge each through the inverter).</summary>
+  public float RoundTripEfficiency => InverterEfficiency * InverterEfficiency;
 
   private PriceList? _quarterHourlyImportPrices;
   /// <summary><see cref="ImportPrices"/> as 15-min entries (built once per input).</summary>

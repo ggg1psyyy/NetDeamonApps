@@ -634,6 +634,20 @@ quarter counted as 7 kWh, the guard set the charge limit to 0 A, the battery sto
 PV went to the grid. Since then an impossible counter reading (over 45 kW mean) is replaced by
 the estimate from the grid power, and the month's peak ignores it.
 
+**PriorityPlus grid sessions run directly from the grid** (`ExtraLoad.FromGrid`, `SimulationInput.BatteryHeldForLoad`).
+Live 2026-10-25 14:00 the EV (PriorityPlus, 2.2 kWh) was planned 06:00–07:08 from the house battery
+(Priority's late start before sunrise, kept as the preferred start), and the house planned a night
+charge 00:00–00:30 at 34.9 ct only to feed it: ~0.87 € with the ~10 % round-trip loss against ~0.77 €
+directly from the grid — plus battery wear for charging one battery from another. The simulation
+moved energy through the battery without loss, so both paths cost the same and whole-percent rounding
+decided (3 ct for 06:00). Now each start of PriorityPlus's price scan and follow-up preview is supplied
+by `SessionPlanner.ChooseSupply`: PV + battery if that needs no extra grid (like Priority — e.g. a
+ready-by target in the morning from the battery), otherwise FromGrid: while it runs and PV doesn't cover
+house + load, the battery is held (`grid_only`; the inverter can't feed the house and not the EV), or
+the load runs along a force_charge the house needs in that quarter anyway; the look-ahead doesn't count
+it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge
+(`SimulationInput.RoundTripEfficiency`, also used by `ChargingBeatsHolding`).
+
 **Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
 1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
 highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the
