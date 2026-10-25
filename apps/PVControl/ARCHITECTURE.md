@@ -622,6 +622,12 @@ running quarter looked cheapest. So a NeedToCharge charge before a PV peak on th
 is now capped to the room PV leaves (100 % − the look-ahead's peak; more would be clipped and push
 PV out to the grid), and doesn't start at all if that leaves 2 % or less (`MinPvRoomPct`) — the rest
 is bought after the peak.
+Still at 12:15 the plan charged at 35.4 ct (limit 35) for a low of 13 % tomorrow 07:00 — above the
+12 % floor, only inside the 4 % forecast margin; then an EV session (PriorityPlus) drew the battery
+and kept it going. NeedToCharge always takes the single cheapest quarter, even over the limit; with
+tomorrow's prices estimated (+5 ct) that is often "now". Above `ForceChargeMaxPrice` a charge now
+only protects the floor itself (need and target without the margin); the margin is only bought at
+or under the limit. Any load drawing the battery is covered by the same rule.
 
 Live the same day, the first import cap build read the counters as Wh treated as kWh: 7 Wh in a
 quarter counted as 7 kWh, the guard set the charge limit to 0 A, the battery stood at 95 % and the

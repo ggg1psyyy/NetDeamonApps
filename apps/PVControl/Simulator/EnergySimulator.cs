@@ -71,7 +71,8 @@ public static class EnergySimulator
       // user-initiated force charging and would cause massive over-charging here).
       int chargeTargetSocPercent = input.ForceChargeTargetSocPercent;
       if (IsNeedCharge(newMode))
-        chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input);
+        chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
+          withMargin: input.ImportPrices.GetPrice(slotTime) <= input.ForceChargeMaxPrice);
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, input.SlotFraction(slotTime));
 
       slots.Add(new SimulationSlot(slotTime, currentSoc, newMode, pvWh, loadWh, extraLoadWh, battChargeWh, battDischargeWh, gridImportWh, gridExportWh));
@@ -98,10 +99,11 @@ public static class EnergySimulator
   /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
   /// <param name="need">Charge need (fallback for the trough).</param>
   /// <param name="input">Simulation input.</param>
+  /// <param name="withMargin">False: only up to the floor + buffer, without the forecast margin (charging above the price limit).</param>
   /// <returns>Target SoC, % (at most 100).</returns>
   private static int DeficitChargeTargetSoc(
     int currentSoc, DateTime slotTime, DateTime endSlot,
-    Dictionary<DateTime, int> baseFutureSoC, NeedToChargeResult need, SimulationInput input)
+    Dictionary<DateTime, int> baseFutureSoC, NeedToChargeResult need, SimulationInput input, bool withMargin = true)
   {
     int floorSoc = input.GetEffectiveMinSoC();
     // Charge enough to clear the WHOLE overnight trough (minimum before PV recovery),
@@ -137,7 +139,8 @@ public static class EnergySimulator
     // Lift the trough to floor + forecast margin + ChargeTargetBufferPct: the level at which
     // ComputeNeedToCharge stops an ongoing charge, so the simulated charge and the live stop
     // condition agree.
-    int deficit = Math.Max(0, floorSoc + ForecastMarginPct(troughTime - slotTime) + ChargeTargetBufferPct - baseTrough);
+    int margin = withMargin ? ForecastMarginPct(troughTime - slotTime) : 0;
+    int deficit = Math.Max(0, floorSoc + margin + ChargeTargetBufferPct - baseTrough);
     // Grid energy charged before a PV peak on the way to the low only counts up to the room PV
     // leaves there: more is clipped at 100 % and pushes PV out to the grid.
     return Math.Min(100, currentSoc + Math.Min(deficit, PvRoomBeforeLow(currentSoc, slotTime, troughTime, baseFutureSoC)));
@@ -239,10 +242,11 @@ public static class EnergySimulator
   /// <param name="currentMode">Mode of the previous slot (charging continues to the target).</param>
   /// <param name="input">Simulation input.</param>
   /// <param name="now">Current slot.</param>
+  /// <param name="withMargin">False: only the floor itself counts, without the forecast margin.</param>
   /// <returns>Need, the SoC at the critical point and the latest charge time (10 % lead).</returns>
   private static NeedToChargeResult ComputeNeedToCharge(
     int currentSoc, Dictionary<DateTime, int> baseFutureSoC,
-    InverterState currentMode, SimulationInput input, DateTime now)
+    InverterState currentMode, SimulationInput input, DateTime now, bool withMargin = true)
   {
     int minSoC = input.GetEffectiveMinSoC();
     // Start when the trough is at most floor + forecast margin − StartBelowPct (not below the
@@ -251,7 +255,7 @@ public static class EnergySimulator
     bool charging = currentMode.Mode == InverterModes.force_charge;
     int Margin(DateTime t)
     {
-      int margin = ForecastMarginPct(t - now);
+      int margin = withMargin ? ForecastMarginPct(t - now) : 0;
       return charging ? margin : Math.Max(0, margin - StartBelowPct);
     }
 
@@ -546,13 +550,19 @@ public static class EnergySimulator
           inWindow = cheaperUnderMax < quartersNeeded;
         }
       }
+      // Above the price limit only for the floor itself, never for the forecast margin alone (live
+      // 2026-10-25 12:15: 35.4 ct for a margin 19 h ahead; an EV drawing the battery triggered it again).
+      bool marginAllowed = importPriceNow <= input.ForceChargeMaxPrice;
+      if (inWindow && !marginAllowed
+          && !ComputeNeedToCharge(simulatedSoc, baseFutureSoC, currentMode, input, now, withMargin: false).NeedToCharge)
+        inWindow = false;
       // Don't start over 96 % (too slow); allow up to 98 % once already charging
       bool socOk = currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
       // Not before a PV peak that fills the battery anyway (live 2026-10-25 11:45: 95 %, PV to 100 %
       // by 12:15, the low only tomorrow 07:00 — the charge bought at 35 ct what PV then exported).
       // The rest of the deficit is bought after the peak.
       if (inWindow && PvRisesBeforeLow(simulatedSoc, now, need.LatestChargeTime, baseFutureSoC)
-          && DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input) - simulatedSoc <= MinPvRoomPct)
+          && DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input, marginAllowed) - simulatedSoc <= MinPvRoomPct)
         inWindow = false;
 
       // No "next hour is cheaper, wait" deferral here: a cheaper next hour is already among
