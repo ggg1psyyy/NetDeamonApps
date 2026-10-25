@@ -179,7 +179,7 @@ Extra loads (the EV charger) are scheduled by simulating them as an extra load i
 
 The house battery minimum follows `switch.pv_control_enforce_preferred_soc` in every mode (preferred minimum when on, absolute minimum when off). Grid use is compared by energy: any 15-min slot where the load adds grid import counts, at that slot's price — including the grid covering the house while the battery is held at its minimum.
 
-**PriorityPlus price rule:** every 15-min start is simulated; a start passes when the load adds no grid import, or only at or below `number.pv_control_max_price_for_forcecharge`. Of the passing starts, the earliest wins unless a later one is at least 1 % cheaper overall (extra import cost minus lost export earnings — battery energy the load uses tonight is refilled by tomorrow's PV that would otherwise be exported). A planned later start sticks while it stays cheaper than starting now, so forecast noise can't flip it; a running session is never stopped to wait for a cheaper start. Follow-up sessions up to the target are planned as a preview (`planned_sessions`).
+**PriorityPlus price rule:** every 15-min start is simulated; a start passes when the load adds no grid import, or only at or below `number.pv_control_max_price_for_forcecharge`. Of the passing starts, the earliest wins unless a later one is at least 1 % cheaper overall (extra import cost minus lost export earnings — battery energy the load uses tonight is refilled by tomorrow's PV that would otherwise be exported). If the cheap window is shorter than the session, so no full-length start passes, the load charges just that window (the earliest shortened session that passes, at least `MinWindowMinutes`); the rest follows later. A planned later start sticks while it stays cheaper than starting now, so forecast noise can't flip it; a running session is never stopped to wait for a cheaper start. Follow-up sessions up to the target are planned as a preview (`planned_sessions`).
 
 **Ready-by deadline** (PriorityPlus only, when enforced): only starts that finish by the next occurrence of the ready-by time count, and the deadline beats the price threshold — if no start passes, the cheapest one that still finishes in time is taken; if even now is too late, it starts now.
 
@@ -324,6 +324,7 @@ dotnet test NetDeamonApps.Tests/
 | `MidnightRolloverTests` | Load data staleness detection after midnight |
 | `SimulatorTests` | End-to-end `EnergySimulator.Simulate()` with injectable `SimulationInput` |
 | `FindWindowConditionTests` | Simulation conditions behind the load scheduling rules (PV surplus, overnight minimum, new/cheap grid, grid charge sized into the cheap band) |
+| `CheapWindowShorterThanSessionTests` | PriorityPlus with a cheap window shorter than the session (live 2026-10-25): charges the window, longest passing end, min window, follow-up |
 | `SessionPlannerTests` | PriorityPlus price scan: cheapest vs earliest start, minimum saving, sticky plan, ready-by deadline, follow-up sessions, net grid cost |
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |

@@ -15,13 +15,16 @@ public enum StartChoice
   DeadlineCheapest,
   /// <summary>Even starting now can't finish by the deadline — start now.</summary>
   DeadlineNow,
+  /// <summary>No full session passes the price check — earliest shortened one that does (the cheap window is shorter than the session).</summary>
+  Partial,
 }
 
 /// <summary>A chosen session start.</summary>
 /// <param name="Start">Start time.</param>
 /// <param name="Choice">Why this start.</param>
 /// <param name="SavingPercent">For <see cref="StartChoice.Cheaper"/>: saving vs the earliest start, in %.</param>
-public readonly record struct PlannedStart(DateTime Start, StartChoice Choice, float SavingPercent = 0);
+/// <param name="End">For <see cref="StartChoice.Partial"/>: end of the shortened session; null = full length.</param>
+public readonly record struct PlannedStart(DateTime Start, StartChoice Choice, float SavingPercent = 0, DateTime? End = null);
 
 /// <summary>Price-aware session search for schedulable loads, over EnergySimulator (free of HA).</summary>
 public static class SessionPlanner
@@ -36,7 +39,9 @@ public static class SessionPlanner
   /// PriorityPlus price scan: simulates the load at every 15-min start and picks one. A start passes
   /// if it needs no new grid or only at/under the price limit; the earliest passing start wins unless a
   /// later one is cheaper (<see cref="SimulationResult.NetGridCostVs"/>) by the minimum saving. A
-  /// deadline beats the price limit.
+  /// deadline beats the price limit. If no full session passes, the earliest shortened one that does
+  /// (at least <paramref name="minWindowMinutes"/>): the part beyond the cheap window would come from
+  /// the battery and be bought back later above the limit.
   /// </summary>
   /// <param name="minStart">Earliest start.</param>
   /// <param name="horizonEnd">Latest start without a deadline (end of the published prices).</param>
@@ -46,12 +51,13 @@ public static class SessionPlanner
   /// <param name="deadline">Session must end by then; null = none.</param>
   /// <param name="minSavingFraction">Saving a later start needs over the earliest one (0.01 = 1 %).</param>
   /// <param name="preferredStart">Last cycle's planned start; kept while it passes and is cheaper than the earliest (stops flipping).</param>
-  /// <returns>The start and why; null if none passes (no deadline).</returns>
+  /// <param name="minWindowMinutes">Shortest session worth starting (<see cref="StartChoice.Partial"/>); at least one slot.</param>
+  /// <returns>The start and why; null if none passes, not even shortened (no deadline).</returns>
   public static PlannedStart? FindBestPriceAwareStart(
     DateTime minStart, DateTime horizonEnd, int durationMinutes,
     Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline,
     DateTime? deadline = null, float minSavingFraction = DefaultMinSavingFraction,
-    DateTime? preferredStart = null)
+    DateTime? preferredStart = null, int minWindowMinutes = 0)
   {
     var lastStart = deadline is null ? horizonEnd : deadline.Value.AddMinutes(-durationMinutes);
     if (deadline is not null && lastStart < minStart)
@@ -72,7 +78,7 @@ public static class SessionPlanner
       var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
       float cost = sim.NetGridCostVs(baseline);
       if (cheapestAny is null || cost < cheapestAny.Value.Cost) cheapestAny = (candidate, cost);
-      if (sim.HasNewGridVs(baseline) && !sim.IsGridCheapVs(baseline)) continue;
+      if (!PassesPriceCheck(sim, baseline)) continue;
 
       earliest ??= (candidate, cost);
       if (cheapest is null || cost < cheapest.Value.Cost) cheapest = (candidate, cost);
@@ -92,8 +98,57 @@ public static class SessionPlanner
     }
     if (deadline is not null && cheapestAny is { } a)
       return new PlannedStart(a.Start, StartChoice.DeadlineCheapest);
+
+    int minMinutes = Math.Max(TimeRange.SlotMinutes, minWindowMinutes);
+    for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
+    {
+      // Monotone: if the shortest session fails, every longer one from here does too.
+      var from = candidate;
+      if (minMinutes >= durationMinutes || !PassesPriceCheck(runSim(from, from.AddMinutes(minMinutes)), baseline)) continue;
+      var end = FindMaxSessionEnd(from, from.AddMinutes(durationMinutes), e => runSim(from, e), sim => PassesPriceCheck(sim, baseline));
+      if (end is { } partialEnd && (partialEnd - from).TotalMinutes >= minMinutes)
+        return new PlannedStart(from, StartChoice.Partial, End: partialEnd);
+    }
     return null;
   }
+
+  /// <summary>PriorityPlus price check: the load needs no new grid, or only at/under the price limit.</summary>
+  /// <param name="sim">Simulation with the load.</param>
+  /// <param name="baseline">Simulation without it.</param>
+  private static bool PassesPriceCheck(SimulationResult sim, SimulationResult baseline) =>
+    !sim.HasNewGridVs(baseline) || sim.IsGridCheapVs(baseline);
+
+  /// <summary>Longest session from the current slot whose simulation passes a predicate (binary search; the predicate must be monotone).</summary>
+  /// <param name="currentSlot">Session start.</param>
+  /// <param name="maxEnd">Latest end.</param>
+  /// <param name="runSim">Simulates a session ending at the given time.</param>
+  /// <param name="predicate">Condition on the simulation.</param>
+  /// <returns>The end; null if even one slot fails.</returns>
+  public static DateTime? FindMaxSessionEnd(
+    DateTime currentSlot, DateTime maxEnd,
+    Func<DateTime, SimulationResult> runSim,
+    Func<SimulationResult, bool> predicate)
+  {
+    int maxSteps = (int)(maxEnd - currentSlot).TotalMinutes / 15;
+    if (maxSteps <= 0) return null;
+
+    // Fast path: longest session satisfies — most common case.
+    if (predicate(runSim(currentSlot.AddMinutes(maxSteps * 15))))
+      return currentSlot.AddMinutes(maxSteps * 15);
+
+    // Binary search: find rightmost step in [1, maxSteps-1] where predicate is true.
+    int lo = 1, hi = maxSteps - 1, best = -1;
+    while (lo <= hi)
+    {
+      int mid = (lo + hi) / 2;
+      if (predicate(runSim(currentSlot.AddMinutes(mid * 15))))
+      { best = mid; lo = mid + 1; }
+      else
+      { hi = mid - 1; }
+    }
+    return best >= 0 ? currentSlot.AddMinutes(best * 15) : null;
+  }
+
 
   /// <summary>Preview of the sessions after the current one until the energy is covered (same price scan, each judged against a baseline with all earlier sessions).</summary>
   /// <param name="baseInput">Simulation input without the load.</param>
@@ -131,7 +186,7 @@ public static class SessionPlanner
         baseline, deadline);
       if (start is null) break;
 
-      var next = template.Between(start.Value.Start, start.Value.Start.AddMinutes(remainingMinutes));
+      var next = template.Between(start.Value.Start, start.Value.End ?? start.Value.Start.AddMinutes(remainingMinutes));
       sessions.Add(next);
       planned.Add(next);
     }

@@ -367,6 +367,14 @@ otherwise have earned. A running session is never stopped to wait for a cheaper 
 Without a deadline, starts are bounded by the published price horizon and sessions must end
 `ConsequenceMarginHours` (12 h) before the simulation end (their grid effects must be visible).
 
+**Cheap window shorter than the session** (`StartChoice.Partial`): if no full-length start passes,
+the earliest start whose session, shortened by `FindMaxSessionEnd` (the same binary search
+Priority uses) to at least `MinWindowMinutes`, passes is taken; the follow-up preview plans the
+rest. Live 2026-10-25 08:00: EV 18 → 25 % (2 h 37 min), house in force_charge in the only hours
+under the 35 ct limit (08–10 h, 32 ct). Every full session ran past 10:00 on the house battery,
+which the house bought back overnight at 36–38 ct, so nothing passed and the EV stood still
+during the day's cheapest grid window. Charging just 08:00–10:00 adds import only at 32 ct.
+
 **Ready-by deadline** (`time.pv_control_<load>_ready_by` + `switch.pv_control_<load>_enforce_ready_by`;
 MQTT time entities need HA ≥ 2026.5; PriorityPlus only; off unless the switch is on):
 only starts that finish by the next occurrence of that time are considered, and the deadline

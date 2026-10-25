@@ -661,7 +661,7 @@ namespace NetDeamon.apps.PVControl
       // than MinWindowMinutes (prevents oscillation from marginal windows).
       DateTime? FindMax(DateTime maxEnd, Func<SimulationResult, bool> predicate)
       {
-        var end = FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
+        var end = SessionPlanner.FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
         return end is not null && MeetsMinWindow(currentSlot, end.Value) ? end : null;
       }
 
@@ -775,7 +775,7 @@ namespace NetDeamon.apps.PVControl
             var tomorrowOptMax = Min(tomorrowPVStart.Value.AddMinutes(durationMinutes), tomorrowPVEnd.Value);
             if (tomorrowOptMax > tomorrowPVStart.Value)
             {
-              var end = FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
+              var end = SessionPlanner.FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
                 e => RunSimFrom(tomorrowPVStart.Value, e),
                 sim => sim.WillReachMaxSocTomorrow && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
               if (end is not null && MeetsMinWindow(tomorrowPVStart.Value, end.Value))
@@ -816,7 +816,7 @@ namespace NetDeamon.apps.PVControl
 
             if (recoveryMax > recoverySlot)
             {
-              var end = FindMaxSessionEnd(recoverySlot, recoveryMax,
+              var end = SessionPlanner.FindMaxSessionEnd(recoverySlot, recoveryMax,
                 e => RunSimFrom(recoverySlot, e),
                 sim => (recoveryIsToday ? sim.WillReachMaxSocToday : sim.WillReachMaxSocTomorrow)
                        && sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
@@ -1001,7 +1001,7 @@ namespace NetDeamon.apps.PVControl
 
                 if (recoveryMax > recoverySlot)
                 {
-                  var end = FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e),
+                  var end = SessionPlanner.FindMaxSessionEnd(recoverySlot, recoveryMax, e => RunSimFrom(recoverySlot, e),
                     sim => sim.IsOvernightMinSocOk() && !sim.HasNewGridVs(baseResult));
 
                   if (end is not null && MeetsMinWindow(recoverySlot, end.Value))
@@ -1061,10 +1061,10 @@ namespace NetDeamon.apps.PVControl
         // later start from last cycle stays preferred (see FindBestPriceAwareStart).
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSimFrom, baseResult,
           readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
-          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime);
+          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes);
         if (planned is not { } p) return;
 
-        var end = p.Start.AddMinutes(durationMinutes);
+        var end = p.End ?? p.Start.AddMinutes(durationMinutes);
         if (!MeetsMinWindow(p.Start, end)) return;
 
         string why = p.Choice switch
@@ -1072,6 +1072,7 @@ namespace NetDeamon.apps.PVControl
           StartChoice.Cheaper          => $"cheapest window, {p.SavingPercent:F0}% cheaper than the earliest",
           StartChoice.DeadlineCheapest => $"ready by {readyBy:HH:mm} — cheapest start that finishes in time, above price threshold",
           StartChoice.DeadlineNow      => $"ready by {readyBy:HH:mm} — can't finish in time, charging now",
+          StartChoice.Partial          => $"cheap window only until {end:HH:mm}, rest later",
           _                            => "earliest cheap grid-assisted window",
         };
         bool startNow = p.Start <= currentSlot;
@@ -1128,37 +1129,6 @@ namespace NetDeamon.apps.PVControl
       // on PV and battery state as it is at the time. Never fed into the control simulation.
       if (load.Mode == LoadSchedulingMode.PriorityPlus)
         load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd, readyBy);
-    }
-
-    /// <summary>Longest session from the current slot whose simulation passes a predicate (binary search; the predicate must be monotone).</summary>
-    /// <param name="currentSlot">Session start.</param>
-    /// <param name="maxEnd">Latest end.</param>
-    /// <param name="runSim">Simulates a session ending at the given time.</param>
-    /// <param name="predicate">Condition on the simulation.</param>
-    /// <returns>The end; null if even one slot fails.</returns>
-    private static DateTime? FindMaxSessionEnd(
-      DateTime currentSlot, DateTime maxEnd,
-      Func<DateTime, SimulationResult> runSim,
-      Func<SimulationResult, bool> predicate)
-    {
-      int maxSteps = (int)(maxEnd - currentSlot).TotalMinutes / 15;
-      if (maxSteps <= 0) return null;
-
-      // Fast path: longest session satisfies — most common case.
-      if (predicate(runSim(currentSlot.AddMinutes(maxSteps * 15))))
-        return currentSlot.AddMinutes(maxSteps * 15);
-
-      // Binary search: find rightmost step in [1, maxSteps-1] where predicate is true.
-      int lo = 1, hi = maxSteps - 1, best = -1;
-      while (lo <= hi)
-      {
-        int mid = (lo + hi) / 2;
-        if (predicate(runSim(currentSlot.AddMinutes(mid * 15))))
-        { best = mid; lo = mid + 1; }
-        else
-        { hi = mid - 1; }
-      }
-      return best >= 0 ? currentSlot.AddMinutes(best * 15) : null;
     }
 
     /// <summary>Latest start before a fixed end whose simulation passes a predicate; a linear scan backward (the predicate isn't monotone: grid charging jumps between price windows).</summary>

@@ -42,6 +42,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`SimulatorTests`** — end-to-end `EnergySimulator.Simulate()` tests using injectable `SimulationInput` (no HA needed)
 - **`FindWindowConditionTests`** — simulation conditions behind the load scheduling rules (`FindLoadWindow` itself is private and reads live HA state, so its predicates are tested here)
 - **`SessionPlannerTests`** — PriorityPlus price scan (cheapest/earliest start, min saving, sticky plan, ready-by deadline, follow-ups, net grid cost)
+- **`CheapWindowShorterThanSessionTests`** — PriorityPlus when the cheap window is shorter than the session (live 2026-10-25 08:00): shortened session (`StartChoice.Partial`), longest passing end, min window, follow-up
 - **`LoadSchedulingDecisionTests`** — Priority/PriorityPlus live SoC gate with restart hysteresis
 - **`ReplanPolicyTests`** — when a load's schedule search reruns, house-load deviation trigger, min-off latch
 - **`LevelEnergyLearnerTests`** — learning energy per level unit and charge power
