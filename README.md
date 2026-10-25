@@ -247,7 +247,7 @@ YAML (`PVControl.yaml` → `WarmWater`): the heat pump entities (temperature, he
 ### DataLogger
 Logs energy sensor history to a local SQLite database at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
 
-One row per hour (`hourly`, stamped hh:59:59) and per day (`daily`): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases — resets and glitches handled), SoCs and prices. Also the heat pump's operation and the house's state:
+One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per local day (`daily`, midnight to midnight — 23 or 25 h at the clock change; the repeated hour in October gets two rows, +02:00 and +01:00): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases — resets and glitches handled), SoCs and prices. Also the heat pump's operation and the house's state:
 
 | Column | Source (`DataLogger.yaml`) | Value |
 |---|---|---|
@@ -341,6 +341,7 @@ dotnet test NetDeamonApps.Tests/
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
+| `DataLoggerPeriodTests` | DataLogger hours and days across both clock changes, backfill of an empty table |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |

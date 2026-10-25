@@ -152,11 +152,12 @@ namespace NetDeamon.apps
         return new Tuple<bool, List<SensorData>>(false, []);
       }
     }
-    /// <summary>Formats a time as ISO 8601 with offset (yyyy-MM-ddTHH:mm:ss±zz:zz).</summary>
-    /// <param name="date">Time to format.</param>
+    /// <summary>Formats a time as local ISO 8601 with the offset valid at that instant (yyyy-MM-ddTHH:mm:ss±zz:zz).</summary>
+    /// <param name="date">Time to format; UTC, or local (also the repeated hour when read from HA/DB; a naive time there counts as winter time).</param>
     /// <returns>The formatted string.</returns>
     public static string ToISO8601(this DateTime date) =>
-      date.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz", CultureInfo.InvariantCulture);
+      TimeZoneInfo.ConvertTime(new DateTimeOffset(date.ToUniversalTime()), TimeZoneInfo.Local)
+        .ToString("yyyy'-'MM'-'dd'T'HH':'mm':'sszzz", CultureInfo.InvariantCulture);
 
     /// <summary>Reads an ISO 8601 time with offset (e.g. "2026-06-27T12:59:59+02:00", DB and HA) as local time.</summary>
     /// <param name="text">The time text.</param>

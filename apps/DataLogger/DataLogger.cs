@@ -232,44 +232,55 @@ namespace PVControl
     private async Task ScheduleRunCore()
     {
       _logger.LogTrace("Entered ScheduleRun");
-      DateTime now = DateTime.Now;
-      // An empty table goes back as far as HA history safely has values (it keeps ~10 days).
-      await CatchUpAsync("hourly", now, now.AddDays(-7).Date.AddHours(1), TimeSpan.FromHours(1),
-        HourEnd, end => PopulateDB(end, daily: false));
-      await CatchUpAsync("daily", now, now.AddDays(-6).Date, TimeSpan.FromDays(1),
-        DayEnd, end => PopulateDB(end, daily: true));
+      DateTime nowUtc = DateTime.UtcNow;
+      foreach (bool daily in new[] { false, true })
+      {
+        string table = daily ? "daily" : "hourly";
+        foreach (var (start, end) in DuePeriods(await GetLastLogTimeStamp(table), nowUtc, daily, TimeZoneInfo.Local))
+          await PopulateDB(start, end, daily);
+      }
       _logger.LogTrace("Finished ScheduleRun");
     }
 
-    /// <summary>Writes the rows of one table up to now: an empty table from <paramref name="backfillFrom"/>, then every period after its last row.</summary>
-    /// <param name="table">Table name ("hourly", "daily").</param>
-    /// <param name="now">Current time; periods ending before it are written.</param>
-    /// <param name="backfillFrom">First period end for an empty table.</param>
-    /// <param name="step">Period length.</param>
-    /// <param name="periodEnd">The period end a time belongs to (hh:59:59, 23:59:59 — no drift).</param>
-    /// <param name="insert">Writes the row of the period ending at the given time.</param>
-    private async Task CatchUpAsync(string table, DateTime now, DateTime backfillFrom, TimeSpan step,
-      Func<DateTime, DateTime> periodEnd, Func<DateTime, Task> insert)
+    /// <summary>Days an empty table is backfilled (HA history keeps ~10 days).</summary>
+    public const int BackfillDays = 7;
+
+    // Periods are UTC instants: local clock arithmetic skips or doubles the repeated hour when
+    // summer time ends (2026-10-25: 02:00–02:59 summer time was never logged).
+    /// <summary>The periods to write: every hour/local day after the last row that has ended by now.</summary>
+    /// <param name="lastEndUtc">End of the table's last row; null = empty table, backfilled from <see cref="BackfillDays"/> local days ago.</param>
+    /// <param name="nowUtc">Current time; periods ending before it are due.</param>
+    /// <param name="daily">True = local days (23/25 h at the clock change), false = hours.</param>
+    /// <param name="tz">Time zone of the local days.</param>
+    /// <returns>(start, end) in UTC; end = the period's last second, the row's timestamp.</returns>
+    public static IEnumerable<(DateTime Start, DateTime End)> DuePeriods(DateTime? lastEndUtc, DateTime nowUtc, bool daily, TimeZoneInfo tz)
     {
-      DateTime last = await GetLastLogTimeStamp(table);
-      if (last == DateTime.MinValue)
-      {
-        for (var end = backfillFrom; end < now; end += step)
-          await insert(end);
-        last = await GetLastLogTimeStamp(table);
-      }
-      for (var end = last + step; end < now; end += step)
-      {
-        end = periodEnd(end);
-        await insert(end);
-      }
+      DateTime PeriodEnd(DateTime t) => daily ? DayStart(DayStart(t, tz).AddHours(30), tz).AddSeconds(-1) : HourStart(t).AddHours(1).AddSeconds(-1);
+      DateTime PeriodStart(DateTime end) => daily ? DayStart(end, tz) : HourStart(end);
+      var end = lastEndUtc is { } last
+        ? PeriodEnd(last.AddSeconds(1))
+        : PeriodEnd(DayStart(nowUtc.AddDays(daily ? 1 - BackfillDays : -BackfillDays), tz));
+      for (; end < nowUtc; end = PeriodEnd(end.AddSeconds(1)))
+        yield return (PeriodStart(end), end);
     }
+
+    /// <summary>Start of the UTC hour an instant lies in (= a local hour; whole-hour offsets).</summary>
+    /// <param name="utc">Instant (UTC).</param>
+    private static DateTime HourStart(DateTime utc) => new(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Local midnight starting the day an instant lies in.</summary>
+    /// <param name="utc">Instant (UTC).</param>
+    /// <param name="tz">Time zone of the day.</param>
+    /// <returns>That midnight in UTC.</returns>
+    private static DateTime DayStart(DateTime utc, TimeZoneInfo tz) =>
+      TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(utc, tz).Date, DateTimeKind.Unspecified), tz);
+
     /// <summary>Timestamp of a table's last row.</summary>
     /// <param name="tableName">"hourly" or "daily".</param>
-    /// <returns>Local time; DateTime.MinValue for an empty table.</returns>
-    private async Task<DateTime> GetLastLogTimeStamp(string tableName)
+    /// <returns>UTC; null for an empty table.</returns>
+    private async Task<DateTime?> GetLastLogTimeStamp(string tableName)
     {
-      DateTime timeStamp = DateTime.MinValue;
+      DateTime? timeStamp = null;
 
       using (SqliteConnection con = new(_connectionString))
       {
@@ -283,7 +294,7 @@ namespace PVControl
         {
           if (queryResult.Read())
           {
-            timeStamp = Extensions.FromISO8601(queryResult.GetString(0));
+            timeStamp = DateTimeOffset.Parse(queryResult.GetString(0), CultureInfo.InvariantCulture).UtcDateTime;
           }
         }
         await con.CloseAsync();
@@ -348,39 +359,12 @@ namespace PVControl
       return false;
     }
 
-    /// <summary>Last second of the hour a time lies in (hh:59:59), the timestamp of an hourly row.</summary>
-    /// <param name="t">Any time in the hour.</param>
-    private static DateTime HourEnd(DateTime t) => t.Floor(60).AddHours(1).AddSeconds(-1);
-
-    /// <summary>Last second of the day a time lies in (23:59:59), the timestamp of a daily row.</summary>
-    /// <param name="t">Any time of the day.</param>
-    private static DateTime DayEnd(DateTime t) => t.Date.AddDays(1).AddSeconds(-1);
-
     /// <summary>Reads the period's values from the HA history and writes one hourly or daily row.</summary>
-    /// <param name="historyEnd">Period end; near a full hour/day it snaps to the period just ended.</param>
-    /// <param name="daily">True = daily row (24 h), false = hourly.</param>
-    private async Task PopulateDB(DateTime historyEnd, bool daily=false)
+    /// <param name="historyStart">Period start (UTC).</param>
+    /// <param name="historyEnd">Period end (UTC, its last second); the row's timestamp, written as local time with offset.</param>
+    /// <param name="daily">True = daily row, false = hourly.</param>
+    private async Task PopulateDB(DateTime historyStart, DateTime historyEnd, bool daily)
     {
-      int hours = daily ? 24 : 1;
-      DateTime historyStart = historyEnd.AddHours(-hours);
-      if (historyEnd.Minute >= 58 && hours == 1)
-      {
-        historyStart = historyEnd.Floor(60);
-      }
-      else if (historyEnd.Minute <= 2 && hours == 1)
-      {
-        historyEnd = HourEnd(historyEnd.AddHours(-1));
-        historyStart = historyEnd.Floor(60);
-      }
-      else if (historyEnd.Minute >= 58 && historyEnd.Hour == 23 && hours == 24)
-      {
-        historyStart = historyEnd.Date;
-      }
-      else if (historyEnd.Minute <= 2 && historyEnd.Hour == 0 && hours == 24)
-      {
-        historyEnd = DayEnd(historyEnd.AddDays(-1));
-        historyStart = historyEnd.Date;
-      }
 
       _logger.LogInformation("Calculating and storing {daily} values from {start} to {end}", daily ? "daily" : "hourly", historyStart.ToISO8601(), historyEnd.ToISO8601());
 
@@ -460,7 +444,7 @@ namespace PVControl
           ("heatenergyheating", heatHeating), ("heatenergywarmwater", heatWarmwater), ("heatpumpelecheating", elecHeating), ("heatpumpelecwarmwater", elecWarmwater),
         ];
         var insertCommand = con.CreateCommand();
-        insertCommand.CommandText = $"INSERT OR IGNORE INTO {(hours == 1 ? "hourly" : "daily")} ({string.Join(", ", values.Select(v => v.Column))}) " +
+        insertCommand.CommandText = $"INSERT OR IGNORE INTO {(daily ? "daily" : "hourly")} ({string.Join(", ", values.Select(v => v.Column))}) " +
                                     $"VALUES ({string.Join(", ", values.Select(v => "$" + v.Column))});";
         foreach (var (column, value) in values)
           insertCommand.Parameters.AddWithValue("$" + column, value ?? DBNull.Value);
@@ -474,8 +458,8 @@ namespace PVControl
       double? TargetTemperature, double? FlowTemperature, double? ReturnTemperature, double? WindSpeed, double? AtHomeMinutes, double? RoomsHeating, double? RoomSetpoint);
 
     /// <summary>Heat pump operation and the house's state over a period (v6 columns) from the HA history.</summary>
-    /// <param name="from">Period start.</param>
-    /// <param name="to">Period end.</param>
+    /// <param name="from">Period start (UTC).</param>
+    /// <param name="to">Period end (UTC).</param>
     /// <returns>The values; null where the entity isn't configured or has no history.</returns>
     private async Task<OperationValues> GetOperationValuesAsync(DateTime from, DateTime to)
     {
@@ -493,8 +477,11 @@ namespace PVControl
           return null;
         }
       }
-      static List<(DateTime, string)> States(List<SensorData> h) => h.Select(s => (s.LastChanged, s.State ?? "")).ToList();
-      static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (s.LastChanged,
+      // LastChanged arrives as local time; compared with the UTC period only as UTC (DateTime
+      // comparisons ignore Kind).
+      static DateTime Utc(SensorData s) => s.LastChanged.ToUniversalTime();
+      static List<(DateTime, string)> States(List<SensorData> h) => h.Select(s => (Utc(s), s.State ?? "")).ToList();
+      static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (Utc(s),
         double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList();
       static string? Attribute(SensorData s, string name) =>
         s.Attributes is JsonElement { ValueKind: JsonValueKind.Object } a && a.TryGetProperty(name, out var p)
@@ -520,9 +507,9 @@ namespace PVControl
       if (roomHistories.Count > 0)
       {
         double periodMinutes = (to - from).TotalMinutes;
-        roomsHeating = roomHistories.Sum(h => MinutesInState(h.Select(s => (s.LastChanged, Attribute(s, "hvac_action") ?? "")).ToList(), from, to, a => a == "heating")) / periodMinutes;
+        roomsHeating = roomHistories.Sum(h => MinutesInState(h.Select(s => (Utc(s), Attribute(s, "hvac_action") ?? "")).ToList(), from, to, a => a == "heating")) / periodMinutes;
         var setpoints = roomHistories
-          .Select(h => StepFunction.TimeWeightedAverage(h.Select(s => (s.LastChanged,
+          .Select(h => StepFunction.TimeWeightedAverage(h.Select(s => (Utc(s),
             double.TryParse(Attribute(s, "temperature"), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList(), from, to))
           .Where(v => v is not null).Select(v => v!.Value).ToList();
         roomSetpoint = setpoints.Count > 0 ? setpoints.Average() : null;

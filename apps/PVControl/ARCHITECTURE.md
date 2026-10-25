@@ -601,6 +601,15 @@ DataLogger and HeatingTest (`SqliteSchema`), DataLogger's hourly/daily catch-up 
 time of day (`TimeRange.NextOccurrence`, ready-by and heating test) and rounding up to a quarter.
 `tools/LoadBacktest` links `Calculations.cs`, so its "App" variant computes exactly what the app does.
 
+**DataLogger periods are UTC instants** (`DataLogger.DuePeriods`). At the end of summer time
+(2026-10-25) the logger stepped in local clock time: 01:59:59+02:00 + 1 h is the naive 02:59:59,
+which .NET reads as winter time, so the summer-time 02:00 hour was never logged and the
+winter-time row came out empty (0 Wh with real 0.8 kWh heat pump load). The night score and the
+load model's training lost that hour. Hours are now UTC hours, days run from local midnight to
+local midnight (23/25 h), history queries and `LastChanged` comparisons are in UTC, and
+`ToISO8601` formats the instant with the offset valid then (the two repeated hours get +02:00 and
++01:00 stamps).
+
 **What a kWh cost** (`SourceShares`, `PriceList.GetPriceOrMean`). The battery's average stored
 cost and the extra loads' cost totals used two separate source splits: the battery counted a
 whole charge delta at the import price as soon as the grid meter showed import (else free), the
