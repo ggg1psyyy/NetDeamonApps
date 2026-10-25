@@ -171,7 +171,7 @@ namespace NetDeamon.apps.PVControl
                 GridExport = 0,
                 GridImport = 0,
                 GridExportTotal = PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float export) ? export : 0.0f,
-                GridImportTotal = (float)(ReadImportCounters().FirstOrDefault(v => v is not null) ?? 0),
+                GridImportTotal = (float)((ReadImportCounters().FirstOrDefault(v => v is not null) ?? 0) * 1000), // the cost log is in Wh
                 BasePrice = 0,
                 ExportPriceProvider = 0,
                 ExportPriceTotal = 0,
@@ -571,7 +571,7 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>The import counters in priority order (kWh); null where one has no usable reading.</summary>
     private static List<double?> ReadImportCounters() => PVCC_Config.TotalImportEnergyEntities
-      .Select(e => e.TryGetStateValue(out float v) && v > 0 ? v * e.GetUnitMultiplicator() / 1000.0 : (double?)null).ToList();
+      .Select(e => e.TryGetStateValue(out float wh) && wh > 0 ? wh / 1000.0 : (double?)null).ToList(); // TryGetStateValue already gives Wh
 
     /// <summary>Restores the month's import peak from the sensor after a restart.</summary>
     private void RestoreMonthPeak()
@@ -1154,12 +1154,12 @@ namespace NetDeamon.apps.PVControl
       {
         await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
         {
-          // Import from the counters in priority order; each counts from its own value at the last
-          // booking (after a restart: the stored total belongs to the counter it fits).
+          // Import from the counters in priority order (kWh); each counts from its own value at the last
+          // booking (after a restart: the stored total belongs to the counter it fits). The cost log is in Wh.
           var importCounter = _quarterImport.Counter;
-          _costImportSince ??= importCounter.SnapshotFrom(_lastCostsEntry.GridImportTotal ?? 0);
-          float gridImport = (float)(importCounter.IncreaseSince(_costImportSince) ?? 0);
-          float totalImportEnergy = (float)(importCounter.ActiveValue ?? _lastCostsEntry.GridImportTotal ?? 0);
+          _costImportSince ??= importCounter.SnapshotFrom((_lastCostsEntry.GridImportTotal ?? 0) / 1000.0);
+          float gridImport = (float)((importCounter.IncreaseSince(_costImportSince) ?? 0) * 1000);
+          float totalImportEnergy = importCounter.ActiveValue is { } kwh ? (float)(kwh * 1000) : _lastCostsEntry.GridImportTotal ?? 0;
           _costImportSince = importCounter.Snapshot();
           PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
           var basePriceEntry = _house.Prices.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);

@@ -609,6 +609,25 @@ DataLogger and HeatingTest (`SqliteSchema`), DataLogger's hourly/daily catch-up 
 time of day (`TimeRange.NextOccurrence`, ready-by and heating test) and rounding up to a quarter.
 `tools/LoadBacktest` links `Calculations.cs`, so its "App" variant computes exactly what the app does.
 
+**A running NeedToCharge charge never stops where starting one would begin it** (`EnergySimulator.Simulate`).
+Each plan starts from the mode of the previous plan's first slot. While charging, NeedToCharge
+uses the full forecast margin (else 1 % less) — a hysteresis meant to make continuing easier.
+But the margin also moves the latest charge time and with it the price window, and in that other
+window the running quarter could lose. Live 2026-10-25 11:30 (and 2026-10-22 09:00) force_charge
+and normal then alternated every 15-s cycle, switching the inverter between manual and self-use
+mode each time. A charge that would stop is now checked as if idle too; if that would start it, it continues.
+That fix alone would have held force_charge at 95 % there, right before PV filled the battery: the
+low was tomorrow 07:00 (floor + margin), and with tomorrow's prices still estimated (+5 ct) the
+running quarter looked cheapest. So a NeedToCharge charge before a PV peak on the way to the low
+is now capped to the room PV leaves (100 % − the look-ahead's peak; more would be clipped and push
+PV out to the grid), and doesn't start at all if that leaves 2 % or less (`MinPvRoomPct`) — the rest
+is bought after the peak.
+
+Live the same day, the first import cap build read the counters as Wh treated as kWh: 7 Wh in a
+quarter counted as 7 kWh, the guard set the charge limit to 0 A, the battery stood at 95 % and the
+PV went to the grid. Since then an impossible counter reading (over 45 kW mean) is replaced by
+the estimate from the grid power, and the month's peak ignores it.
+
 **Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
 1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
 highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the

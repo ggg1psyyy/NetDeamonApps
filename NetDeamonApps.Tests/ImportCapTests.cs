@@ -128,6 +128,16 @@ public class ImportCapTests
     Assert.True(m.Observe(new QuarterResult(new DateTime(2026, 11, 1, 0, 0, 0), 2.0)));
   }
 
+  [Fact]
+  public void MonthPeak_ImpossibleQuarter_Ignored()
+  {
+    var m = new MonthPeakTracker();
+    m.Restore(new QuarterResult(T0, 31_550)); // a Wh-as-kWh reading stored before the fix
+    Assert.Null(m.Peak);
+    Assert.False(m.Observe(new QuarterResult(T0, 120)));
+    Assert.True(m.Observe(new QuarterResult(T0, 2.4)));
+  }
+
   // ── ImportCapGuard ───────────────────────────────────────────────────────────────────
 
   static GuardInput Live(double elapsed, double? importedWh, int gridW, int houseW, int evW = 1922, bool evOn = true, bool evPaused = false, int pvW = 260) =>
@@ -184,6 +194,16 @@ public class ImportCapTests
     Assert.True(stillTight.PauseExtraLoads); // 2.3 kW room < 1.93 kW + margin
     var room = ImportCapGuard.Decide(Live(60, 160, 7000, 7000 + 260, evW: 0, evPaused: true));
     Assert.False(room.PauseExtraLoads);
+  }
+
+  [Fact]
+  public void Guard_ImplausibleCounter_EstimatedFromThePower()
+  {
+    // Live 2026-10-25 11:30: counters read in Wh as kWh — 7 Wh looked like 7 kWh after 45 s, and the
+    // battery was held at 0 A. Impossible amounts are replaced by the estimate from the grid power.
+    var d = ImportCapGuard.Decide(Live(45, 7000, 600, 2324, evW: 0, evOn: false));
+    Assert.Equal(30, d.ChargeLimitA);
+    Assert.Contains("implausible", d.Reason);
   }
 
   [Fact]

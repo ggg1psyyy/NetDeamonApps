@@ -51,6 +51,18 @@ public static class EnergySimulator
       // --- Step 3: pick inverter mode ---
       var newMode = ComputeMode(currentMode, needToCharge, input, slotTime, endSlot, currentSoc,
         baseFutureSoC, pvWh, totalLoadWh);
+      // A running NeedToCharge charge never stops where starting one would begin it: the larger
+      // margin while charging also moves the latest charge time and with it the price window, and
+      // in that other window the running quarter could lose — force_charge and normal then
+      // alternated every cycle (live 2026-10-25 11:30, 2026-10-22 09:00).
+      if (IsNeedCharge(currentMode) && newMode.Mode != InverterModes.force_charge)
+      {
+        var idle = new InverterState(InverterModes.normal, ForceChargeReasons.None);
+        var startNeed = ComputeNeedToCharge(currentSoc, baseFutureSoC, idle, input, slotTime);
+        var start = ComputeMode(idle, startNeed, input, slotTime, endSlot, currentSoc, baseFutureSoC, pvWh, totalLoadWh);
+        if (IsNeedCharge(start))
+          (newMode, needToCharge) = (start, startNeed);
+      }
       currentMode = newMode;
 
       // --- Step 4: compute energy flows for this slot given the chosen mode ---
@@ -58,9 +70,7 @@ public static class EnergySimulator
       // above the floor — not all the way to ForceChargeTargetSocPercent (which is meant for
       // user-initiated force charging and would cause massive over-charging here).
       int chargeTargetSocPercent = input.ForceChargeTargetSocPercent;
-      if (newMode.Mode == InverterModes.force_charge &&
-          (newMode.ModeReason == ForceChargeReasons.GoingUnderAbsoluteMinima ||
-           newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima))
+      if (IsNeedCharge(newMode))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input);
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, input.SlotFraction(slotTime));
 
@@ -74,6 +84,11 @@ public static class EnergySimulator
 
     return new SimulationResult(slots, input);
   }
+
+  /// <summary>Whether a mode is a NeedToCharge grid charge (force_charge for a minimum).</summary>
+  /// <param name="mode">The mode.</param>
+  private static bool IsNeedCharge(InverterState mode) => mode.Mode == InverterModes.force_charge
+    && mode.ModeReason is ForceChargeReasons.GoingUnderAbsoluteMinima or ForceChargeReasons.GoingUnderPreferredMinima;
 
   // ── NeedToCharge charge target ──────────────────────────────────────────────────────────
   /// <summary>Target SoC of a NeedToCharge grid charge: lifts the unclamped trough before the next PV peak to floor + forecast margin + <see cref="ChargeTargetBufferPct"/>.</summary>
@@ -123,7 +138,32 @@ public static class EnergySimulator
     // ComputeNeedToCharge stops an ongoing charge, so the simulated charge and the live stop
     // condition agree.
     int deficit = Math.Max(0, floorSoc + ForecastMarginPct(troughTime - slotTime) + ChargeTargetBufferPct - baseTrough);
-    return Math.Min(100, currentSoc + deficit);
+    // Grid energy charged before a PV peak on the way to the low only counts up to the room PV
+    // leaves there: more is clipped at 100 % and pushes PV out to the grid.
+    return Math.Min(100, currentSoc + Math.Min(deficit, PvRoomBeforeLow(currentSoc, slotTime, troughTime, baseFutureSoC)));
+  }
+
+  /// <summary>Before a coming PV peak a grid charge of this much or less doesn't start, %: PV fills the battery anyway (the charge is capped to the room PV leaves).</summary>
+  public const int MinPvRoomPct = 2;
+
+  /// <summary>Whether PV lifts the look-ahead above the SoC now before the low (a PV peak still ahead).</summary>
+  /// <param name="currentSoc">Simulated SoC now, %.</param>
+  /// <param name="slotTime">Current slot.</param>
+  /// <param name="lowTime">Time of the low.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  private static bool PvRisesBeforeLow(int currentSoc, DateTime slotTime, DateTime lowTime, Dictionary<DateTime, int> baseFutureSoC) =>
+    baseFutureSoC.Any(s => s.Key > slotTime && s.Key <= lowTime && s.Value > currentSoc);
+
+  /// <summary>Room a grid charge now keeps until a low: 100 % less the highest point of the look-ahead before it (PV fills the battery that far anyway).</summary>
+  /// <param name="currentSoc">Simulated SoC now, %.</param>
+  /// <param name="slotTime">Current slot.</param>
+  /// <param name="lowTime">Time of the low the charge has to cover.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <returns>%; 100 − SoC now if the look-ahead doesn't rise before the low.</returns>
+  private static int PvRoomBeforeLow(int currentSoc, DateTime slotTime, DateTime lowTime, Dictionary<DateTime, int> baseFutureSoC)
+  {
+    int peak = baseFutureSoC.Where(s => s.Key >= slotTime && s.Key <= lowTime).Select(s => s.Value).DefaultIfEmpty(currentSoc).Max();
+    return Math.Max(0, 100 - Math.Max(peak, currentSoc));
   }
 
   /// <summary>A NeedToCharge charge lifts the trough this far above floor + forecast margin, %.</summary>
@@ -508,6 +548,12 @@ public static class EnergySimulator
       }
       // Don't start over 96 % (too slow); allow up to 98 % once already charging
       bool socOk = currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
+      // Not before a PV peak that fills the battery anyway (live 2026-10-25 11:45: 95 %, PV to 100 %
+      // by 12:15, the low only tomorrow 07:00 — the charge bought at 35 ct what PV then exported).
+      // The rest of the deficit is bought after the peak.
+      if (inWindow && PvRisesBeforeLow(simulatedSoc, now, need.LatestChargeTime, baseFutureSoC)
+          && DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input) - simulatedSoc <= MinPvRoomPct)
+        inWindow = false;
 
       // No "next hour is cheaper, wait" deferral here: a cheaper next hour is already among
       // the chosen quarters, and deferring a chosen quarter just pushes the charge past them.

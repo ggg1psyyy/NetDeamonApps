@@ -44,6 +44,10 @@ public static class ImportCapGuard
   /// <summary>Margin before a paused extra load resumes, W (no flapping at the edge).</summary>
   public const int ResumeMarginW = 500;
 
+  /// <summary>More than this mean import is impossible for a house connection, W: a counter reading above it is wrong
+  /// (e.g. a unit error), and the quarter is estimated from the power instead.</summary>
+  public const int MaxPlausibleW = 45_000;
+
   /// <summary>Remaining time after the reaction below which a change only matters for the next quarter, s.</summary>
   public const double MinEffectSeconds = 30;
 
@@ -53,7 +57,9 @@ public static class ImportCapGuard
   public static GuardDecision Decide(GuardInput g)
   {
     double remaining = Math.Max(0, QuarterSeconds - g.ElapsedSeconds);
-    double imported = g.ImportedWh ?? Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(g.ElapsedSeconds));
+    double estimate = Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(g.ElapsedSeconds));
+    bool plausible = g.ImportedWh is { } measured && measured <= Energy.Wh(MaxPlausibleW, TimeSpan.FromSeconds(g.ElapsedSeconds + 60));
+    double imported = plausible ? g.ImportedWh!.Value : estimate;
     double projectedKw = (imported + Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(remaining))) * 60 / TimeRange.SlotMinutes / 1000;
 
     // Mean import allowed once a change takes effect.
@@ -77,6 +83,7 @@ public static class ImportCapGuard
     string reason = pause ? $"extra loads paused: {allowedW / 1000:F1} kW allowed, house {baseW / 1000.0:F1} kW"
       : limitA < g.MaxChargeA ? $"charge limited to {limitA:F1} A: {allowedW / 1000:F1} kW allowed for the rest of the quarter"
       : "no limit needed";
+    if (g.ImportedWh is not null && !plausible) reason += $" (counter implausible: {g.ImportedWh / 1000:F1} kWh, estimated)";
     return new GuardDecision(limitA, pause, headroom, (int)allowedW, Math.Round(projectedKw, 2), reason);
   }
 

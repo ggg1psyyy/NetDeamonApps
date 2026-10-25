@@ -75,7 +75,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 | `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
 | `sensor.pv_control_load_forecast` | Coming night's load (22:00–08:00, kWh) by the weather-aware model — see [Load forecast](#load-forecast) |
 
-Grid charge for the minimum (`need_to_charge_from_grid_today`): the target for the low before PV takes over is the minimum SoC + a forecast margin (+1 % per 2 h until that low, at most 4 %) + 1 % — e.g. minimum 20 %, low 17 h away: 25 %. A charge starts when the low would fall 2 % below that target (never below the minimum itself) and charges just up to it, in the cheapest quarters before the low — or the minimum is held with `grid_only` when charging isn't cheaper than buying the load. `sensor.pv_control_mode` has the reason in `charge_Reason`, the running or next charge quarter in `next_charge_window_start/end`.
+Grid charge for the minimum (`need_to_charge_from_grid_today`): the target for the low before PV takes over is the minimum SoC + a forecast margin (+1 % per 2 h until that low, at most 4 %) + 1 % — e.g. minimum 20 %, low 17 h away: 25 %. A charge starts when the low would fall 2 % below that target (never below the minimum itself) and charges just up to it, in the cheapest quarters before the low — or the minimum is held with `grid_only` when charging isn't cheaper than buying the load. A running charge continues as long as starting one would begin it. Before a PV peak on the way to the low, the charge only fills the room PV leaves (100 % − that peak) and doesn't start for 2 % or less; the rest follows after the peak. `sensor.pv_control_mode` has the reason in `charge_Reason`, the running or next charge quarter in `next_charge_window_start/end`.
 
 #### Load forecast
 
@@ -371,6 +371,7 @@ dotnet test NetDeamonApps.Tests/
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `DataLoggerPeriodTests` | DataLogger hours and days across both clock changes, backfill of an empty table |
+| `NeedChargeHysteresisTests` | A running grid charge never stops where starting one would begin it (no force_charge/normal flip-flop); no grid charge right before a PV peak that fills the battery anyway |
 | `ImportCapTests` | Import cap: counters in priority order with fallback, the running quarter, the month's peak, the guard (battery first, then extra loads, reaction time), health |
 | `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
