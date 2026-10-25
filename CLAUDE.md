@@ -99,9 +99,9 @@ Each app consists of:
 ### Configuration
 `appsettings.json` holds HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.
 
-## Home Assistant config (`J:\` = `\\192.168.1.115\config`)
+## Home Assistant config
 
-The live HA config is mounted as `J:` (automations in `J:\automations.yaml`, NetDaemon apps in `J:\netdaemon6`). **Read-only by default:** writing, deploying or deleting anything there, and restarting HA or add-ons, only with the user's explicit permission for that action. The repo's `HA/` folder holds the PVControl automations (compare them with the live ones before changing them).
+The live HA config is mounted locally (path, add-on slug, deploy steps and other machine details: `CLAUDE.local.md`, not committed — identifying details like addresses never go into committed files). **Read-only by default:** writing, deploying or deleting anything there, and restarting HA or add-ons, only with the user's explicit permission for that action. The repo's `HA/` folder holds the PVControl automations (compare them with the live ones before changing them).
 
 ## Follow-ups (remind the user when due)
 
