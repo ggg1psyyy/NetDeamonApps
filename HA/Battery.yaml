@@ -1,8 +1,9 @@
 alias: PV Control - Battery Settings
 description: >-
-  Applies PVControl's battery charge settings: charging off = 0 A; charging on = the import cap's
-  limit (sensor.pv_control_battery_charge_current_limit, 30 A when PVControl doesn't publish it).
-  In force_charge_grid_only (Solax remote control) the push power follows the same limit.
+  Battery charging on/off (binary_sensor.pv_control_battery_charging_enabled): 30 A / 0 A charge
+  current. This register is stored in EEPROM, so it only changes with that switch; the charge power
+  of a grid charge (incl. the 15-min import cap) comes with sensor.pv_control_inverter_command
+  (RAM, script.pv_control_apply_mode).
 triggers:
   - trigger: state
     entity_id:
@@ -14,33 +15,14 @@ triggers:
       - binary_sensor.pv_control_battery_charging_enabled
     to: "on"
     id: BATT_ENABLE
-  - trigger: state
-    entity_id:
-      - sensor.pv_control_battery_charge_current_limit
-    not_to:
-      - unknown
-      - unavailable
-    id: LIMIT
-  - trigger: state
-    entity_id:
-      - sensor.pv_control_mode
-    to:
-      - force_charge_grid_only
-    for:
-      hours: 0
-      minutes: 0
-      seconds: 10
-    id: GRID_ONLY_CHARGE
 conditions: []
 variables:
-  charge_current: >-
-    {{ 0 if is_state('binary_sensor.pv_control_battery_charging_enabled', 'off')
-       else states('sensor.pv_control_battery_charge_current_limit') | float(30) }}
+  charge_current: "{{ 30 if trigger.id == 'BATT_ENABLE' else 0 }}"
 actions:
   - if:
       - condition: template
         value_template: >-
-          {{ (states('number.solax_battery_charge_max_current') | float(-1) - charge_current | float) | abs >= 0.1 }}
+          {{ (states('number.solax_battery_charge_max_current') | float(-1) - charge_current) | abs >= 0.1 }}
     then:
       - action: number.set_value
         metadata: {}
@@ -48,18 +30,4 @@ actions:
           value: "{{ charge_current }}"
         target:
           entity_id: number.solax_battery_charge_max_current
-  # Remote control (negative import price): the push power is the charge power, so the limit
-  # applies there as well (A × battery voltage, as charge = negative push power).
-  - if:
-      - condition: state
-        entity_id: sensor.pv_control_mode
-        state: force_charge_grid_only
-    then:
-      - action: number.set_value
-        metadata: {}
-        data:
-          value: >-
-            {{ -([charge_current | float * states('sensor.solax_battery_voltage_charge') | float(245), 10000] | min) | round(0) }}
-        target:
-          entity_id: number.solax_remotecontrol_push_mode_power_8_9_direct
 mode: queued

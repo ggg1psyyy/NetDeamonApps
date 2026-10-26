@@ -99,6 +99,7 @@ The house load forecast is the hour-of-day average of the last days (recent days
 | Weather forecast (load model) | none yet or older than 3 h | — |
 | Load forecast (`Mode: Model`) | fell back to the average | — |
 | Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works |
+| Inverter sync | inverter not in the commanded mode for 2 min | HA reconciler stopped retrying |
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on a level change, when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
 
@@ -106,7 +107,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 
 The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
 
-1. **Battery grid charging is throttled first:** `sensor.pv_control_battery_charge_current_limit` (A) is what the battery may charge so the quarter's mean stays under the cap — only while it charges from the grid (`force_charge`, `force_charge_grid_only`; otherwise the maximum), in whole amps, lowered when needed, raised only by 2 A or back to the maximum (each change is an EEPROM write on the inverter). The automation [`HA/Battery.yaml`](HA/Battery.yaml) applies it to `number.solax_battery_charge_max_current` while charging is enabled (30 A if the sensor is missing), and in `force_charge_grid_only` (Solax remote control) also as the push power (limit × battery voltage).
+1. **Battery grid charging is throttled first:** the battery power of a grid charge in `sensor.pv_control_inverter_command` is what the battery may charge so the quarter's mean stays under the cap, in whole amps × battery voltage (lowered when needed, raised only by 2 A or back to the maximum).
 2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
 3. **Then warm-water heatings wait** until there is room for the heat pump.
 
@@ -116,7 +117,7 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 
 | Entity | Content |
 |---|---|
-| `sensor.pv_control_battery_charge_current_limit` | Charge current limit (A); attributes `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
+| `sensor.pv_control_inverter_command` | What the inverter should do: state = mode; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `seq` (version, grows with every change), `issued`, `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
 | `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
 
@@ -126,7 +127,28 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 | `ImportCapReactionSeconds` | How long a requested change takes to show at the meter, s |
 | `TotalImportEnergyEntities` | Grid import counters (kWh) in priority order (also the cost log's import) |
 | `BatteryVoltageEntity` | Battery voltage while charging: W per A of the charge current (230 V without it) |
-| `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A (not the Solax number entity, which carries the cap's limit) |
+| `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A |
+| `InverterSyncEntity` | HA's feedback whether the inverter runs the command (`binary_sensor.pv_control_inverter_in_sync`) |
+
+#### Inverter control (HA side)
+
+PVControl only publishes `sensor.pv_control_inverter_command`; all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 all modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power; the base work mode stays Self Use.
+
+| File | Content |
+|---|---|
+| [`HA/InverterHelpers.yaml`](HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
+| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`: mode → mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
+| [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the run time after 600 s; only while PV Control runs (else the inverter returns to Self Use by itself) |
+| [`HA/Mode.yaml`](HA/Mode.yaml) | Base work mode (Self Use, Feedin Priority for `feedin_priority`, the `reset` sequence) and notifications |
+| [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: 30 A / 0 A |
+
+| PVControl mode | Inverter (mode 8) |
+|---|---|
+| `normal`, `feedin_priority`, `reset` | VPP off (base work mode) |
+| `force_charge` | PV unlimited, battery charges at `battery_power_w` |
+| `force_charge_grid_only` | PV 0 W, battery charges at `battery_power_w` |
+| `grid_only` | PV unlimited, battery 0 W (held) |
+| `force_discharge` | battery discharges at `battery_power_w` |
 
 #### Price entities
 
@@ -374,6 +396,7 @@ dotnet test NetDeamonApps.Tests/
 | `ChargeAbovePriceLimitTests` | Above the force-charge price limit a grid charge only protects the floor, never the forecast margin alone |
 | `EvDirectFromGridTests` | PriorityPlus: battery if no grid is needed, otherwise directly from the grid (battery held, or alongside a force_charge), round-trip loss in the cost |
 | `NeedChargeHysteresisTests` | A running grid charge never stops where starting one would begin it (no force_charge/normal flip-flop); no grid charge right before a PV peak that fills the battery anyway |
+| `InverterCommandTests` | Versioned inverter command: version only on change, continued after a restart, battery power per mode, sync health |
 | `ImportCapTests` | Import cap: counters in priority order with fallback, the running quarter, the month's peak, the guard (battery first, then extra loads, reaction time), health |
 | `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |

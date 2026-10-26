@@ -84,6 +84,24 @@ public static class HealthChecks
         $"{consecutiveFailures} cycle(s) failed: {lastError}");
   }
 
+  /// <summary>How long the inverter may differ from the command before it counts (applying takes a few seconds).</summary>
+  public static readonly TimeSpan InverterOutOfSyncAfter = TimeSpan.FromMinutes(2);
+
+  /// <summary>Inverter command applied by HA: out of sync longer than <see cref="InverterOutOfSyncAfter"/> = degraded, the reconciler gave up = error.</summary>
+  /// <param name="configured">A sync feedback entity is configured.</param>
+  /// <param name="outOfSyncSince">Since when HA reports out of sync; null = in sync (or unknown).</param>
+  /// <param name="blocked">The reconciler stopped retrying.</param>
+  /// <param name="now">Current time.</param>
+  /// <returns>The issues.</returns>
+  public static IEnumerable<HealthIssue> InverterSync(bool configured, DateTime? outOfSyncSince, bool blocked, DateTime now)
+  {
+    if (!configured) yield break;
+    if (blocked)
+      yield return new HealthIssue("inverter_sync", HealthLevel.error, "Inverter doesn't follow the command — HA reconciler stopped retrying");
+    else if (outOfSyncSince is { } since && now - since >= InverterOutOfSyncAfter)
+      yield return new HealthIssue("inverter_sync", HealthLevel.degraded, $"Inverter not in the commanded mode since {since:HH:mm}");
+  }
+
   /// <summary>How long a quarter over the import cap stays reported.</summary>
   public static readonly TimeSpan OverCapReportedFor = TimeSpan.FromHours(1);
 

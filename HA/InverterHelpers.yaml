@@ -1,0 +1,48 @@
+# PV Control – inverter command helpers (HA package: put into config/packages/ and enable
+#   homeassistant:
+#     packages: !include_dir_named packages
+# in configuration.yaml, or copy the sections into their files).
+#
+# The reconciler (InverterSync.yaml) compares three states:
+#   desired  – sensor.pv_control_inverter_command (mode, attribute battery_power_w, attribute seq)
+#   applied  – the seq script.pv_control_apply_mode last wrote (input_number.pv_control_applied_seq)
+#   actual   – what the inverter reports (sensor.solax_modbus_power_control)
+
+input_number:
+  pv_control_applied_seq:
+    name: PV Control applied command seq
+    min: 0
+    max: 1000000000
+    step: 1
+    mode: box
+  pv_control_reapply_count:
+    name: PV Control re-applies of the same command
+    min: 0
+    max: 1000
+    step: 1
+    mode: box
+
+input_datetime:
+  pv_control_applied_at:
+    name: PV Control command applied at
+    has_date: true
+    has_time: true
+
+input_boolean:
+  pv_control_inverter_sync_blocked:
+    name: PV Control inverter sync blocked (too many re-applies)
+
+template:
+  - binary_sensor:
+      - name: PV Control inverter in sync
+        unique_id: pv_control_inverter_in_sync
+        # In sync: the applied version is the published one and the inverter runs the matching VPP state.
+        state: >-
+          {% set mode = states('sensor.pv_control_inverter_command') %}
+          {% set seq = state_attr('sensor.pv_control_inverter_command', 'seq') | int(-1) %}
+          {% set vpp = mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] %}
+          {% set actual = states('sensor.solax_modbus_power_control') %}
+          {{ seq == states('input_number.pv_control_applied_seq') | int(-2)
+             and ((vpp and actual == 'Individual Setting - Duration Mode') or (not vpp and actual == 'Disabled')) }}
+        attributes:
+          blocked: "{{ is_state('input_boolean.pv_control_inverter_sync_blocked', 'on') }}"

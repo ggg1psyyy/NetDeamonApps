@@ -656,6 +656,24 @@ It now only applies while the battery charges from the grid and moves in whole a
 The clean solution is the inverter's own peak shaving: remote control (`remotecontrol_*`, RAM, no
 wear, needs autorepeat) with `remotecontrol_import_limit` caps the import itself.
 
+**The inverter runs PVControl's modes in RAM** (`InverterCommand`, `HA/ApplyMode.yaml`, `HA/InverterSync.yaml`).
+Every mode change used to rewrite the SolaX base work mode and manual mode (Manual Mode + Force
+Charge / Stop / Discharge), and the import cap rewrote the charge current — all EEPROM registers
+(~100,000 writes). The first night (2026-10-26) had ~20 mode changes, some only 15 s long, plus
+~40 charge-current changes. SolaX's VPP protocol (official "SolaX_VPP function Definition of ESS",
+registers 0xA0–0xA7 from ARM V1.45 on the X3-Hybrid G4; here ARM 1.47) is RAM-only. All modes now
+use one VPP mode — 8, "Individual Setting – Duration Mode": PV limit + battery power for a run
+time — not mode 9 (target SoC) as `force_charge_grid_only` did before: with the inverter ending a
+charge itself at a SoC, "it left the mode" would be ambiguous (target reached, or a fallback; and
+a target PVControl raised meanwhile). So PVControl alone decides when a mode ends; the run time
+(1200 s, refreshed after 600 s while PVControl runs, NextMotion back to the base mode) only makes
+the inverter fall back to Self Use by itself if HA or PVControl stop. The command carries a version
+(`seq`); the script stores the version it applied, so the reconciler can tell a new command from a
+fallback (re-applied at most 5 times per version, then blocked, notified, health error). The
+writes go through the integration's `*_direct` entities, not its autorepeat loops (solax-modbus
+2026.10.1 broke those, issue #2394). PVControl stays manufacturer-independent: it publishes the
+command and reads the in-sync feedback; the register writes live in HA.
+
 **Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
 1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
 highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the
