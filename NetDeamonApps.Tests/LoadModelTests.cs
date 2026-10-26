@@ -169,7 +169,10 @@ public class LoadModelTests : TestBase
   [Fact]
   public void WeatherLoadPrediction_WithWeather_ModelColderNightMoreLoad()
   {
-    var now = DateTime.Now;
+    // A fixed time of day: tomorrow 02–04 h uses the 24-h mean before it, and the forecast below
+    // starts at now − 2 h — run late in the evening, most of that day came from the history and
+    // the cold/warm gap shrank under the threshold (failed at 21:00 on 2026-10-26).
+    var now = DateTime.Today.AddHours(8);
     string db = TempDb(60, now);
     try
     {
