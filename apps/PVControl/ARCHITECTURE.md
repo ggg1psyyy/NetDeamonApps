@@ -77,9 +77,16 @@ of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
   the low (max 4 %), in the start/stop condition and the charge target alike — a night charge
   ~7 h before the low aims ~4 % higher; a low an hour away gets none.
 - **Charge vs hold** (`ChargingBeatsHolding`): the cheapest quarter is only charged in if it's
-  cheaper than the hours to bridge (latest charge time → PV takeover), round trip (efficiency²)
-  included — or under `ForceChargeMaxPrice`. Otherwise the floor is held with `grid_only`,
-  which buys only the load.
+  cheaper than the hours to bridge (latest charge time → PV takeover after it, `PvTakeoverAfter`:
+  PV above house load + extra loads), round trip (efficiency²) included — or under
+  `ForceChargeMaxPrice`. Otherwise the floor is held with `grid_only`, which buys only the load.
+  The span used to end at the first PV takeover after *now*: at midday that's the PV running now,
+  so a low tonight fell back to one hour after it. Live 2026-10-26 13:30 (44 %, low ~01:30): 0.3649
+  today lost against that one cheap night hour (~0.377), while the same plan at 00:30 compared
+  with the hours to tomorrow's PV incl. the morning peak (~0.415) and charged at 0.3727 — the
+  battery carried the night and the morning either way, so the cheaper midday quarter is right.
+  The same fix holds the floor instead of charging at the same price when only later hours are
+  cheap (an afternoon EV drain: grid_only at 0.30 until a 0.05 hour, not a 0.30 charge + loss).
 
 **Mode order** (`ComputeMode`): negative import price → opportunistic discharge → user force
 charge → NeedToCharge → normal. A negative export price is not a step but a modifier

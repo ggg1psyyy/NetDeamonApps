@@ -760,7 +760,7 @@ public class FindWindowConditionTests : TestBase
   /// After the fix, HasNewGrid checks all slots and correctly blocks the EV session.
   /// </summary>
   [Fact]
-  public void Priority_HighDrainEV_HasNewGrid_CatchesDaytimeForceCharge()
+  public void Priority_HighDrainEV_HasNewGrid_CatchesDaytimeGridImport()
   {
     var start = new DateTime(2026, 3, 22, 15, 0, 0);
     const int HighEvW = 3_700;  // W → 925 Wh/slot; net = 600 - 112 - 925 = -437 Wh/slot during PV
@@ -818,19 +818,17 @@ public class FindWindowConditionTests : TestBase
     var baseFCS = new HashSet<DateTime>(
       baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
-    // The EV causes new force_charge — confirm at least one fires BEFORE sunset.
-    var newForceSlots = evSim.Slots
-      .Where(s => s.State.Mode == InverterModes.force_charge && !baseFCS.Contains(s.Time))
-      .ToList();
-    Assert.NotEmpty(newForceSlots);
+    // The EV causes new grid import BEFORE sunset. Since 2026-10-26 that's the floor held with
+    // grid_only from ~17:00 (house + EV at 0.30 directly) and the charge in the 0.05 hour: a force
+    // charge at 0.30 in the afternoon cost the same plus the round-trip loss (charging vs holding
+    // compares with the hours until PV after the low, not just one hour).
+    var baseGrid = baseSim.Slots.ToDictionary(s => s.Time, s => s.GridImportWh);
+    var newGridSlots = evSim.Slots.Where(s => s.GridImportWh > baseGrid.GetValueOrDefault(s.Time)).ToList();
+    Assert.Contains(newGridSlots, s => s.Time < LastPVToday);
+    Assert.Contains(evSim.Slots, s => s.Time < LastPVToday && s.State.Mode == InverterModes.grid_only);
+    Assert.False(NoNewGrid(evSim, baseFCS), "The EV's deficit is charged later (cheap hour): a new force_charge.");
 
-    bool daytimeForceCharge = newForceSlots.Any(s => s.Time < LastPVToday);
-    Assert.True(daytimeForceCharge,
-      $"Expected new force_charge before sunset ({LastPVToday:HH:mm}); " +
-      $"earliest new slot = {newForceSlots.Min(s => s.Time):HH:mm}.");
-
-    // HasNewGrid (all-slots check) must detect the daytime force_charge and block the EV.
-    Assert.False(NoNewGrid(evSim, baseFCS),
-      "HasNewGrid (all slots) must detect the new force_charge caused by the EV.");
+    // HasNewGrid (all slots) must detect the daytime import and block the EV.
+    Assert.True(evSim.HasNewGridVs(baseSim), "HasNewGrid (all slots) must detect the new grid import caused by the EV.");
   }
 }

@@ -191,13 +191,12 @@ public static class EnergySimulator
   /// <param name="window">Price entries the charge may use.</param>
   /// <param name="upcoming">All upcoming price entries.</param>
   /// <param name="need">Charge need (latest charge time).</param>
-  /// <param name="pvTakeover">When PV takes over the house.</param>
+  /// <param name="bridgeEnd">When PV takes over after the low (<see cref="PvTakeoverAfter"/>): holding the floor bridges the hours until then.</param>
   /// <param name="input">Simulation input (efficiency).</param>
   /// <returns>True if charging is cheaper, or nothing to compare.</returns>
   private static bool ChargingBeatsHolding(List<PriceTableEntry> window, List<PriceTableEntry> upcoming,
-    NeedToChargeResult need, DateTime pvTakeover, SimulationInput input)
+    NeedToChargeResult need, DateTime bridgeEnd, SimulationInput input)
   {
-    var bridgeEnd = need.LatestChargeTime <= pvTakeover ? pvTakeover : need.LatestChargeTime.AddHours(1);
     var bridged = upcoming.Where(p => p.StartTime >= need.LatestChargeTime && p.StartTime < bridgeEnd).ToList();
     if (window.Count == 0 || bridged.Count == 0)
       return true;
@@ -205,6 +204,16 @@ public static class EnergySimulator
     float roundTrip = input.RoundTripEfficiency;
     return window.Min(p => p.Price) < holdPrice - Math.Abs(holdPrice) * (1 - roundTrip);
   }
+
+  /// <summary>First slot after a time in which PV covers the load incl. extra loads (solar takes over from the battery/grid).</summary>
+  /// <param name="after">Search after this time.</param>
+  /// <param name="slots">Slots to search (the look-ahead's keys).</param>
+  /// <param name="input">Simulation input (the slot energies the simulation uses).</param>
+  /// <returns>The slot; <paramref name="after"/> + 24 h if none.</returns>
+  private static DateTime PvTakeoverAfter(DateTime after, IEnumerable<DateTime> slots, SimulationInput input) =>
+    slots.Where(t => t > after && input.SlotEnergyWh(t) is var (pv, load, extra) && pv > load + extra)
+      .DefaultIfEmpty(after.AddHours(24))
+      .First();
 
   // ── Base future SoC ─────────────────────────────────────────────────────────────────────
   /// <summary>SoC look-ahead without inverter decisions: PV − load − extra loads per slot (the worst case for the charge need).</summary>
@@ -505,11 +514,7 @@ public static class EnergySimulator
       // extends to tomorrow early morning — it won't reach tomorrow afternoon (where PV would
       // handle it for free), so GetBestChargeWindow is the right bound.
       int floorSoc = input.GetEffectiveMinSoC();
-      var pvTakeover = baseFutureSoC.Keys
-        .Where(t => t > now
-                    && input.PVPredictionWh.GetValueOrDefault(t, 0) > input.LoadPredictionWh.GetValueOrDefault(t, 0))
-        .DefaultIfEmpty(now.AddHours(24))
-        .First();
+      var pvTakeover = PvTakeoverAfter(now, baseFutureSoC.Keys, input);
 
       // Counting entries as quarters requires quarter-hourly entries; live prices already are
       // (PriceManager normalizes them), but SimulationInput also accepts hourly lists.
@@ -545,7 +550,12 @@ public static class EnergySimulator
             if (window[i].Price <= input.ForceChargeMaxPrice) cheaperUnderMax++;
           }
 
-        inWindow = cheaperCount == 0 && ChargingBeatsHolding(window, upcoming, need, pvTakeover, input);
+        // Holding the floor bridges the low until PV takes over after it — not today's PV that is
+        // already running at midday (live 2026-10-26 13:30: that left one cheap night hour to compare
+        // with, so 0.3649 now lost and the night charged at 0.3727; at 00:30 the span reached
+        // tomorrow's PV and the morning peak).
+        inWindow = cheaperCount == 0
+          && ChargingBeatsHolding(window, upcoming, need, PvTakeoverAfter(need.LatestChargeTime, baseFutureSoC.Keys, input), input);
         if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
