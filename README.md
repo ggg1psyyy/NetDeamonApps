@@ -165,6 +165,8 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 
 Price sources (`CurrentImportPriceEntities`, ha_epex_spot sensors) are all equal: PVControl uses the one whose price data reaches furthest, so whichever publishes tomorrow first wins (on a tie the earlier one in the list). `ImportPriceResolution` applies to every source — with `Hourly`, a 15-min source gives the same hourly prices as an hourly one. A configured source without any data shows up as `price_source` in the health sensor.
 
+The sources are the integration's **market price** sensors (raw EPEX price; its surcharge and tax stay 0 — PVControl adds markup, network fee and tax itself). The integration polls its sources on its own schedule; [`HA/PriceFetch.yaml`](HA/PriceFetch.yaml) calls `epex_spot.fetch_data` every 5 min from 12:45 until one source reaches the end of tomorrow, so the prices arrive minutes after the auction results instead of in the afternoon.
+
 The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive in the afternoon. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 
 #### Cost tracking entities

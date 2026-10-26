@@ -1,0 +1,23 @@
+alias: PV Control - Fetch tomorrow's prices
+description: >-
+  The day-ahead auction results are out ~12:45; the epex_spot integration polls its sources on its
+  own schedule and often only shows tomorrow ~14:00. From 12:45 this asks all sources every 5 min
+  (epex_spot.fetch_data) until one of PV Control's price entities reaches the end of tomorrow.
+triggers:
+  - trigger: time_pattern
+    minutes: /5
+conditions:
+  - condition: time
+    after: "12:45:00"
+    before: "16:00:00"
+  - condition: template
+    value_template: >-
+      {% set ents = ['sensor.epex_spot_data_market_price', 'sensor.epex_spot_data_market_price_2',
+                     'sensor.epex_spot_data_market_price_3', 'sensor.epex_spot_data_market_price_4'] %}
+      {%- set ns = namespace(until='') %}
+      {%- for e in ents %}{% set d = state_attr(e, 'data') %}{% if d %}{% set last = d[-1].end_time | string %}{% if last > ns.until %}{% set ns.until = last %}{% endif %}{% endif %}{% endfor %}
+      {{ ns.until == '' or as_datetime(ns.until) < today_at() + timedelta(days=2) }}
+actions:
+  - action: epex_spot.fetch_data
+    data: {}
+mode: single

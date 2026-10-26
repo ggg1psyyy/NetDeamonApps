@@ -577,6 +577,14 @@ hh:00 for an hourly source, also :15/:30/:45 for a 15-min one. The action `epex_
 fetches and refreshes at once (2026-10-22 13:59 was such a manual call). So an hourly source
 always shows tomorrow on a full hour.
 
+`HA/PriceFetch.yaml` therefore calls `epex_spot.fetch_data` every 5 min from 12:45 until a source
+reaches the end of tomorrow. 2026-10-26: Energy-Charts showed tomorrow at 13:15 by itself, Awattar
+only after a manual `fetch_data` at 13:24 (smartENERGY and ENTSO-E not yet then), while
+`sensor.pv_control_price_publication` had read ~14:00 on the four days before. Until then the
+13:00–14:00 quarters were decided on estimates — 2026-10-26 a charge flipped between 13:00 (0.3649,
+published) and an estimated night (0.3665) for an hour; with the real prices the night was
+0.373–0.386.
+
 Price source choice: the sources used to be a priority list (first with data wins). On
 2026-10-22 at 14:11 Awattar (hourly) and Energy-Charts (15 min, not configured then) had
 tomorrow, smartENERGY didn't — a source that has tomorrow should win, whichever it is and
