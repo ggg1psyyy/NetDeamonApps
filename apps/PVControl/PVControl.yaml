@@ -1,7 +1,8 @@
 NetDeamon.apps.PVControl.PVConfig:
   # config entries marked with '***' are required
 
-  # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 
+  # Market Price entities of the epex_spot integration (the raw EPEX price, list in the `data` attribute;
+  # markup, network fee and tax are added below — the integration's surcharge/tax stay 0)
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
   # Several sources (they fail sometimes, and publish tomorrow at different times): all are equal,
   # the one whose data reaches furthest is used — whichever publishes tomorrow first wins; on a tie
@@ -10,6 +11,7 @@ NetDeamon.apps.PVControl.PVConfig:
     - sensor.epex_spot_data_market_price     # Awattar, 60 min
     - sensor.epex_spot_data_market_price_2   # smartENERGY, 15 min
     - sensor.epex_spot_data_market_price_4   # Energy-Charts, 15 min
+    - sensor.epex_spot_data_market_price_3   # ENTSO-E Transparency, 15 min
   ImportPriceMultiplier: 1.0
   ImportPriceAddition: 0.012
   ImportPriceNetwork: 0.07992
