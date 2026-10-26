@@ -32,7 +32,8 @@ sequence:
       base: "{{ 'Manual Mode' if manual else ('Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode') }}"
       # SolaX push power: positive discharges, negative charges. Passed as PVControl commands it
       # (≤ 30 A × voltage, less while the import cap throttles): the inverter limits VPP itself.
-      push_w: "{{ -(power_w | int(0)) }}"
+      # The number takes 100-W steps: rounded towards 0, never above the command.
+      push_w: "{{ -((power_w | int(0) / 100) | int * 100) }}"
       pv_limit_w: "{{ 0 if mode == 'force_charge_grid_only' else 30000 }}"
       # Run time of one command: the reconciler refreshes it while PV Control runs; if HA or PV Control
       # stops, the inverter returns to its base work mode by itself within this time.
