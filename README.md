@@ -138,7 +138,7 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | File | Content |
 |---|---|
 | [`HA/InverterHelpers.yaml`](HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
-| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power ≤ 5 kW, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
+| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
 | [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
 | [`HA/Mode.yaml`](HA/Mode.yaml) | Notifications and the extras of `reset` |
 | [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: 30 A / 0 A |
@@ -148,10 +148,10 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | `normal`, `reset` | Self Use, VPP off |
 | `feedin_priority` | Feedin Priority, VPP off |
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
-| `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (≤ 5 kW) |
-| `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (≤ 5 kW) |
+| `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it to ~5 kW) |
+| `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (the inverter limits it to ~5 kW) |
 | `grid_only` | Self Use + mode 8: PV unlimited, battery 0 W (held) |
-| `force_discharge` | Self Use + mode 8: battery discharges at `battery_power_w` (≤ 5 kW) |
+| `force_discharge` | Self Use + mode 8: battery discharges at `battery_power_w` |
 
 #### Price entities
 
