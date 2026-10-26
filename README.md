@@ -117,7 +117,7 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 
 | Entity | Content |
 |---|---|
-| `sensor.pv_control_inverter_command` | What the inverter should do: state = mode; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `seq` (version, grows with every change), `issued`, `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
+| `sensor.pv_control_inverter_command` | What the inverter should do: state = mode; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `bulk` (grid charge at full power, see below), `charge_energy_wh` (energy of the running charge in the plan), `seq` (version, grows with every change), `issued`, `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
 | `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
 
@@ -129,26 +129,29 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 | `BatteryVoltageEntity` | Battery voltage while charging: W per A of the charge current (230 V without it) |
 | `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A |
 | `InverterSyncEntity` | HA's feedback whether the inverter runs the command (`binary_sensor.pv_control_inverter_in_sync`) |
+| `BulkChargeMinPercent` | A `force_charge` whose planned energy (from its start, contiguous) is at least this share of the battery is `bulk`; 0 = never |
 
 #### Inverter control (HA side)
 
-PVControl only publishes `sensor.pv_control_inverter_command`; all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 all modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power; the base work mode stays Self Use.
+PVControl only publishes `sensor.pv_control_inverter_command`; all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 the modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power. VPP charges the battery with at most ~5 kW on this inverter, so a `bulk` grid charge runs as Manual Mode + Force Charge (30 A) instead: two EEPROM writes per charge session, not per change. `bulk` is decided when the charge starts and kept for the session; it is off while the import cap throttles the charge (Manual has no power setting), and `force_charge_grid_only` is never bulk.
 
 | File | Content |
 |---|---|
 | [`HA/InverterHelpers.yaml`](HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
-| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`: mode → mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
-| [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the run time after 600 s; only while PV Control runs (else the inverter returns to Self Use by itself) |
-| [`HA/Mode.yaml`](HA/Mode.yaml) | Base work mode (Self Use, Feedin Priority for `feedin_priority`, the `reset` sequence) and notifications |
+| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power ≤ 5 kW, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
+| [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
+| [`HA/Mode.yaml`](HA/Mode.yaml) | Notifications and the extras of `reset` |
 | [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: 30 A / 0 A |
 
-| PVControl mode | Inverter (mode 8) |
+| PVControl mode | Inverter |
 |---|---|
-| `normal`, `feedin_priority`, `reset` | VPP off (base work mode) |
-| `force_charge` | PV unlimited, battery charges at `battery_power_w` |
-| `force_charge_grid_only` | PV 0 W, battery charges at `battery_power_w` |
-| `grid_only` | PV unlimited, battery 0 W (held) |
-| `force_discharge` | battery discharges at `battery_power_w` |
+| `normal`, `reset` | Self Use, VPP off |
+| `feedin_priority` | Feedin Priority, VPP off |
+| `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
+| `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (≤ 5 kW) |
+| `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (≤ 5 kW) |
+| `grid_only` | Self Use + mode 8: PV unlimited, battery 0 W (held) |
+| `force_discharge` | Self Use + mode 8: battery discharges at `battery_power_w` (≤ 5 kW) |
 
 #### Price entities
 
@@ -310,6 +313,10 @@ One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per loc
 | `heatenergyheating`, `heatenergywarmwater` | `HeatEnergyHeatingEntity`, `HeatEnergyWarmwaterEntity` | heat output (Wh) per mode, counter increase |
 | `heatpumpelecheating`, `heatpumpelecwarmwater` | `ElecEnergyHeatingEntity`, `ElecEnergyWarmwaterEntity` | heat pump electricity (Wh) under the same conditions — COP per mode = heat / electricity |
 | `maxquarterimport` | `ImportTotalEntities` (first with readings) | highest 15-min mean grid import of the hour/day, kW |
+| `pvcontrolmode`, `pvmodechanges` | `PVControlModeEntity` | PVControl mode held longest; number of mode changes |
+| `feedinminutes`, `forcechargeminutes` | `PVControlModeEntity` | minutes in `feedin_priority`; in `force_charge` / `force_charge_grid_only` |
+| `chargedisabledminutes` | `BatteryChargingEnabledEntity` | minutes with battery charging off |
+| `invertereepromwrites` | `InverterEepromEntities` | state changes of the inverter's EEPROM settings (work mode, manual mode, charge current, export limit) = writes |
 
 ---
 
@@ -399,7 +406,7 @@ dotnet test NetDeamonApps.Tests/
 | `InverterCommandTests` | Versioned inverter command: version only on change, continued after a restart, battery power per mode, sync health |
 | `ImportCapTests` | Import cap: counters in priority order with fallback, the running quarter, the month's peak, the guard (battery first, then extra loads, reaction time), health |
 | `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
-| `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, time-weighted means, prevailing heat pump mode, migration |
+| `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, state changes, time-weighted means, prevailing heat pump mode, migrations (v6, v7, v9) |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |
 | `CalculationsTests` | The shared basic calculations: time ranges, W/Wh, SoC/Wh, means and hour-of-day profile, least squares, step functions, day log |

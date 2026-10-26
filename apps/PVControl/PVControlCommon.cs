@@ -249,6 +249,8 @@ namespace NetDeamon.apps.PVControl
     /// <summary>How long a requested change takes to show at the meter, s (automation delays, ramps);
     /// the import cap guard assumes the current power continues that long.</summary>
     public int ImportCapReactionSeconds { get; set; } = 90;
+    /// <summary>A grid charge counts as bulk (<see cref="InverterCommand.Bulk"/>) from this share of the battery, %; 0 = never.</summary>
+    public int BulkChargeMinPercent { get; set; } = 50;
     /// <summary>HA's feedback whether the inverter runs the published inverter command (on = in sync; attribute
     /// <c>blocked</c> = the reconciler gave up); null = not checked.</summary>
     public Entity? InverterSyncEntity { get; set; }

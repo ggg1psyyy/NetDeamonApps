@@ -674,6 +674,29 @@ writes go through the integration's `*_direct` entities, not its autorepeat loop
 2026.10.1 broke those, issue #2394). PVControl stays manufacturer-independent: it publishes the
 command and reads the in-sync feedback; the register writes live in HA.
 
+**Bulk grid charges still use Manual Force Charge** (`InverterCommand.BulkFor`, `BulkChargeMinPercent`).
+Measured 2026-10-26: VPP charges the battery exactly as commanded up to 4 kW, but caps at
+5.07–5.11 kW (20.8–21 A) above it — mode 8 and mode 4 alike (mode 4: ~4.95 kW) — while Manual
+Force Charge right after gave 30 A (7.4–7.6 kW). Every negative-price charge since spring (mode 9)
+also stopped at ~5.1 kW, the Manual charges of the same period reached 7.46–7.48 kW. So it's the
+firmware's VPP limit, not the integration. A night charge of half the battery at 5 kW takes 50 %
+longer and reaches into dearer quarters, so a charge planned at ≥ 50 % of the battery (the
+contiguous `force_charge` slots from its start) takes the Manual path: two EEPROM writes per session
+(work mode + manual mode), not one per mode or current change. The choice is made at the start
+and kept for the session, so a shrinking remainder doesn't switch paths mid-charge; it drops to
+VPP while the import cap throttles (Manual has no power setting, only the EEPROM current).
+`force_charge_grid_only` stays VPP: it only happens at negative prices with lots of PV, where
+~5 kW from the grid with PV off beats 7.5 kW with PV running. Manual Mode has no run time, so the
+reconciler switches it back to Self Use itself after 5 min without PVControl.
+
+`feedin_priority` and "battery charging off" stay EEPROM work-mode / charge-current writes: both
+mean "cover the load from the battery, never charge it", which a fixed VPP power can't follow and
+no SolaX VPP mode offers (6 charges and discharges, 7 only charges). HA keeps state history for
+~10 days only, and no log held the mode, so how often they run over a year was unknown; in
+2026-10-17…26 neither ran once, while the work mode was written 249 times (117 force charges, up
+to 71 writes on a seesaw day). DataLogger v9 logs the mode, its minutes and the EEPROM writes per
+hour/day, so that question has an answer next year.
+
 **Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
 1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
 highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the

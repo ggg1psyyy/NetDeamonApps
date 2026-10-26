@@ -567,6 +567,7 @@ namespace NetDeamon.apps.PVControl
     private double? _chargeLimitA;
     private InverterCommand? _inverterCommand;
     private int _restoredCommandSeq;
+    private bool _sessionBulk;
     private DateTime _inverterCommandPublished;
     private DateTime? _inverterOutOfSyncSince;
     private DateTime _importSensorsPublished;
@@ -588,6 +589,7 @@ namespace NetDeamon.apps.PVControl
     /// <param name="now">Current time.</param>
     private async Task PublishInverterCommandAsync(InverterModes mode, DateTime now)
     {
+      var previousMode = _publishedMode;
       _publishedMode = mode;
       if (_inverterCommandEntity is null) return;
       double maxA = PVCC_Config.MaxBatteryChargePower;
@@ -596,7 +598,10 @@ namespace NetDeamon.apps.PVControl
       if (limitA != _chargeLimitA && gridCharging)
         PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F0} A ({Reason})", _chargeLimitA?.ToString("F0") ?? "-", limitA, _importCap.Reason);
       _chargeLimitA = limitA;
-      var command = InverterCommand.Next(_inverterCommand, mode, InverterCommand.PowerFor(mode, limitA, maxA, PVCC_Config.BatteryVoltageV), _restoredCommandSeq);
+      int plannedChargeWh = InverterCommand.PlannedChargeWh(_house.SimulationTimeline, now);
+      (bool bulk, _sessionBulk) = InverterCommand.BulkFor(mode, previousMode, _sessionBulk, plannedChargeWh,
+        _house.Battery.BatteryCapacity, PVCC_Config.BulkChargeMinPercent, throttled: limitA < maxA);
+      var command = InverterCommand.Next(_inverterCommand, mode, InverterCommand.PowerFor(mode, limitA, maxA, PVCC_Config.BatteryVoltageV), bulk, _restoredCommandSeq);
       if (command == _inverterCommand && now - _inverterCommandPublished < TimeSpan.FromMinutes(1))
         return;
       _inverterCommand = command;
@@ -605,6 +610,8 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_inverterCommandEntity.EntityId, new
       {
         battery_power_w = command.BatteryPowerW,
+        bulk = command.Bulk,
+        charge_energy_wh = plannedChargeWh,
         seq = command.Seq,
         issued = now.ToISO8601(),
         reason = _importCap.Reason,

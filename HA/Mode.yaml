@@ -1,9 +1,8 @@
 alias: PV Control - Mode Settings
 description: >-
-  Base work mode and notifications for sensor.pv_control_mode. The modes themselves (force charge,
-  hold, discharge, negative-price charge) run in RAM through script.pv_control_apply_mode, applied
-  and kept by "PV Control - Inverter Sync"; the base work mode (EEPROM) stays Self Use and only
-  changes for feedin_priority and reset.
+  Notifications for sensor.pv_control_mode and the extras of `reset`. The inverter itself (work mode,
+  manual mode, VPP) is set only by script.pv_control_apply_mode, applied and kept by
+  "PV Control - Inverter Sync".
 triggers:
   - trigger: state
     entity_id:
@@ -16,13 +15,10 @@ triggers:
       minutes: 0
       seconds: 5
 conditions: []
-variables:
-  mode: "{{ trigger.to_state.state }}"
-  base_mode: "{{ 'Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode' }}"
 actions:
   - if:
       - condition: template
-        value_template: "{{ mode == 'reset' }}"
+        value_template: "{{ trigger.to_state.state == 'reset' }}"
     then:
       - action: number.set_value
         metadata: {}
@@ -30,29 +26,11 @@ actions:
           value: '8000'
         target:
           entity_id: number.solax_export_control_user_limit
-      - action: select.select_option
-        metadata: {}
-        data:
-          option: Self Use Mode
-        target:
-          entity_id: select.solax_charger_use_mode
       - action: button.press
         metadata: {}
         data: {}
         target:
           entity_id: button.solax_system_on
-    else:
-      # EEPROM: only written when it really changes.
-      - if:
-          - condition: template
-            value_template: "{{ states('select.solax_charger_use_mode') != base_mode }}"
-        then:
-          - action: select.select_option
-            metadata: {}
-            data:
-              option: "{{ base_mode }}"
-            target:
-              entity_id: select.solax_charger_use_mode
   - action: ntfy.publish
     metadata: {}
     data:

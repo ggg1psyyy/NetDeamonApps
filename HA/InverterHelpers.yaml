@@ -1,12 +1,10 @@
-# PV Control – inverter command helpers (HA package: put into config/packages/ and enable
-#   homeassistant:
-#     packages: !include_dir_named packages
-# in configuration.yaml, or copy the sections into their files).
+# PV Control – inverter command helpers (HA package: config/packages/pv_control_inverter.yaml).
 #
 # The reconciler (InverterSync.yaml) compares three states:
-#   desired  – sensor.pv_control_inverter_command (mode, attribute battery_power_w, attribute seq)
+#   desired  – sensor.pv_control_inverter_command (mode; attributes battery_power_w, bulk, seq)
 #   applied  – the seq script.pv_control_apply_mode last wrote (input_number.pv_control_applied_seq)
-#   actual   – what the inverter reports (sensor.solax_modbus_power_control)
+#   actual   – what the inverter reports: VPP state, base work mode, manual mode
+# The expected inverter state per command is defined only here (binary_sensor.pv_control_inverter_in_sync).
 
 input_number:
   pv_control_applied_seq:
@@ -36,13 +34,23 @@ template:
   - binary_sensor:
       - name: PV Control inverter in sync
         unique_id: pv_control_inverter_in_sync
-        # In sync: the applied version is the published one and the inverter runs the matching VPP state.
+        # In sync: the applied version is the published one and the inverter is in the state that
+        # command maps to (the same mapping as script.pv_control_apply_mode):
+        #   bulk force_charge          → Manual Mode + Force Charge, VPP off (full 30 A)
+        #   other charges/hold/discharge → base Self Use + VPP mode 8
+        #   normal/feedin/reset        → VPP off, base Self Use (Feedin Priority for feedin_priority)
         state: >-
           {% set mode = states('sensor.pv_control_inverter_command') %}
           {% set seq = state_attr('sensor.pv_control_inverter_command', 'seq') | int(-1) %}
-          {% set vpp = mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] %}
-          {% set actual = states('sensor.solax_modbus_power_control') %}
-          {{ seq == states('input_number.pv_control_applied_seq') | int(-2)
-             and ((vpp and actual == 'Individual Setting - Duration Mode') or (not vpp and actual == 'Disabled')) }}
+          {% set bulk = state_attr('sensor.pv_control_inverter_command', 'bulk') == true %}
+          {% set manual = mode == 'force_charge' and bulk %}
+          {% set vpp = not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] %}
+          {% set base = 'Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode' %}
+          {% set vpp_state = states('sensor.solax_modbus_power_control') %}
+          {% set use_mode = states('select.solax_charger_use_mode') %}
+          {% set actual_ok = (manual and use_mode == 'Manual Mode' and is_state('select.solax_manual_mode_select', 'Force Charge') and vpp_state == 'Disabled')
+                          or (vpp and use_mode != 'Manual Mode' and vpp_state == 'Individual Setting - Duration Mode')
+                          or (not manual and not vpp and use_mode == base and vpp_state == 'Disabled') %}
+          {{ seq == states('input_number.pv_control_applied_seq') | int(-2) and actual_ok }}
         attributes:
           blocked: "{{ is_state('input_boolean.pv_control_inverter_sync_blocked', 'on') }}"
