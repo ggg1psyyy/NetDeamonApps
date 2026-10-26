@@ -1,4 +1,4 @@
-# PV Control - Inverter Sync: keeps the inverter in sensor.pv_control_inverter_command.
+# PV Control - Inverter Sync: keeps the inverter in sensor.pv_control_mode.
 #   desired  – the command (mode, battery_power_w, bulk, seq); PV Control is the only decider
 #   applied  – input_number.pv_control_applied_seq (script.pv_control_apply_mode)
 #   actual   – binary_sensor.pv_control_inverter_in_sync (the one definition of the expected state)
@@ -14,7 +14,7 @@ mode: queued
 max: 3
 triggers:
   - trigger: state
-    entity_id: sensor.pv_control_inverter_command
+    entity_id: sensor.pv_control_mode
     attribute: seq
     for:
       seconds: 5
@@ -36,12 +36,12 @@ variables:
     {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
     {{ (now() - as_datetime(lc)).total_seconds() | int if lc is not none else 999999 }}
   command_ok: >-
-    {{ cycle_age_s < 120 and states('sensor.pv_control_inverter_command') not in ['unknown', 'unavailable'] }}
+    {{ cycle_age_s < 120 and states('sensor.pv_control_mode') not in ['unknown', 'unavailable'] }}
   stale_manual: "{{ cycle_age_s > 300 and is_state('select.solax_charger_use_mode', 'Manual Mode') }}"
-  mode: "{{ states('sensor.pv_control_inverter_command') }}"
-  seq: "{{ state_attr('sensor.pv_control_inverter_command', 'seq') | int(0) }}"
-  power_w: "{{ state_attr('sensor.pv_control_inverter_command', 'battery_power_w') | int(0) }}"
-  bulk: "{{ state_attr('sensor.pv_control_inverter_command', 'bulk') == true }}"
+  mode: "{{ states('sensor.pv_control_mode') }}"
+  seq: "{{ state_attr('sensor.pv_control_mode', 'seq') | int(0) }}"
+  power_w: "{{ state_attr('sensor.pv_control_mode', 'battery_power_w') | int(0) }}"
+  bulk: "{{ state_attr('sensor.pv_control_mode', 'bulk') == true }}"
   applied_seq: "{{ states('input_number.pv_control_applied_seq') | int(-1) }}"
   vpp: "{{ not (mode == 'force_charge' and bulk) and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
   applied_age_s: >-

@@ -2,7 +2,7 @@ alias: PV Control - Battery Settings
 description: >-
   Battery charging on/off (binary_sensor.pv_control_battery_charging_enabled): 30 A / 0 A charge
   current. This register is stored in EEPROM, so it only changes with that switch; the charge power
-  of a grid charge (incl. the 15-min import cap) comes with sensor.pv_control_inverter_command
+  of a grid charge (incl. the 15-min import cap) comes with sensor.pv_control_mode
   (RAM, script.pv_control_apply_mode).
 triggers:
   - trigger: state

@@ -66,12 +66,14 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
   /// <param name="capacityWh">Battery capacity, Wh.</param>
   /// <param name="minPercent">Share of the battery from which a charge counts as bulk, %; 0 = never.</param>
   /// <param name="throttled">The import cap limits the charge below the maximum.</param>
+  /// <param name="forced">The user forces force_charge (mode override): always bulk, the plan doesn't know about it.</param>
   /// <returns>(bulk now, session decision to keep).</returns>
   public static (bool Bulk, bool SessionBulk) BulkFor(InverterModes mode, InverterModes previousMode, bool sessionBulk,
-    int plannedChargeWh, int capacityWh, int minPercent, bool throttled)
+    int plannedChargeWh, int capacityWh, int minPercent, bool throttled, bool forced = false)
   {
     if (mode != InverterModes.force_charge || minPercent <= 0) return (false, false);
-    bool session = previousMode == InverterModes.force_charge ? sessionBulk : plannedChargeWh >= capacityWh * minPercent / 100;
+    bool session = forced
+      || (previousMode == InverterModes.force_charge ? sessionBulk : plannedChargeWh >= capacityWh * minPercent / 100);
     return (session && !throttled, session);
   }
 }

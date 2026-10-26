@@ -6,7 +6,7 @@ using Xunit;
 namespace NetDeamonApps.Tests;
 
 /// <summary>
-/// The versioned inverter command (sensor.pv_control_inverter_command) HA applies in RAM (SolaX VPP
+/// The versioned inverter command (attributes of sensor.pv_control_mode) HA applies in RAM (SolaX VPP
 /// mode 8 via the *_direct entities) instead of EEPROM work-mode and charge-current writes; the
 /// reconciler compares its <c>seq</c> with the one it applied. Publishing and the HA side aren't unit tested.
 /// </summary>
@@ -82,6 +82,17 @@ public class InverterCommandTests
     Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 6000, 11_520, 50, false).Bulk);
     Assert.False(InverterCommand.BulkFor(InverterModes.force_charge_grid_only, InverterModes.normal, false, 9000, 11_520, 50, false).Bulk);
     Assert.False(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 9000, 11_520, 0, false).Bulk);
+  }
+
+  [Fact]
+  public void BulkFor_UserForcedCharge_AlwaysBulkUnlessThrottled()
+  {
+    // The plan ignores the override: no planned charge, yet the user wants full power now.
+    Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 0, 11_520, 50, false, forced: true).Bulk);
+    // A small planned session the user then forces: bulk from now on.
+    Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.force_charge, false, 1000, 11_520, 50, false, forced: true).Bulk);
+    var (bulk, session) = InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 0, 11_520, 50, true, forced: true);
+    Assert.Equal((false, true), (bulk, session));
   }
 
   [Fact]

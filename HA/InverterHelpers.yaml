@@ -1,7 +1,7 @@
 # PV Control – inverter command helpers (HA package: config/packages/pv_control_inverter.yaml).
 #
 # The reconciler (InverterSync.yaml) compares three states:
-#   desired  – sensor.pv_control_inverter_command (mode; attributes battery_power_w, bulk, seq)
+#   desired  – sensor.pv_control_mode (mode; attributes battery_power_w, bulk, seq)
 #   applied  – the seq script.pv_control_apply_mode last wrote (input_number.pv_control_applied_seq)
 #   actual   – what the inverter reports: VPP state, base work mode, manual mode
 # The expected inverter state per command is defined only here (binary_sensor.pv_control_inverter_in_sync).
@@ -40,9 +40,9 @@ template:
         #   other charges/hold/discharge → base Self Use + VPP mode 8
         #   normal/feedin/reset        → VPP off, base Self Use (Feedin Priority for feedin_priority)
         state: >-
-          {% set mode = states('sensor.pv_control_inverter_command') %}
-          {% set seq = state_attr('sensor.pv_control_inverter_command', 'seq') | int(-1) %}
-          {% set bulk = state_attr('sensor.pv_control_inverter_command', 'bulk') == true %}
+          {% set mode = states('sensor.pv_control_mode') %}
+          {% set seq = state_attr('sensor.pv_control_mode', 'seq') | int(-1) %}
+          {% set bulk = state_attr('sensor.pv_control_mode', 'bulk') == true %}
           {% set manual = mode == 'force_charge' and bulk %}
           {% set vpp = not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] %}
           {% set base = 'Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode' %}

@@ -11,7 +11,7 @@
 #  - Everything else: base work mode Self Use (Feedin Priority for feedin_priority) and VPP mode 8 or off.
 # Another inverter = another version of this script; PV Control and the reconciler stay the same.
 alias: PV Control - Apply Mode
-description: Applies sensor.pv_control_inverter_command to the inverter (bulk charge = Manual Force Charge, else SolaX VPP mode 8 in RAM) and records the applied seq.
+description: Applies sensor.pv_control_mode to the inverter (bulk charge = Manual Force Charge, else SolaX VPP mode 8 in RAM) and records the applied seq.
 mode: queued
 max: 5
 fields:

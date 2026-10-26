@@ -672,7 +672,9 @@ the inverter fall back to Self Use by itself if HA or PVControl stop. The comman
 fallback (re-applied at most 5 times per version, then blocked, notified, health error). The
 writes go through the integration's `*_direct` entities, not its autorepeat loops (solax-modbus
 2026.10.1 broke those, issue #2394). PVControl stays manufacturer-independent: it publishes the
-command and reads the in-sync feedback; the register writes live in HA.
+command and reads the in-sync feedback; the register writes live in HA. The command is the
+attributes of `sensor.pv_control_mode`, not a sensor of its own: the mode is the command, a second
+sensor only duplicated it (the first draft had one, 2026-10-26).
 
 **Bulk grid charges still use Manual Force Charge** (`InverterCommand.BulkFor`, `BulkChargeMinPercent`).
 Measured 2026-10-26: VPP charges the battery exactly as commanded up to 4 kW, but caps at

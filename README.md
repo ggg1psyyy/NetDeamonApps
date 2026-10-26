@@ -107,7 +107,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 
 The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
 
-1. **Battery grid charging is throttled first:** the battery power of a grid charge in `sensor.pv_control_inverter_command` is what the battery may charge so the quarter's mean stays under the cap, in whole amps × battery voltage (lowered when needed, raised only by 2 A or back to the maximum).
+1. **Battery grid charging is throttled first:** the battery power of a grid charge in `sensor.pv_control_mode` (`battery_power_w`) is what the battery may charge so the quarter's mean stays under the cap, in whole amps × battery voltage (lowered when needed, raised only by 2 A or back to the maximum).
 2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
 3. **Then warm-water heatings wait** until there is room for the heat pump.
 
@@ -117,7 +117,7 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 
 | Entity | Content |
 |---|---|
-| `sensor.pv_control_inverter_command` | What the inverter should do: state = mode; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `bulk` (grid charge at full power, see below), `charge_energy_wh` (energy of the running charge in the plan), `seq` (version, grows with every change), `issued`, `reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
+| `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `bulk` (grid charge at full power, see below), `charge_energy_wh` (energy of the running charge in the plan), `seq` (version, grows with every change), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
 | `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
 
@@ -133,7 +133,7 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 
 #### Inverter control (HA side)
 
-PVControl only publishes `sensor.pv_control_inverter_command`; all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 the modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power. VPP charges the battery with at most ~5 kW on this inverter, so a `bulk` grid charge runs as Manual Mode + Force Charge (30 A) instead: two EEPROM writes per charge session, not per change. `bulk` is decided when the charge starts and kept for the session; it is off while the import cap throttles the charge (Manual has no power setting), and `force_charge_grid_only` is never bulk.
+PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = how to run it); all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 the modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power. VPP charges the battery with at most ~5 kW on this inverter, so a `bulk` grid charge runs as Manual Mode + Force Charge (30 A) instead: two EEPROM writes per charge session, not per change. `bulk` is decided when the charge starts and kept for the session (a `force_charge` set with `select.pv_control_mode_override` is always bulk); it is off while the import cap throttles the charge (Manual has no power setting), and `force_charge_grid_only` is never bulk.
 
 | File | Content |
 |---|---|
