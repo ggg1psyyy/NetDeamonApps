@@ -45,6 +45,40 @@ public class DataLoggerOperationTests
     Assert.Equal("Nur Warmwasser", DataLogger.PrevailingState(changes, From, To));
   }
 
+  [Fact]
+  public void StateChanges_OnlyRealChangesInsideThePeriod()
+  {
+    // State at the start (before), Manual→Self Use, a dropout and back (no change), Self Use→Manual, one after the period.
+    (DateTime, string)[] changes = [(From.AddMinutes(-20), "Manual Mode"), (From.AddMinutes(5), "Self Use Mode"),
+      (From.AddMinutes(10), "unavailable"), (From.AddMinutes(11), "Self Use Mode"), (From.AddMinutes(50), "Manual Mode"),
+      (To.AddMinutes(1), "Self Use Mode")];
+    Assert.Equal(2, DataLogger.StateChanges(changes, From, To));
+  }
+
+  [Fact]
+  public void StateChanges_StateAtThePeriodStart_NoChange()
+  {
+    // HA's history starts with the state held at the period start, stamped with the start time.
+    Assert.Equal(0, DataLogger.StateChanges([(From, "30.0"), (From.AddMinutes(30), "30.0")], From, To));
+    Assert.Equal(1, DataLogger.StateChanges([(From, "30.0"), (From.AddMinutes(30), "0.0")], From, To));
+  }
+
+  [Fact]
+  public void MigrationV9_AddsTheControlColumns()
+  {
+    using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+    con.Open();
+    var c = con.CreateCommand();
+    c.CommandText = "CREATE TABLE hourly (timestamp TEXT, maxquarterimport REAL)";
+    c.ExecuteNonQuery();
+    c.CommandText = DataLogger.AddColumnsSql("hourly", DataLogger.ControlColumns, Columns(c, "hourly").ToHashSet());
+    c.ExecuteNonQuery();
+    var all = Columns(c, "hourly");
+    Assert.Contains("pvcontrolmode", all);
+    Assert.Contains("invertereepromwrites", all);
+    Assert.Equal(8, all.Length);
+  }
+
   static string[] Columns(Microsoft.Data.Sqlite.SqliteCommand c, string table)
   {
     c.CommandText = $"SELECT group_concat(name) FROM pragma_table_info('{table}')";

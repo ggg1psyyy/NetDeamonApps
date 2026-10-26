@@ -56,6 +56,15 @@ PVControl.DataLoggerConfig:
   ImportTotalEntities:
     - sensor.esp_wmbus_0x290340_stromzahler_bezug   # utility meter via wM-Bus (billing meter)
     - sensor.solax_grid_import_total                # inverter
+  # PVControl's mode and the inverter's EEPROM writes (v9): every state change of these settings
+  # is a write to the inverter's non-volatile memory.
+  PVControlModeEntity: sensor.pv_control_mode
+  BatteryChargingEnabledEntity: binary_sensor.pv_control_battery_charging_enabled
+  InverterEepromEntities:
+    - select.solax_charger_use_mode
+    - select.solax_manual_mode_select
+    - number.solax_battery_charge_max_current
+    - number.solax_export_control_user_limit
   HeatEnergyHeatingEntity: sensor.wp_heat_energy_heating
   HeatEnergyWarmwaterEntity: sensor.wp_heat_energy_warmwater
   ElecEnergyHeatingEntity: sensor.wp_cop_elec_energy_heating

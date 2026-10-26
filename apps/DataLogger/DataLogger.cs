@@ -101,6 +101,12 @@ namespace PVControl
     public Entity? HeatEnergyWarmwaterEntity { get; set; }
     public Entity? ElecEnergyHeatingEntity { get; set; }
     public Entity? ElecEnergyWarmwaterEntity { get; set; }
+    // PVControl's mode and the inverter's EEPROM writes (schema v9): how often each mode runs,
+    // and how many writes the inverter's non-volatile registers get.
+    public Entity? PVControlModeEntity { get; set; }
+    public Entity? BatteryChargingEnabledEntity { get; set; }
+    /// <summary>Inverter settings stored in EEPROM: every state change is one write.</summary>
+    public List<Entity> InverterEepromEntities { get; set; } = [];
   }
 
   [NetDaemonApp]
@@ -336,6 +342,24 @@ namespace PVControl
     public static double MinutesInState(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to, Func<string, bool> match) =>
       StepFunction.Pieces(changes, from, to).Where(p => match(p.Value)).Sum(p => p.Held.TotalMinutes);
 
+    /// <summary>Changes of state within a period (unknown/unavailable skipped: a dropout and back is no change).</summary>
+    /// <param name="changes">(time, state) in time order; the first one may be the state at the period start.</param>
+    /// <param name="from">Period start (a change exactly then belongs to the period before).</param>
+    /// <param name="to">Period end.</param>
+    /// <returns>Count.</returns>
+    public static int StateChanges(IReadOnlyList<(DateTime Time, string State)> changes, DateTime from, DateTime to)
+    {
+      int count = 0;
+      string? previous = null;
+      foreach (var (time, state) in changes)
+      {
+        if (state is "unknown" or "unavailable" or "") continue;
+        if (previous is not null && state != previous && time > from && time <= to) count++;
+        previous = state;
+      }
+      return count;
+    }
+
     /// <summary>The state held longest in a period (unknown/unavailable ignored).</summary>
     /// <param name="changes">(time, state) in time order.</param>
     /// <param name="from">Period start.</param>
@@ -403,8 +427,10 @@ namespace PVControl
         AddFloatTask(averageTasks, _config.ElecEnergyWarmwaterEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         var operation = GetOperationValuesAsync(historyStart, historyEnd);
         var maxQuarter = GetMaxQuarterImportAsync(historyStart, historyEnd);
+        var control = GetControlValuesAsync(historyStart, historyEnd);
         await Task.WhenAll(averageTasks);
         var op = await operation;
+        var ctl = await control;
         float? tempOutside = GetFloatTaskResult(averageTasks, _config.TemperatureOutsideEntity);
         float? tempInside = GetFloatTaskResult(averageTasks, _config.TemperatureInsideEntity);
         float? atmopressure = GetFloatTaskResult(averageTasks, _config.AtmoPressureEntity);
@@ -446,6 +472,8 @@ namespace PVControl
           ("windspeed", op.WindSpeed), ("athomeminutes", op.AtHomeMinutes), ("roomsheating", op.RoomsHeating), ("roomsetpoint", op.RoomSetpoint),
           ("heatenergyheating", heatHeating), ("heatenergywarmwater", heatWarmwater), ("heatpumpelecheating", elecHeating), ("heatpumpelecwarmwater", elecWarmwater),
           ("maxquarterimport", await maxQuarter),
+          ("pvcontrolmode", ctl.Mode), ("pvmodechanges", ctl.ModeChanges), ("feedinminutes", ctl.FeedinMinutes),
+          ("forcechargeminutes", ctl.ForceChargeMinutes), ("chargedisabledminutes", ctl.ChargeDisabledMinutes), ("invertereepromwrites", ctl.EepromWrites),
         ];
         var insertCommand = con.CreateCommand();
         insertCommand.CommandText = $"INSERT OR IGNORE INTO {(daily ? "daily" : "hourly")} ({string.Join(", ", values.Select(v => v.Column))}) " +
@@ -514,24 +542,7 @@ namespace PVControl
     /// <returns>The values; null where the entity isn't configured or has no history.</returns>
     private async Task<OperationValues> GetOperationValuesAsync(DateTime from, DateTime to)
     {
-      async Task<List<SensorData>?> History(Entity? entity, bool attributes = false)
-      {
-        if (entity is null) return null;
-        try
-        {
-          var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, getAttributes: attributes, endDateTime: to);
-          return history.Item1 ? history.Item2 : null;
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
-          return null;
-        }
-      }
-      // LastChanged arrives as local time; compared with the UTC period only as UTC (DateTime
-      // comparisons ignore Kind).
-      static DateTime Utc(SensorData s) => s.LastChanged.ToUniversalTime();
-      static List<(DateTime, string)> States(List<SensorData> h) => h.Select(s => (Utc(s), s.State ?? "")).ToList();
+      Task<List<SensorData>?> History(Entity? entity, bool attributes = false) => GetStateHistoryAsync(entity, from, to, attributes);
       static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (Utc(s),
         double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList();
       static string? Attribute(SensorData s, string name) =>
@@ -570,6 +581,58 @@ namespace PVControl
         Minutes(heating.Result, "on"), Minutes(compressor.Result, "on"), Minutes(eco.Result, "on"), Average(target.Result),
         Average(flow.Result), Average(ret.Result), Average(wind.Result), Minutes(presence.Result, "home"),
         roomsHeating, roomSetpoint);
+    }
+
+    /// <summary>An entity's state history over a period.</summary>
+    /// <param name="entity">Entity; null = none.</param>
+    /// <param name="from">Period start (UTC).</param>
+    /// <param name="to">Period end (UTC).</param>
+    /// <param name="attributes">With attributes.</param>
+    /// <returns>The history; null if not configured or failed.</returns>
+    private async Task<List<SensorData>?> GetStateHistoryAsync(Entity? entity, DateTime from, DateTime to, bool attributes = false)
+    {
+      if (entity is null) return null;
+      try
+      {
+        var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, getAttributes: attributes, endDateTime: to);
+        return history.Item1 ? history.Item2 : null;
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
+        return null;
+      }
+    }
+
+    // LastChanged arrives as local time; compared with the UTC period only as UTC (DateTime
+    // comparisons ignore Kind).
+    private static DateTime Utc(SensorData s) => s.LastChanged.ToUniversalTime();
+    private static List<(DateTime, string)> States(List<SensorData> h) => h.Select(s => (Utc(s), s.State ?? "")).ToList();
+
+    /// <summary>PVControl's mode and the inverter's EEPROM writes over a period (schema v9 columns).</summary>
+    private sealed record ControlValues(string? Mode, int? ModeChanges, double? FeedinMinutes, double? ForceChargeMinutes,
+      double? ChargeDisabledMinutes, int? EepromWrites);
+
+    /// <summary>PVControl's mode and the inverter's EEPROM writes over a period (v9 columns) from the HA history.</summary>
+    /// <param name="from">Period start (UTC).</param>
+    /// <param name="to">Period end (UTC).</param>
+    /// <returns>The values; null where the entity isn't configured or has no history.</returns>
+    private async Task<ControlValues> GetControlValuesAsync(DateTime from, DateTime to)
+    {
+      var mode = GetStateHistoryAsync(_config.PVControlModeEntity, from, to);
+      var charging = GetStateHistoryAsync(_config.BatteryChargingEnabledEntity, from, to);
+      var eeprom = _config.InverterEepromEntities.Select(e => GetStateHistoryAsync(e, from, to)).ToList();
+      await Task.WhenAll(new[] { mode, charging }.Concat(eeprom));
+
+      var modes = mode.Result is { } m ? States(m) : null;
+      var eepromHistories = eeprom.Select(e => e.Result).Where(h => h is not null).ToList();
+      return new ControlValues(
+        modes is null ? null : PrevailingState(modes, from, to),
+        modes is null ? null : StateChanges(modes, from, to),
+        modes is null ? null : MinutesInState(modes, from, to, s => s == "feedin_priority"),
+        modes is null ? null : MinutesInState(modes, from, to, s => s is "force_charge" or "force_charge_grid_only"),
+        charging.Result is { } c ? MinutesInState(States(c), from, to, s => s == "off") : null,
+        eepromHistories.Count > 0 ? eepromHistories.Sum(h => StateChanges(States(h!), from, to)) : null);
     }
 
     // Configured entities are always queried, whatever their state right now: a sensor that's
@@ -716,6 +779,17 @@ namespace PVControl
         _logger.LogInformation("DataLogger DB migrated to v8: highest 15-min import added");
         await SqliteSchema.SetVersionAsync(con, 8);
       }
+      if (actualDBVersion < 9)
+      {
+        foreach (var table in new[] { "hourly", "daily" })
+        {
+          string sql = AddColumnsSql(table, ControlColumns, await SqliteSchema.ColumnsAsync(con, table));
+          if (sql.Length > 0)
+            await SqliteSchema.ExecuteAsync(con, sql);
+        }
+        _logger.LogInformation("DataLogger DB migrated to v9: PVControl mode and inverter EEPROM writes added");
+        await SqliteSchema.SetVersionAsync(con, 9);
+      }
       await con.CloseAsync();
     }
 
@@ -735,6 +809,14 @@ namespace PVControl
 
     /// <summary>v8: highest 15-min grid import of the hour/day, kW (the network power price counts the month's highest).</summary>
     public static readonly string[] ImportPeakColumns = ["maxquarterimport REAL"];
+
+    /// <summary>v9: PVControl's prevailing mode, its mode changes, minutes in feed-in priority / grid
+    /// charging / with battery charging off, and writes to the inverter's EEPROM settings.</summary>
+    public static readonly string[] ControlColumns =
+    [
+      "pvcontrolmode TEXT", "pvmodechanges INTEGER", "feedinminutes REAL", "forcechargeminutes REAL",
+      "chargedisabledminutes REAL", "invertereepromwrites INTEGER",
+    ];
 
     /// <summary>ALTER TABLE statements for the columns a table doesn't have yet (a migration step may run again after an interruption).</summary>
     /// <param name="table">Table name.</param>
