@@ -100,6 +100,16 @@ namespace NetDeamon.apps.PVControl
       PVCC_Scheduler = null!;
       PVCC_ApiManager = null!;
     }
+    /// <summary>What registering an entity does: publish its discovery config, and set the default state.</summary>
+    /// <param name="exists">The entity exists in HA.</param>
+    /// <param name="reRegister">Remove and create again.</param>
+    /// <param name="republish">Publish the config although it exists.</param>
+    /// <param name="hasOptions">The config has an option list (select/enum): published on every start, so HA's
+    /// list follows the code (a retired option left in it is selectable but unknown to PVControl).</param>
+    /// <returns>(publish the config, set the default state — only for a new entity, a republish keeps the state).</returns>
+    public static (bool Publish, bool SetDefault) Registration(bool exists, bool reRegister, bool republish, bool hasOptions) =>
+      (!exists || reRegister || republish || hasOptions, !exists || reRegister);
+
     /// <summary>Creates a PVControl entity via MQTT discovery (device "PV Control") unless it exists.</summary>
     /// <param name="id">Entity id, e.g. "sensor.pv_control_version".</param>
     /// <param name="name">Display name.</param>
@@ -115,7 +125,9 @@ namespace NetDeamon.apps.PVControl
       var identifiers = new[] { "pv_control" };
       var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = AppVersion.Current };
       Entity entity = new(PVCC_HaContext, id);
-      if (entity?.State == null || reRegister || republish)
+      bool hasOptions = addConfig?.GetType().GetProperty("options") is not null;
+      var (publish, setDefault) = Registration(entity?.State != null, reRegister, republish, hasOptions);
+      if (publish)
       {
         if (reRegister && entity?.State != null)
         {
@@ -140,7 +152,7 @@ namespace NetDeamon.apps.PVControl
         dynamicConfig
         ).ConfigureAwait(false);
         entity = new Entity(PVCC_HaContext, id);
-        if (!string.IsNullOrEmpty(defaultValue))
+        if (setDefault && !string.IsNullOrEmpty(defaultValue))
           await PVCC_EntityManager.SetStateAsync(entity.EntityId, defaultValue);
       }
       return entity;
