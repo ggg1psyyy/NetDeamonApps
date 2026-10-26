@@ -213,14 +213,22 @@ public class ImportCapTests
     Assert.Equal(9800 - (2324 - 1922 - 260) - 1930, d.HeadroomW);
   }
 
+  // Every change is an EEPROM write on the inverter: live 2026-10-26 05:37–06:06 ~40 changes in
+  // 0.1-A steps, in normal mode where the limit has no effect at all.
   [Theory]
-  [InlineData(null, 12.3, 12.3)]  // first value
-  [InlineData(20.0, 12.3, 12.3)]  // lower at once
-  [InlineData(12.3, 12.8, 12.3)]  // small raise skipped
-  [InlineData(12.3, 13.4, 13.4)]  // a step worth a write
-  [InlineData(29.5, 30.0, 30.0)]  // back to the maximum
-  public void Guard_NextLimit(double? previous, double decided, double expected) =>
-    Assert.Equal(expected, ImportCapGuard.NextLimit(previous, decided, 30));
+  [InlineData(null, 12.3, true, 12.0)]   // first value, whole amps
+  [InlineData(20.0, 12.3, true, 12.0)]   // lower at once
+  [InlineData(29.0, 29.4, true, 29.0)]   // same whole amp: kept, no write
+  [InlineData(29.0, 28.6, true, 28.0)]   // any need below the published amp lowers it (the cap wins)
+  [InlineData(29.0, 27.9, true, 27.0)]   // a whole amp lower
+  [InlineData(12.0, 13.4, true, 12.0)]   // small raise skipped
+  [InlineData(12.0, 14.2, true, 14.0)]   // a step worth a write
+  [InlineData(28.0, 29.9, true, 28.0)]   // near the maximum: no write for 1 A
+  [InlineData(27.0, 30.0, true, 30.0)]   // back to the maximum
+  [InlineData(27.0, 22.0, false, 30.0)]  // not grid charging: maximum, whatever the guard decided
+  [InlineData(30.0, 27.4, false, 30.0)]  // and nothing to write
+  public void Guard_NextLimit(double? previous, double decided, bool gridCharging, double expected) =>
+    Assert.Equal(expected, ImportCapGuard.NextLimit(previous, decided, 30, gridCharging));
 
   // ── Health ───────────────────────────────────────────────────────────────────────────
 

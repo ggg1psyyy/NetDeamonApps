@@ -568,6 +568,8 @@ namespace NetDeamon.apps.PVControl
     private DateTime _importSensorsPublished;
     private ImportCap.QuarterResult? _lastOverCap;
     private double?[]? _costImportSince;
+    /// <summary>Inverter mode published last cycle (the charge limit only applies while the battery charges from the grid).</summary>
+    private InverterModes _publishedMode = InverterModes.normal;
 
     /// <summary>The import counters in priority order (kWh); null where one has no usable reading.</summary>
     private static List<double?> ReadImportCounters() => PVCC_Config.TotalImportEnergyEntities
@@ -629,7 +631,8 @@ namespace NetDeamon.apps.PVControl
             VoltageV: PVCC_Config.BatteryVoltageV,
             ReactionSeconds: PVCC_Config.ImportCapReactionSeconds));
 
-      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitPublished, _importCap.ChargeLimitA, maxA);
+      bool gridCharging = _publishedMode is InverterModes.force_charge or InverterModes.force_charge_grid_only;
+      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitPublished, _importCap.ChargeLimitA, maxA, gridCharging);
       if (_chargeLimitEntity is null || (limitA == _chargeLimitPublished && now - _importSensorsPublished < TimeSpan.FromMinutes(1)))
         return;
       if (limitA != _chargeLimitPublished)
@@ -772,6 +775,7 @@ namespace NetDeamon.apps.PVControl
         _socUnavailableLogged = true;
       }
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, InverterModes.normal.ToString());
+      _publishedMode = InverterModes.normal;
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, new
       {
         next_charge_window_start = "none",
@@ -817,6 +821,7 @@ namespace NetDeamon.apps.PVControl
       var inverterState = _house.ProposedState;
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
+      _publishedMode = inverterState.Mode;
       // Derive the current or next planned grid-charge window from the simulation timeline. The
       // running slot counts (it ends after now): with "Time >= now" a charge in progress showed
       // window "none", price 0 and need_to_charge off, flickering with the slot after it.

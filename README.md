@@ -106,7 +106,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 
 The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
 
-1. **Battery grid charging is throttled first:** `sensor.pv_control_battery_charge_current_limit` (A) is what the battery may charge so the quarter's mean stays under the cap. The automation [`HA/Battery.yaml`](HA/Battery.yaml) applies it to `number.solax_battery_charge_max_current` while charging is enabled (30 A if the sensor is missing), and in `force_charge_grid_only` (Solax remote control) also as the push power (limit × battery voltage).
+1. **Battery grid charging is throttled first:** `sensor.pv_control_battery_charge_current_limit` (A) is what the battery may charge so the quarter's mean stays under the cap — only while it charges from the grid (`force_charge`, `force_charge_grid_only`; otherwise the maximum), in whole amps, lowered when needed, raised only by 2 A or back to the maximum (each change is an EEPROM write on the inverter). The automation [`HA/Battery.yaml`](HA/Battery.yaml) applies it to `number.solax_battery_charge_max_current` while charging is enabled (30 A if the sensor is missing), and in `force_charge_grid_only` (Solax remote control) also as the push power (limit × battery voltage).
 2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
 3. **Then warm-water heatings wait** until there is room for the heat pump.
 

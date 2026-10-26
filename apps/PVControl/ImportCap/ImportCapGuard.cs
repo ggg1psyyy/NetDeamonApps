@@ -87,12 +87,24 @@ public static class ImportCapGuard
     return new GuardDecision(limitA, pause, headroom, (int)allowedW, Math.Round(projectedKw, 2), reason);
   }
 
-  /// <summary>The limit to publish: lower at once, higher only by a step worth a write (or to the maximum).</summary>
+  /// <summary>Smallest raise of the published limit, A (a lower limit follows in whole amps).</summary>
+  public const double RaiseStepA = 2;
+
+  /// <summary>
+  /// The limit to publish, in whole amps: each change is an EEPROM write on the inverter (the Solax
+  /// charge current register), so it moves only by a step worth it — lower by whole amps at once,
+  /// higher only by <see cref="RaiseStepA"/> or back to the maximum. No grid charging: the maximum
+  /// (the battery then only charges from PV surplus, which never imports).
+  /// </summary>
   /// <param name="previousA">Limit published last, A; null = none yet.</param>
   /// <param name="decidedA">Limit of this decision, A.</param>
   /// <param name="maxA">Hardware maximum, A.</param>
-  /// <param name="stepA">Smallest raise, A.</param>
+  /// <param name="gridCharging">The battery charges from the grid (force_charge, force_charge_grid_only).</param>
   /// <returns>The limit, A.</returns>
-  public static double NextLimit(double? previousA, double decidedA, double maxA, double stepA = 1.0) =>
-    previousA is not { } p || decidedA < p || decidedA >= maxA || decidedA - p >= stepA ? decidedA : p;
+  public static double NextLimit(double? previousA, double decidedA, double maxA, bool gridCharging)
+  {
+    double wanted = gridCharging && decidedA < maxA ? Math.Floor(decidedA) : maxA;
+    if (previousA is not { } p || wanted >= maxA || wanted <= p - 1 || wanted >= p + RaiseStepA) return wanted;
+    return p;
+  }
 }

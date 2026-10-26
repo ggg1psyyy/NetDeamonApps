@@ -648,6 +648,14 @@ the load runs along a force_charge the house needs in that quarter anyway; the l
 it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge
 (`SimulationInput.RoundTripEfficiency`, also used by `ChargingBeatsHolding`).
 
+**The charge limit changes as rarely as possible.** The Solax charge current register
+(`battery_charge_max_current`) is stored in EEPROM (~100,000 write cycles, per the solax-modbus
+integration's docs). On the first night (2026-10-26 05:37–06:06) the limit moved ~40 times in 0.1-A
+steps — in normal mode, where the battery only charges from PV surplus and the limit has no effect.
+It now only applies while the battery charges from the grid and moves in whole amps (raise ≥ 2 A).
+The clean solution is the inverter's own peak shaving: remote control (`remotecontrol_*`, RAM, no
+wear, needs autorepeat) with `remotecontrol_import_limit` caps the import itself.
+
 **Import cap** (`ImportCap/`, `SimulationInput.MaxGridImportW`). The SNE-G-V (BGBl. II 299/2026, from
 1.1.2027; Linz Netz starts between then and 30.6.2028) bills a monthly power price on the month's
 highest 15-min mean import (§3, §6): one ct/kW in Jan–Nov 2027, then separate rates for the
