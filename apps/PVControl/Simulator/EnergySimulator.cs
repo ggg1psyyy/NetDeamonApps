@@ -76,13 +76,11 @@ public static class EnergySimulator
       if (IsNeedCharge(newMode))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
           withMargin: input.ImportPrices.GetPrice(slotTime) <= input.ForceChargeMaxPrice);
-      // The charge path is chosen when a grid charge starts and kept while it runs. Full power only at
-      // the start of a price block or for a reaction now (the first slot); a charge the plan starts later
-      // within a block tops up on VPP (no Manual session for a top-up).
+      // The charge path is chosen when a grid charge starts and kept while it runs.
       if (newMode.Mode == InverterModes.force_charge)
         newMode.Bulk = previousMode.Mode == InverterModes.force_charge
           ? previousMode.Bulk
-          : (slotTime == startSlot || IsPriceBlockStart(input, slotTime)) && ChargesBulk(input, slotTime, currentSoc, chargeTargetSocPercent);
+          : ChargesBulk(input, slotTime, currentSoc, chargeTargetSocPercent);
       currentMode = newMode;
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, input.SlotFraction(slotTime));
 
@@ -123,12 +121,35 @@ public static class EnergySimulator
     return vppWh < neededWh;
   }
 
-  /// <summary>Whether a quarter starts a price block (its price differs from the quarter before).</summary>
-  /// <param name="input">Simulation input (import prices).</param>
-  /// <param name="slotTime">The quarter.</param>
-  public static bool IsPriceBlockStart(SimulationInput input, DateTime slotTime) =>
-    !input.ImportPrices.TryGetPrice(slotTime.AddMinutes(-SlotMinutes), out float before)
-    || !input.ImportPrices.TryGetPrice(slotTime, out float price) || Math.Abs(before - price) >= 1e-6f;
+  /// <summary>
+  /// Whether a grid charge should start now on VPP rather than later in this price block at full power:
+  /// the deficit by the block's end makes this block charge (the quarters-needed rule), the VPP path
+  /// still gets the energy in from now, but no longer from the next quarter. Applied quarter by quarter
+  /// this gives the latest start that stays on VPP; a later start that VPP still manages, or one that
+  /// needs full power anyway, is left alone. The deficit grows with every quarter of discharge, so the
+  /// quarters-needed rule could start a charge mid-hour with too few quarters left for VPP.
+  /// </summary>
+  /// <param name="input">Simulation input (prices, VPP curve).</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="soc">Simulated SoC now, %.</param>
+  /// <param name="targetSoc">Target SoC of the charge, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging (the discharge until the block's end).</param>
+  /// <param name="cheaperUnderMax">Cheaper quarters under the price limit (the quarters-needed rule).</param>
+  /// <param name="maxChargeWh">Charge per quarter at full power, Wh.</param>
+  /// <returns>True: start now (VPP).</returns>
+  public static bool VppNowBeatsBulkLater(SimulationInput input, DateTime now, int soc, int targetSoc,
+    Dictionary<DateTime, int> baseFutureSoC, int cheaperUnderMax, int maxChargeWh)
+  {
+    if (input.VppChargePowerW is null) return false;
+    var next = now.AddMinutes(SlotMinutes);
+    var blockEnd = SamePriceBlockEnd(input, now);
+    if (next >= blockEnd || !baseFutureSoC.TryGetValue(next, out int socNext)) return false;
+    // Does this block charge at all? The deficit at its end decides it as the rule would there.
+    int socAtEnd = baseFutureSoC.GetValueOrDefault(blockEnd, socNext);
+    int neededAtEndWh = input.SocToWh(Math.Max(0, targetSoc - Math.Min(soc, socAtEnd)));
+    if (cheaperUnderMax >= Math.Max(1, (neededAtEndWh + maxChargeWh - 1) / maxChargeWh)) return false;
+    return !ChargesBulk(input, now, soc, targetSoc) && ChargesBulk(input, next, socNext, targetSoc);
+  }
 
   /// <summary>End of the run of quarters from a slot on that cost the same (hourly prices: the end of the hour).</summary>
   /// <param name="input">Simulation input (import prices).</param>
@@ -614,15 +635,10 @@ public static class EnergySimulator
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
           int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
-          // Plus what the battery loses until the end of this price block: the decision at the block's
-          // start is then the one at its end, so a planned charge starts with the block (the same price)
-          // instead of mid-hour once the deficit crosses the next whole quarter — a late start left VPP
-          // too few quarters and needed the full-power path.
-          int blockDropPct = baseFutureSoC.TryGetValue(SamePriceBlockEnd(input, now), out int socAtBlockEnd)
-            ? Math.Max(0, baseFutureSoC.GetValueOrDefault(now, simulatedSoc) - socAtBlockEnd) : 0;
-          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc) + blockDropPct);
+          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
           int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
-          inWindow = cheaperUnderMax < quartersNeeded;
+          inWindow = cheaperUnderMax < quartersNeeded
+            || VppNowBeatsBulkLater(input, now, simulatedSoc, targetSoc, baseFutureSoC, cheaperUnderMax, maxChargeWh);
         }
       }
       // Above the price limit only for the floor itself, never for the forecast margin alone (live

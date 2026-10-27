@@ -721,13 +721,15 @@ counts PV in (VPP limits the battery power, not the grid's share). The command's
 nominal voltage: the measured one in 5-V steps made 2–3 new versions per charge (7050/7200/7350 W).
 A started charge runs at least a minute — RAM writes don't wear, but a stop 15 s after the start
 (live 01:31:15–01:31:30) is noise.
-Planned charges start with their price block: the N-cheapest-quarters rule counted the energy needed
-from the SoC of each quarter, so with every quarter of discharge N could cross the next whole number
-mid-hour — a sweep of 2,400 night plans found such starts at :15/:30/:45, where VPP has too few
-quarters left. The energy needed now includes what the battery loses until the block's end, so the
-decision at its start is the one at its end. Restarts within a block remain at high night loads (the
-charge reaches its interim target and resumes); those top up on VPP — full power only at a block's
-start or for a reaction now.
+An earlier VPP start beats a later bulk one (`VppNowBeatsBulkLater`): the N-cheapest-quarters rule
+counts the energy needed from the SoC of each quarter, so with every quarter of discharge N can cross
+the next whole number mid-hour — a sweep of 2,400 night plans found starts at :15/:30/:45 — and that
+late in the block VPP may have too few quarters left. A start later in the block is fine while VPP
+still manages it; when waiting one more quarter would need full power but starting now VPP gets the
+energy in, the charge starts now (applied quarter by quarter: the latest start that stays on VPP).
+Always starting with the block was the first version — it moved charges earlier that VPP managed
+later as well. A charge that needs full power anyway keeps its natural start (live-like case: 38 %
+at 00:00, target 100 % until PV — bulk from 00:00 or 00:15 alike).
 
 `feedin_priority` and "battery charging off" stay EEPROM work-mode / charge-current writes: both
 mean "cover the load from the battery, never charge it", which a fixed VPP power can't follow and

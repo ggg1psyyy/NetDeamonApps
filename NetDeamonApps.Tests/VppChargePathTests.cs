@@ -201,26 +201,32 @@ public class ChargeStartAlignmentTests
     r.Slots.Where((s, i) => s.State.Mode == InverterModes.force_charge && i > 0 && r.Slots[i - 1].State.Mode != InverterModes.force_charge);
 
   [Fact]
-  public void PlannedCharge_StartsWithThePriceBlock_NotWhenTheDeficitCrossesAQuarter()
+  public void WithoutVppCurve_TheNaturalStartStays()
   {
-    // ~690 W all night from 25 %: the quarters needed at full power crossed a whole number at 00:15,
-    // so the charge started mid-hour; counting the block's loss in, it starts at 00:00.
-    var start = Starts(EnergySimulator.Simulate(Input(172, 25))).First();
-    Assert.Equal(Night, start.Time);
+    // ~690 W all night from 25 %: the quarters-needed rule starts at 00:15 — later in the block is fine.
+    Assert.Equal(Night.AddMinutes(15), Starts(EnergySimulator.Simulate(Input(172, 25))).First().Time);
   }
 
-  [Fact]
-  public void PlannedChargeLaterInABlock_TopsUpOnVpp_NeverAtFullPower()
+  // 00:00–01:00 at one price, 38 % at 00:00 losing 2 % per quarter. VPP from 00:00 reaches up to
+  // ~68 %, from 00:15 up to ~60 % (EnergySimulator.ChargesBulk with the measured curve).
+  static readonly Dictionary<DateTime, int> Drain = new()
   {
-    int mid = 0;
-    foreach (int load in Enumerable.Range(0, 30).Select(k => 120 + 8 * k))
-      foreach (int soc in Enumerable.Range(0, 14).Select(k => 20 + 3 * k))
-        foreach (var s in Starts(EnergySimulator.Simulate(WithVpp(Input(load, soc)))))
-          if (!EnergySimulator.IsPriceBlockStart(WithVpp(Input(load, soc)), s.Time))
-          {
-            mid++;
-            Assert.False(s.State.Bulk, $"load {load} soc {soc}: bulk start at {s.Time:HH:mm}");
-          }
-    Assert.True(mid > 0, "the sweep should contain restarts within a block");
+    [Night] = 38, [Night.AddMinutes(15)] = 36, [Night.AddMinutes(30)] = 34, [Night.AddMinutes(45)] = 32, [Night.AddHours(1)] = 30,
+  };
+
+  [Theory]
+  [InlineData(60, 0, false)]   // VPP still manages it from 00:15: a later start is fine
+  [InlineData(66, 0, true)]    // from 00:15 only bulk, from 00:00 VPP: start now on VPP
+  [InlineData(76, 0, false)]   // bulk either way: the natural (later) start stays
+  [InlineData(66, 4, false)]   // four cheaper quarters cover the deficit: this block doesn't charge at all
+  public void VppNowBeatsBulkLater_EarlierVppOverLaterBulk(int targetSoc, int cheaperUnderMax, bool expected) =>
+    Assert.Equal(expected, EnergySimulator.VppNowBeatsBulkLater(WithVpp(Input(200, 38)), Night, 38, targetSoc, Drain, cheaperUnderMax, 1838));
+
+  [Fact]
+  public void VppNowBeatsBulkLater_LastQuarterOfTheBlockOrNoCurve_Never()
+  {
+    Assert.False(EnergySimulator.VppNowBeatsBulkLater(WithVpp(Input(200, 38)), Night.AddMinutes(45), 32, 66, Drain, 0, 1838));
+    Assert.False(EnergySimulator.VppNowBeatsBulkLater(Input(200, 38), Night, 38, 66, Drain, 0, 1838));
   }
+
 }
