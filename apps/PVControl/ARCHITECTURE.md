@@ -706,6 +706,29 @@ VPP while the import cap throttles (Manual has no power setting, only the EEPROM
 ~5 kW from the grid with PV off beats 7.5 kW with PV running. Manual Mode has no run time, so the
 reconciler switches it back to Self Use itself after 5 min without PVControl.
 
+**The VPP limit falls with the SoC** (`Managers/VppChargeCurve`, `EnergySimulator.ChargesBulk`). The
+"~5.1 kW cap" of 2026-10-26 was measured at 21 % SoC. 2026-10-27: 4.64 kW at 33 %, 3.95 kW at 48 %,
+3.33 kW at 63 % (night and noon alike — with PV the grid only delivered ~2.2 kW), while 15 Manual
+Force Charge sessions of the ten days before held ~7.45 kW from 10 % to 89 % and the BMS reported
+35 A — so the inverter's remote-control path limits it, undocumented and without a register to
+raise it. The plan assumed 7.35 kW per quarter, so a 1.7-kWh charge needed two quarters instead of
+one and the live control restarted it in short bursts (six between 00:43 and 03:45). The path is now
+chosen when a charge starts, by the power it needs: VPP if it gets the energy in within the quarters
+of the same price, else bulk. The provider bills hourly (`ImportPriceResolution: Hourly`), so four
+quarters at ~4 kW cost the same as one at 7.4 kW — VPP covers most charges without EEPROM writes;
+with quarter-hourly prices the one cheap quarter usually needs the full power. The battery limit
+counts PV in (VPP limits the battery power, not the grid's share). The command's power uses a
+nominal voltage: the measured one in 5-V steps made 2–3 new versions per charge (7050/7200/7350 W).
+A started charge runs at least a minute — RAM writes don't wear, but a stop 15 s after the start
+(live 01:31:15–01:31:30) is noise.
+Planned charges start with their price block: the N-cheapest-quarters rule counted the energy needed
+from the SoC of each quarter, so with every quarter of discharge N could cross the next whole number
+mid-hour — a sweep of 2,400 night plans found such starts at :15/:30/:45, where VPP has too few
+quarters left. The energy needed now includes what the battery loses until the block's end, so the
+decision at its start is the one at its end. Restarts within a block remain at high night loads (the
+charge reaches its interim target and resumes); those top up on VPP — full power only at a block's
+start or for a reaction now.
+
 `feedin_priority` and "battery charging off" stay EEPROM work-mode / charge-current writes: both
 mean "cover the load from the battery, never charge it", which a fixed VPP power can't follow and
 no SolaX VPP mode offers (6 charges and discharges, 7 only charges). HA keeps state history for

@@ -66,7 +66,7 @@ public static class EnergySimulator
       // A load that never draws the battery (PriorityPlus EV): hold it while PV doesn't cover all loads.
       if (newMode.Mode == InverterModes.normal && input.BatteryHeldForLoad(slotTime, pvWh, totalLoadWh))
         newMode = new InverterState(InverterModes.grid_only, ForceChargeReasons.LoadFromGrid, newMode.BatteryChargeEnable, newMode.ExportAllowed);
-      currentMode = newMode;
+      var previousMode = currentMode;
 
       // --- Step 4: compute energy flows for this slot given the chosen mode ---
       // For NeedToCharge-triggered force_charge, only charge the minimum required to stay
@@ -76,6 +76,14 @@ public static class EnergySimulator
       if (IsNeedCharge(newMode))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
           withMargin: input.ImportPrices.GetPrice(slotTime) <= input.ForceChargeMaxPrice);
+      // The charge path is chosen when a grid charge starts and kept while it runs. Full power only at
+      // the start of a price block or for a reaction now (the first slot); a charge the plan starts later
+      // within a block tops up on VPP (no Manual session for a top-up).
+      if (newMode.Mode == InverterModes.force_charge)
+        newMode.Bulk = previousMode.Mode == InverterModes.force_charge
+          ? previousMode.Bulk
+          : (slotTime == startSlot || IsPriceBlockStart(input, slotTime)) && ChargesBulk(input, slotTime, currentSoc, chargeTargetSocPercent);
+      currentMode = newMode;
       var (battChargeWh, battDischargeWh, gridImportWh, gridExportWh) = ComputeEnergyFlows(newMode, pvWh, totalLoadWh, currentEnergyWh, input, chargeTargetSocPercent, input.SlotFraction(slotTime));
 
       slots.Add(new SimulationSlot(slotTime, currentSoc, newMode, pvWh, loadWh, extraLoadWh, battChargeWh, battDischargeWh, gridImportWh, gridExportWh));
@@ -87,6 +95,52 @@ public static class EnergySimulator
     }
 
     return new SimulationResult(slots, input);
+  }
+
+  /// <summary>
+  /// Whether a grid charge starting now needs the full-power (bulk) path: the remote-controlled (VPP)
+  /// path can't put the energy to the target into the battery within the quarters that cost the same
+  /// as this one. With hourly prices that's up to the rest of the hour (four quarters at a lower
+  /// power cost the same as one at full power), with quarter-hourly prices usually one quarter.
+  /// </summary>
+  /// <param name="input">Simulation input (prices, VPP curve).</param>
+  /// <param name="slotTime">Slot in which the charge starts.</param>
+  /// <param name="socPercent">SoC at the start, %.</param>
+  /// <param name="targetSocPercent">Target SoC of the charge, %.</param>
+  /// <returns>True: bulk; false: VPP (or no VPP limit known).</returns>
+  public static bool ChargesBulk(SimulationInput input, DateTime slotTime, int socPercent, int targetSocPercent)
+  {
+    if (input.VppChargePowerW is null) return false;
+    int neededWh = input.SocToWh(Math.Max(0, Math.Min(targetSocPercent, 100) - socPercent));
+    var blockEnd = SamePriceBlockEnd(input, slotTime);
+    int vppWh = 0, soc = socPercent;
+    for (var t = slotTime; vppWh < neededWh && t < blockEnd; t = t.AddMinutes(SlotMinutes))
+    {
+      int wh = input.ChargeLimitWh(bulk: false, soc, input.SlotFraction(t));
+      vppWh += wh;
+      soc = Math.Min(100, soc + input.WhToSoc(wh));
+    }
+    return vppWh < neededWh;
+  }
+
+  /// <summary>Whether a quarter starts a price block (its price differs from the quarter before).</summary>
+  /// <param name="input">Simulation input (import prices).</param>
+  /// <param name="slotTime">The quarter.</param>
+  public static bool IsPriceBlockStart(SimulationInput input, DateTime slotTime) =>
+    !input.ImportPrices.TryGetPrice(slotTime.AddMinutes(-SlotMinutes), out float before)
+    || !input.ImportPrices.TryGetPrice(slotTime, out float price) || Math.Abs(before - price) >= 1e-6f;
+
+  /// <summary>End of the run of quarters from a slot on that cost the same (hourly prices: the end of the hour).</summary>
+  /// <param name="input">Simulation input (import prices).</param>
+  /// <param name="slotTime">First quarter.</param>
+  /// <returns>Start of the first quarter with another price (or without one).</returns>
+  public static DateTime SamePriceBlockEnd(SimulationInput input, DateTime slotTime)
+  {
+    var t = slotTime.AddMinutes(SlotMinutes);
+    if (!input.ImportPrices.TryGetPrice(slotTime, out float price)) return t;
+    while (input.ImportPrices.TryGetPrice(t, out float p) && Math.Abs(p - price) < 1e-6f)
+      t = t.AddMinutes(SlotMinutes);
+    return t;
   }
 
   /// <summary>Whether a mode is a NeedToCharge grid charge (force_charge for a minimum).</summary>
@@ -560,7 +614,13 @@ public static class EnergySimulator
         {
           int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
           int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
-          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
+          // Plus what the battery loses until the end of this price block: the decision at the block's
+          // start is then the one at its end, so a planned charge starts with the block (the same price)
+          // instead of mid-hour once the deficit crosses the next whole quarter — a late start left VPP
+          // too few quarters and needed the full-power path.
+          int blockDropPct = baseFutureSoC.TryGetValue(SamePriceBlockEnd(input, now), out int socAtBlockEnd)
+            ? Math.Max(0, baseFutureSoC.GetValueOrDefault(now, simulatedSoc) - socAtBlockEnd) : 0;
+          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc) + blockDropPct);
           int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
           inWindow = cheaperUnderMax < quartersNeeded;
         }
@@ -647,6 +707,8 @@ public static class EnergySimulator
   {
     int availEnergy = currentEnergyWh;                              // Wh currently in battery (exact)
     int maxCapacity = input.BatteryCapacityWh;
+    // Battery limit of a grid charge on its path (VPP by the SoC, bulk at the maximum)
+    int chargeLimitWh = input.ChargeLimitWh(state.Bulk, input.WhToSoc(currentEnergyWh), slotFraction);
     int minEnergy = input.SocToWh(input.AbsoluteMinSocPercent); // Wh at absolute minimum
     // Maximum charge or discharge energy per 15-min slot (the running slot only for its rest,
     // SimulationInput.SlotFraction)
@@ -658,10 +720,10 @@ public static class EnergySimulator
       // because C# switch arms are matched in order and both modes share the same name prefix
       // PV disconnected (negative import price): the grid covers house load and battery charging
       InverterModes.force_charge_grid_only
-        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(0, totalLoadWh, slotFraction), chargeTargetSocPercent),
+        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(0, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent),
 
       InverterModes.force_charge
-        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(pvWh, totalLoadWh, slotFraction), chargeTargetSocPercent),
+        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(pvWh, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent),
 
       InverterModes.force_discharge
         => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
@@ -714,17 +776,19 @@ public static class EnergySimulator
   /// <param name="availEnergy">Energy in the battery, Wh.</param>
   /// <param name="maxCapacity">Battery capacity, Wh.</param>
   /// <param name="maxChargeWh">Grid charge limit of the slot, Wh (<see cref="SimulationInput.GridChargeWhPerSlot"/>).</param>
+  /// <param name="batteryLimitWh">Battery charge limit of the path, PV included (<see cref="SimulationInput.ChargeLimitWh"/>), Wh.</param>
   /// <param name="targetSocPercent">Target SoC, %.</param>
   /// <returns>Battery charge, 0, grid import, 0, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceCharge(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int targetSocPercent)
+    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int batteryLimitWh, int targetSocPercent)
   {
     int targetEnergy = Soc.ToWh(Math.Min(targetSocPercent, 100), maxCapacity);
     int pvSurplus = Math.Max(0, pvWh - totalLoadWh);
     // How much grid charging is needed to hit the rate limit (limited by how far we are from target)
     int gridChargeNeeded = Math.Min(maxChargeWh, Math.Max(0, targetEnergy - availEnergy));
-    // PV surplus also charges the battery on top of grid charging (capped by capacity)
-    int battCharge = Math.Min(gridChargeNeeded + pvSurplus, maxCapacity - availEnergy);
+    // PV surplus also charges the battery on top of grid charging (capped by capacity and the path's
+    // battery limit: in VPP the inverter limits the battery power, PV's share included)
+    int battCharge = Math.Min(Math.Min(gridChargeNeeded + pvSurplus, batteryLimitWh), maxCapacity - availEnergy);
     // Grid import covers the portion of battCharge not covered by PV, plus any load not covered by PV
     int gridImportWh = Math.Max(0, battCharge - pvSurplus) + Math.Max(0, totalLoadWh - pvWh);
     return (battCharge, 0, gridImportWh, 0);

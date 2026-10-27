@@ -137,6 +137,10 @@ public class SimulationInput
   /// <summary>Highest grid import allowed in a 15-min slot (mean power), W; 0 = no limit. Grid charging yields to the load.</summary>
   public int MaxGridImportW { get; init; }
 
+  /// <summary>Battery charge power of a remote-controlled (VPP) grid charge by SoC, W (<see cref="Managers.VppChargeCurve"/>);
+  /// null = no such limit (every charge at <see cref="MaxChargePowerW"/>).</summary>
+  public Func<int, int>? VppChargePowerW { get; init; }
+
   // ── Derived helpers ─────────────────────────────────────────────────────────────────────
 
   /// <summary>Maximum battery charge/discharge power, W.</summary>
@@ -153,13 +157,25 @@ public class SimulationInput
   /// <param name="loadWh">Load incl. extra loads of the slot, Wh.</param>
   /// <param name="fraction">Simulated share of the slot (<see cref="SlotFraction"/>).</param>
   /// <returns>Wh ≥ 0.</returns>
-  public int GridChargeWhPerSlot(int pvWh, int loadWh, double fraction = 1.0)
+  /// <param name="maxWh">Charge limit of the path (<see cref="ChargeLimitWh"/>); null = <see cref="MaxChargeWhPerSlot"/>.</param>
+  public int GridChargeWhPerSlot(int pvWh, int loadWh, double fraction = 1.0, int? maxWh = null)
   {
-    int max = MaxChargeWhPerSlot(fraction);
+    int max = maxWh ?? MaxChargeWhPerSlot(fraction);
     if (MaxGridImportW <= 0) return max;
     int capWh = (int)(Energy.SlotWh(MaxGridImportW) * fraction);
     return Math.Clamp(capWh - Math.Max(0, loadWh - pvWh), 0, max);
   }
+
+  /// <summary>Battery charge limit of a grid charge in a slot: the maximum for a bulk charge, the VPP curve
+  /// at the SoC otherwise (PV included — the inverter limits the battery power, not the grid's share).</summary>
+  /// <param name="bulk">Full-power path (<see cref="InverterState.Bulk"/>).</param>
+  /// <param name="socPercent">SoC, %.</param>
+  /// <param name="fraction">Simulated share of the slot (<see cref="SlotFraction"/>).</param>
+  /// <returns>Wh.</returns>
+  public int ChargeLimitWh(bool bulk, int socPercent, double fraction = 1.0) =>
+    bulk || VppChargePowerW is null
+      ? MaxChargeWhPerSlot(fraction)
+      : Math.Min(MaxChargeWhPerSlot(fraction), (int)(Energy.SlotWh(VppChargePowerW(socPercent)) * fraction));
 
   /// <summary>Time to charge at the maximum power (<see cref="Soc.ChargeMinutes"/>).</summary>
   /// <param name="startSoC">Start SoC, %.</param>
@@ -274,5 +290,6 @@ public class SimulationInput
     CurrentMode = CurrentMode,
     ChargeVoltageV = ChargeVoltageV,
     MaxGridImportW = MaxGridImportW,
+    VppChargePowerW = VppChargePowerW,
   };
 }

@@ -60,6 +60,9 @@ namespace NetDeamon.apps.PVControl
     public bool BatteryChargeEnable = batteryChargeEnable;
     /// <summary>PV surplus may be exported; false at a negative export price, independent of <see cref="Mode"/>.</summary>
     public bool ExportAllowed = exportAllowed;
+    /// <summary>A grid charge at full power (SolaX: Manual Force Charge), not the slower remote-controlled
+    /// (VPP) path; decided when the charge starts (<see cref="Simulator.EnergySimulator.ChargesBulk"/>).</summary>
+    public bool Bulk;
   }
   /// <summary>Shared dependencies of PVControl (HA context, MQTT, logger, config, scheduler, API), set once by the app.</summary>
   public class PVControlCommon
@@ -261,8 +264,14 @@ namespace NetDeamon.apps.PVControl
     /// <summary>How long a requested change takes to show at the meter, s (automation delays, ramps);
     /// the import cap guard assumes the current power continues that long.</summary>
     public int ImportCapReactionSeconds { get; set; } = 90;
-    /// <summary>A grid charge counts as bulk (<see cref="InverterCommand.Bulk"/>) from this share of the battery, %; 0 = never.</summary>
-    public int BulkChargeMinPercent { get; set; } = 50;
+    /// <summary>VPP (remote-controlled) grid charge power at 0 % SoC, W — the default line until the curve is
+    /// learned (<see cref="Managers.VppChargeCurve"/>).</summary>
+    public double VppChargePowerAt0PctW { get; set; } = 5950;
+    /// <summary>Change of the VPP grid charge power per % SoC, W (negative: falls with the SoC).</summary>
+    public double VppChargePowerSlopeWPerPct { get; set; } = -41;
+    /// <summary>Nominal battery voltage for the inverter command's power, V: the command shouldn't follow
+    /// the measured voltage (every 5-V step was a new command version).</summary>
+    public int BatteryNominalVoltageV { get; set; } = 240;
     /// <summary>HA's feedback whether the inverter runs the published inverter command (on = in sync; attribute
     /// <c>blocked</c> = the reconciler gave up); null = not checked.</summary>
     public Entity? InverterSyncEntity { get; set; }

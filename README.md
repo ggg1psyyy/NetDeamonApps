@@ -117,7 +117,8 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 
 | Entity | Content |
 |---|---|
-| `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge, capped by the import cap), `bulk` (grid charge at full power, see below), `charge_energy_wh` (energy of the running charge in the plan), `seq` (version, grows with every change), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` |
+| `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge: hardware maximum × `BatteryNominalVoltageV`, lower only while the import cap limits below what the path charges), `bulk` (grid charge at full power, see below), `charge_energy_wh`, `charge_target_soc`, `charge_start`, `charge_until` (the running grid charge in the plan, else the next one: energy into the battery, the SoC it reaches, its slots), `vpp_charge_limit_w` (what a VPP charge reaches at the current SoC), `seq` (version, grows with every change), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` (the nominal voltage used) |
+| `sensor.pv_control_vpp_charge_limit` | Battery charge power a remote-controlled (VPP) grid charge reaches at the current SoC (W); attributes `at_0_pct_w`, `slope_w_per_pct`, `learned`, `at_50_pct_w`, `buckets` (the learned readings, restored after a restart) |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
 | `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
 
@@ -129,11 +130,12 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 | `BatteryVoltageEntity` | Battery voltage while charging: W per A of the charge current (230 V without it) |
 | `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A |
 | `InverterSyncEntity` | HA's feedback whether the inverter runs the command (`binary_sensor.pv_control_inverter_in_sync`) |
-| `BulkChargeMinPercent` | A `force_charge` whose planned energy (from its start, contiguous) is at least this share of the battery is `bulk`; 0 = never |
+| `VppChargePowerAt0PctW`, `VppChargePowerSlopeWPerPct` | Default line of the VPP charge power by SoC (W = At0 + Slope × SoC) until the curve is learned |
+| `BatteryNominalVoltageV` | Voltage for the command's battery power (A × V) |
 
 #### Inverter control (HA side)
 
-PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = how to run it); all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 the modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power. VPP charges the battery with at most ~5 kW on this inverter, so a `bulk` grid charge runs as Manual Mode + Force Charge (30 A) instead: two EEPROM writes per charge session, not per change. `bulk` is decided when the charge starts and kept for the session (a `force_charge` set with `select.pv_control_mode_override` is always bulk); it is off while the import cap throttles the charge (Manual has no power setting), and `force_charge_grid_only` is never bulk.
+PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = how to run it); all inverter writes are HA automations, so another inverter only needs another script. For the SolaX X3-Hybrid G4 the modes run in RAM as VPP mode 8 ("Individual Setting – Duration Mode") through the solax-modbus integration's `*_direct` entities — no EEPROM writes for mode changes or charge power. The inverter limits VPP charging, falling with the SoC (~5.1 kW at 20 %, ~3.3 kW at 63 %; Manual Force Charge ~7.45 kW); PVControl learns that curve from VPP charges that run below the command (`sensor.pv_control_vpp_charge_limit`). The plan chooses the path when a grid charge starts: VPP if it puts the energy to the target into the battery within the quarters that cost the same — with hourly prices up to the rest of the hour, with quarter-hourly prices usually one quarter — else `bulk`: Manual Mode + Force Charge (30 A), two EEPROM writes per charge session. A planned charge starts with its price block (the hour, for hourly prices); full power only at a block's start or for a reaction now — a charge the plan starts later within a block tops up on VPP. The plan models the battery at the path's power (VPP by the curve, PV included). A `force_charge` set with `select.pv_control_mode_override` is always bulk; `bulk` is off while the import cap throttles the charge (Manual has no power setting), and `force_charge_grid_only` is never bulk. A started grid charge runs at least 1 minute unless the user changes the mode.
 
 | File | Content |
 |---|---|
@@ -148,8 +150,8 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | `normal`, `reset` | Self Use, VPP off |
 | `feedin_priority` | Feedin Priority, VPP off |
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
-| `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it to ~5 kW) |
-| `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (the inverter limits it to ~5 kW) |
+| `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
+| `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
 | `grid_only` | Self Use + mode 8: PV unlimited, battery 0 W (held) |
 | `force_discharge` | Self Use + mode 8: battery discharges at `battery_power_w` |
 

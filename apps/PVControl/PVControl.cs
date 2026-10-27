@@ -570,14 +570,18 @@ namespace NetDeamon.apps.PVControl
     private double? _chargeLimitA;
     private InverterCommand? _inverterCommand;
     private int _restoredCommandSeq;
-    private bool _sessionBulk;
+    private bool _chargeThrottled;
     private DateTime _inverterCommandIssued;
+    private Entity? _vppCurveEntity;
+    private DateTime _vppCurvePublished;
     private DateTime? _inverterOutOfSyncSince;
     private DateTime _importSensorsPublished;
     private ImportCap.QuarterResult? _lastOverCap;
     private double?[]? _costImportSince;
-    /// <summary>Inverter mode published last cycle (the charge limit only applies while the battery charges from the grid).</summary>
-    private InverterModes _publishedMode = InverterModes.normal;
+    /// <summary>Mode published last (and since when): a started grid charge runs at least
+    /// <see cref="InverterCommand.MinChargeRun"/>.</summary>
+    private InverterState _publishedState = new(InverterModes.normal);
+    private DateTime _publishedStateSince;
 
     /// <summary>The import counters in priority order (kWh); null where one has no usable reading.</summary>
     private static List<double?> ReadImportCounters() => PVCC_Config.TotalImportEnergyEntities
@@ -585,36 +589,46 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>
     /// The inverter command for sensor.pv_control_mode's attributes: the battery power (W, + charges,
-    /// − discharges; grid charging at the import cap's limit in whole amps), whether a grid charge is
-    /// <c>bulk</c>, and a version <c>seq</c> that grows with every change. HA applies it
-    /// (script.pv_control_apply_mode) and a reconciler keeps the inverter in it.
+    /// − discharges), whether a grid charge runs on the full-power path (<c>bulk</c>), a version <c>seq</c>
+    /// that grows with every change, and the planned charge (energy, target SoC, end). HA applies it
+    /// (script.pv_control_apply_mode) and a reconciler keeps the inverter in it. The power uses the
+    /// nominal voltage and the hardware maximum unless the import cap limits below what the path charges
+    /// — so it changes only when the cap really steps in, not with every voltage step.
     /// </summary>
-    /// <param name="mode">Mode published this cycle.</param>
+    /// <param name="state">Mode published this cycle (its <see cref="InverterState.Bulk"/> as planned).</param>
     /// <param name="now">Current time.</param>
     /// <returns>The command's attributes.</returns>
-    private Dictionary<string, object?> InverterCommandAttributes(InverterModes mode, DateTime now)
+    private Dictionary<string, object?> InverterCommandAttributes(InverterState state, DateTime now)
     {
-      var previousMode = _publishedMode;
-      _publishedMode = mode;
+      var mode = state.Mode;
       double maxA = PVCC_Config.MaxBatteryChargePower;
+      int voltage = PVCC_Config.BatteryNominalVoltageV;
       bool gridCharging = mode is InverterModes.force_charge or InverterModes.force_charge_grid_only;
       double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, _importCap.ChargeLimitA, maxA, gridCharging);
       if (limitA != _chargeLimitA && gridCharging)
         PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F0} A ({Reason})", _chargeLimitA?.ToString("F0") ?? "-", limitA, _importCap.Reason);
       _chargeLimitA = limitA;
-      int plannedChargeWh = InverterCommand.PlannedChargeWh(_house.SimulationTimeline, now);
-      (bool bulk, _sessionBulk) = InverterCommand.BulkFor(mode, previousMode, _sessionBulk, plannedChargeWh,
-        _house.Battery.BatteryCapacity, PVCC_Config.BulkChargeMinPercent, throttled: limitA < maxA,
-        forced: _house.OverrideMode == InverterModes.force_charge);
-      var command = InverterCommand.Next(_inverterCommand, mode, InverterCommand.PowerFor(mode, limitA, maxA, PVCC_Config.BatteryVoltageV), bulk, _restoredCommandSeq);
+      // The cap only counts below what the path charges anyway: VPP by the SoC curve, bulk at the maximum.
+      bool forced = _house.OverrideMode == InverterModes.force_charge;
+      int vppW = _house.VppCurve.MaxW(_house.Battery.BatterySoc);
+      double pathW = InverterCommand.BulkFor(mode, state.Bulk, forced, throttled: false) ? maxA * voltage : Math.Min(maxA * voltage, vppW);
+      _chargeThrottled = gridCharging && limitA * voltage < pathW;
+      bool bulk = InverterCommand.BulkFor(mode, state.Bulk, forced, _chargeThrottled);
+      var command = InverterCommand.Next(_inverterCommand, mode,
+        InverterCommand.PowerFor(mode, _chargeThrottled ? limitA : maxA, maxA, voltage), bulk, _restoredCommandSeq);
       if (command != _inverterCommand)
         _inverterCommandIssued = now;
       _inverterCommand = command;
+      var charge = InverterCommand.NextCharge(_house.SimulationTimeline, now, _house.Battery.BatteryCapacity);
       return new()
       {
         ["battery_power_w"] = command.BatteryPowerW,
         ["bulk"] = command.Bulk,
-        ["charge_energy_wh"] = plannedChargeWh,
+        ["charge_energy_wh"] = charge?.EnergyWh ?? 0,
+        ["charge_target_soc"] = charge?.TargetSocPercent,
+        ["charge_start"] = charge?.Start.ToISO8601(),
+        ["charge_until"] = charge?.End.ToISO8601(),
+        ["vpp_charge_limit_w"] = vppW,
         ["seq"] = command.Seq,
         ["issued"] = _inverterCommandIssued.ToISO8601(),
         ["import_cap_reason"] = _importCap.Reason,
@@ -622,8 +636,45 @@ namespace NetDeamon.apps.PVControl
         ["allowed_kw"] = Math.Round(_importCap.AllowedW / 1000.0, 2),
         ["extra_loads_paused"] = _importCap.PauseExtraLoads,
         ["headroom_w"] = _importCap.HeadroomW,
-        ["voltage_v"] = PVCC_Config.BatteryVoltageV,
+        ["voltage_v"] = voltage,
       };
+    }
+
+    /// <summary>
+    /// Learns the VPP charge curve (<see cref="Managers.VppChargeCurve"/>) from a remote-controlled grid
+    /// charge that runs below its command: not bulk, not throttled by the import cap, in sync, ramped up
+    /// (a minute after the command), the measured battery power clearly under the command. Published as
+    /// sensor.pv_control_vpp_charge_limit once a minute (the buckets persist there).
+    /// </summary>
+    /// <param name="now">Current time.</param>
+    private async Task LearnVppCurveAsync(DateTime now)
+    {
+      int soc = _house.Battery.BatterySoc;
+      bool inSync = PVCC_Config.InverterSyncEntity is not { } sync || sync.State == "on";
+      if (_inverterCommand is { Mode: InverterModes.force_charge or InverterModes.force_charge_grid_only, Bulk: false } c
+          && !_chargeThrottled && inSync && now - _inverterCommandIssued >= TimeSpan.FromMinutes(1) && soc is > 5 and < 97
+          && _house.Battery.CurrentAverageBatteryChargeDischargePower is var w && w > 0 && w < c.BatteryPowerW - 300)
+        _house.VppCurve.Observe(soc, w);
+      if (_vppCurveEntity is null || now - _vppCurvePublished < TimeSpan.FromMinutes(1)) return;
+      _vppCurvePublished = now;
+      var (at0, slope, learned) = _house.VppCurve.Line;
+      await PVCC_EntityManager.SetStateAsync(_vppCurveEntity.EntityId, _house.VppCurve.MaxW(soc).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetAttributesAsync(_vppCurveEntity.EntityId, new
+      {
+        at_0_pct_w = Math.Round(at0),
+        slope_w_per_pct = Math.Round(slope, 1),
+        learned,
+        at_50_pct_w = _house.VppCurve.MaxW(50),
+        buckets = _house.VppCurve.Serialize(),
+      });
+    }
+
+    /// <summary>Restores the learned VPP charge curve from its sensor after a restart.</summary>
+    private void RestoreVppCurve()
+    {
+      if (_vppCurveEntity is not null && _vppCurveEntity.TryGetJsonAttribute("buckets", out System.Text.Json.JsonElement b)
+          && b.ValueKind == System.Text.Json.JsonValueKind.String)
+        _house.VppCurve.Restore(b.GetString());
     }
 
     /// <summary>Continues the command version after a restart (the HA side compares it with the version it applied).</summary>
@@ -822,7 +873,8 @@ namespace NetDeamon.apps.PVControl
           _house.Battery.LastGoodSoC?.ToString("HH:mm:ss") ?? "start");
         _socUnavailableLogged = true;
       }
-      var attributes = InverterCommandAttributes(InverterModes.normal, now);
+      _publishedState = new InverterState(InverterModes.normal);
+      var attributes = InverterCommandAttributes(_publishedState, now);
       attributes["next_charge_window_start"] = "none";
       attributes["next_charge_window_end"] = "none";
       attributes["price"] = "0";
@@ -864,7 +916,10 @@ namespace NetDeamon.apps.PVControl
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _house.AddAverageGridPowerValue(grid);
-      var inverterState = _house.ProposedState;
+      var inverterState = InverterCommand.HoldMinimumRun(_house.ProposedState, _publishedState, _publishedStateSince, now);
+      if (inverterState.Mode != _publishedState.Mode)
+        _publishedStateSince = now;
+      _publishedState = inverterState;
       #region Mode
       await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
       // Derive the current or next planned grid-charge window from the simulation timeline. The
@@ -876,12 +931,13 @@ namespace NetDeamon.apps.PVControl
         ? _house.Prices.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
         : default;
       // One sensor for the decision and the inverter command HA applies (HA/InverterSync.yaml).
-      var attr_Mode = InverterCommandAttributes(inverterState.Mode, now);
+      var attr_Mode = InverterCommandAttributes(inverterState, now);
       attr_Mode["next_charge_window_start"] = nextChargeSlot != null ? (nextChargePrice.StartTime != default ? nextChargePrice.StartTime : nextChargeSlot.Time).ToISO8601() : "none";
       attr_Mode["next_charge_window_end"] = nextChargeSlot != null ? (nextChargePrice.EndTime != default ? nextChargePrice.EndTime : nextChargeSlot.Time.AddHours(1)).ToISO8601() : "none";
       attr_Mode["price"] = nextChargePrice.Price.ToString(CultureInfo.InvariantCulture);
       attr_Mode["charge_Reason"] = inverterState.ModeReason.ToString();
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
+      await LearnVppCurveAsync(now);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, inverterState.ExportAllowed ? "ON" : "OFF");
       #endregion
@@ -1291,6 +1347,9 @@ namespace NetDeamon.apps.PVControl
       _importMonthPeakEntity = await RegisterSensor("sensor.pv_control_import_month_peak", "Import peak this month", "power", "mdi:chart-bell-curve",
         addConfig: new { unit_of_measurement = "kW" }, reRegister: reset);
       RestoreMonthPeak();
+      _vppCurveEntity = await RegisterSensor("sensor.pv_control_vpp_charge_limit", "VPP charge limit", "power", "mdi:battery-charging-medium",
+        addConfig: new { unit_of_measurement = "W" }, reRegister: reset);
+      RestoreVppCurve();
       if (_house.WeatherLoad is not null)
       {
         _loadForecastEntity = await RegisterSensor("sensor.pv_control_load_forecast", "Load forecast (night)", "energy", "mdi:home-thermometer-outline",

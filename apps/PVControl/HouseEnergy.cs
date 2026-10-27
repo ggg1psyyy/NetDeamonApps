@@ -157,6 +157,8 @@ namespace NetDeamon.apps.PVControl
     public bool OpportunisticDischarge { get; set; }
     /// <summary>User override of the inverter mode; automatic = the simulation decides.</summary>
     public InverterModes OverrideMode { get; set; }
+    /// <summary>Battery charge power of a remote-controlled (VPP) grid charge by SoC, learned live (PVControl).</summary>
+    public Managers.VppChargeCurve VppCurve { get; } = new(PVCC_Config.VppChargePowerAt0PctW, PVCC_Config.VppChargePowerSlopeWPerPct);
     /// <summary>Target SoC of the user force charge, %.</summary>
     public int ForceChargeTargetSoC { get; set; }
 
@@ -442,6 +444,7 @@ namespace NetDeamon.apps.PVControl
         CurrentMode = _currentMode,
         ChargeVoltageV = PVCC_Config.BatteryVoltageV,
         MaxGridImportW = PVCC_Config.MaxGridImportW,
+        VppChargePowerW = VppCurve.MaxW,
       };
 
       // Run the baseline simulation once — its grid import and PV window boundaries

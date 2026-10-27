@@ -6,8 +6,8 @@ using Xunit;
 namespace NetDeamonApps.Tests;
 
 /// <summary>
-/// The versioned inverter command (attributes of sensor.pv_control_mode) HA applies in RAM (SolaX VPP
-/// mode 8 via the *_direct entities) instead of EEPROM work-mode and charge-current writes; the
+/// The versioned inverter command (attributes of sensor.pv_control_mode) HA applies — remote-controlled
+/// (SolaX VPP mode 8 via the *_direct entities, RAM) or for a bulk grid charge Manual Force Charge; the
 /// reconciler compares its <c>seq</c> with the one it applied. Publishing and the HA side aren't unit tested.
 /// </summary>
 public class InverterCommandTests
@@ -46,53 +46,56 @@ public class InverterCommandTests
   public void PowerFor_ByMode(InverterModes mode, double limitA, int expectedW) =>
     Assert.Equal(expectedW, InverterCommand.PowerFor(mode, limitA, maxA: 30, voltageV: 250));
 
-  static SimulationSlot Slot(DateTime t, InverterModes mode, int chargeWh) =>
-    new(t, 30, new InverterState(mode, ForceChargeReasons.None), 0, 100, 0, chargeWh, 0, chargeWh, 0);
+  static SimulationSlot Slot(DateTime t, int soc, InverterModes mode, int chargeWh) =>
+    new(t, soc, new InverterState(mode, ForceChargeReasons.None), 0, 100, 0, chargeWh, 0, chargeWh, 0);
 
   [Fact]
-  public void PlannedChargeWh_ContiguousChargeFromTheRunningSlot()
+  public void NextCharge_RunningOrNext_EnergyTargetSocAndEnd()
   {
     var t0 = new DateTime(2026, 10, 27, 0, 0, 0);
-    SimulationSlot[] plan = [Slot(t0, InverterModes.force_charge, 1800), Slot(t0.AddMinutes(15), InverterModes.force_charge, 1800),
-      Slot(t0.AddMinutes(30), InverterModes.normal, 0), Slot(t0.AddMinutes(45), InverterModes.force_charge, 1800)];
-    Assert.Equal(3600, InverterCommand.PlannedChargeWh(plan, t0.AddMinutes(5)));   // the later charge after a gap doesn't count
-    Assert.Equal(1800, InverterCommand.PlannedChargeWh(plan, t0.AddMinutes(20)));
-    Assert.Equal(0, InverterCommand.PlannedChargeWh(plan, t0.AddMinutes(35)));
+    SimulationSlot[] plan = [Slot(t0, 30, InverterModes.force_charge, 1150), Slot(t0.AddMinutes(15), 40, InverterModes.force_charge, 1150),
+      Slot(t0.AddMinutes(30), 50, InverterModes.normal, 0), Slot(t0.AddMinutes(45), 49, InverterModes.force_charge, 1150),
+      Slot(t0.AddMinutes(60), 59, InverterModes.normal, 0)];
+
+    var running = InverterCommand.NextCharge(plan, t0.AddMinutes(5), 11_520)!.Value;
+    Assert.Equal((2300, 50, t0, t0.AddMinutes(30)), (running.EnergyWh, running.TargetSocPercent, running.Start, running.End));
+    // Between charges: the next one (the SoC after it from the slot that follows).
+    var next = InverterCommand.NextCharge(plan, t0.AddMinutes(35), 11_520)!.Value;
+    Assert.Equal((1150, 59, t0.AddMinutes(45)), (next.EnergyWh, next.TargetSocPercent, next.Start));
+    Assert.Null(InverterCommand.NextCharge(plan, t0.AddMinutes(61), 11_520));
   }
 
-  // SolaX: VPP charges the battery with at most ~5.1 kW (20–21 A, measured 2026-10-26 and in all
-  // negative-price charges since spring); Manual Force Charge gives 30 A (7.4–7.6 kW). Bulk charges
-  // take the Manual path, small top-ups VPP.
+  [Fact]
+  public void NextCharge_EndsWithThePlan_TargetFromItsEnergy()
+  {
+    var t0 = new DateTime(2026, 10, 27, 23, 45, 0);
+    var charge = InverterCommand.NextCharge([Slot(t0, 30, InverterModes.force_charge, 1152)], t0, 11_520)!.Value;
+    Assert.Equal(40, charge.TargetSocPercent);   // 30 % + 1152 Wh of 11.52 kWh
+  }
+
+  // The plan chooses the path when a charge starts (EnergySimulator.ChargesBulk); live a forced
+  // charge is always bulk, a throttled one never (the remote-controlled path follows the cap).
   [Theory]
-  [InlineData(InverterModes.normal, false, 6000, false, true)]        // start, ≥ 50 % of 11.52 kWh = 5.76 kWh
-  [InlineData(InverterModes.normal, false, 2000, false, false)]       // small top-up
-  [InlineData(InverterModes.force_charge, true, 1000, false, true)]   // kept while the session lasts (energy shrinks)
-  [InlineData(InverterModes.force_charge, false, 9000, false, false)] // a small session stays small
-  [InlineData(InverterModes.force_charge, true, 4000, true, false)]   // the import cap throttles: off for now…
-  public void BulkFor_DecidedAtTheStart_KeptForTheSession(InverterModes previous, bool sessionBulk, int plannedWh, bool throttled, bool expected)
-  {
-    var (bulk, session) = InverterCommand.BulkFor(InverterModes.force_charge, previous, sessionBulk, plannedWh, 11_520, 50, throttled);
-    Assert.Equal(expected, bulk);
-    if (previous == InverterModes.force_charge) Assert.Equal(sessionBulk, session); // …but the session stays bulk
-  }
+  [InlineData(InverterModes.force_charge, true, false, false, true)]
+  [InlineData(InverterModes.force_charge, false, false, false, false)]
+  [InlineData(InverterModes.force_charge, false, true, false, true)]           // user override
+  [InlineData(InverterModes.force_charge, true, true, true, false)]            // import cap throttles
+  [InlineData(InverterModes.force_charge_grid_only, true, false, false, false)] // negative price: always VPP
+  [InlineData(InverterModes.normal, true, true, false, false)]
+  public void BulkFor_PlanForcedThrottled(InverterModes mode, bool planBulk, bool forced, bool throttled, bool expected) =>
+    Assert.Equal(expected, InverterCommand.BulkFor(mode, planBulk, forced, throttled));
 
   [Fact]
-  public void BulkFor_StartIsBulkFromHalfTheBattery_NeverOutsideForceCharge()
+  public void HoldMinimumRun_StartedChargeRunsAMinute_UserChangesAtOnce()
   {
-    Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 6000, 11_520, 50, false).Bulk);
-    Assert.False(InverterCommand.BulkFor(InverterModes.force_charge_grid_only, InverterModes.normal, false, 9000, 11_520, 50, false).Bulk);
-    Assert.False(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 9000, 11_520, 0, false).Bulk);
-  }
-
-  [Fact]
-  public void BulkFor_UserForcedCharge_AlwaysBulkUnlessThrottled()
-  {
-    // The plan ignores the override: no planned charge, yet the user wants full power now.
-    Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 0, 11_520, 50, false, forced: true).Bulk);
-    // A small planned session the user then forces: bulk from now on.
-    Assert.True(InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.force_charge, false, 1000, 11_520, 50, false, forced: true).Bulk);
-    var (bulk, session) = InverterCommand.BulkFor(InverterModes.force_charge, InverterModes.normal, false, 0, 11_520, 50, true, forced: true);
-    Assert.Equal((false, true), (bulk, session));
+    var now = new DateTime(2026, 10, 27, 1, 27, 30);
+    var charging = new InverterState(InverterModes.force_charge, ForceChargeReasons.GoingUnderAbsoluteMinima);
+    var normal = new InverterState(InverterModes.normal);
+    // Live 2026-10-27 01:31:15–01:31:30: started and stopped within 15 s.
+    Assert.Equal(InverterModes.force_charge, InverterCommand.HoldMinimumRun(normal, charging, now.AddSeconds(-15), now).Mode);
+    Assert.Equal(InverterModes.normal, InverterCommand.HoldMinimumRun(normal, charging, now.AddSeconds(-60), now).Mode);
+    Assert.Equal(InverterModes.normal, InverterCommand.HoldMinimumRun(new InverterState(InverterModes.normal, ForceChargeReasons.UserMode), charging, now.AddSeconds(-5), now).Mode);
+    Assert.Equal(InverterModes.force_charge, InverterCommand.HoldMinimumRun(charging, normal, now.AddSeconds(-5), now).Mode); // starting isn't delayed
   }
 
   [Fact]
