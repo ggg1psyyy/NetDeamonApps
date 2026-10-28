@@ -88,7 +88,7 @@ Each app consists of:
 
 ### PVControl Architecture
 - **`PVControlCommon.cs`** — Static singleton holding shared dependencies (`IHaContext`, `IMqttEntityManager`, `ILogger`, `IAppConfig<PVConfig>`, scheduler). Initialize once in constructor.
-- **`HouseEnergy.cs`** — Core energy model: running averages, four prediction instances, cost tracking, `RunSimulation`, and `FindLoadWindow` (schedulable load decisions: numbered mode ladder Optimal 10 → Priority 20 → PriorityPlus 30)
+- **`HouseEnergy.cs`** — Core energy model: running averages, four prediction instances, cost tracking, `RunSimulation`, and `FindLoadWindow` → `LoadWindowSearch` (one load's decision per cycle: the gates, then the rulesets as methods — numbered mode ladder Optimal 10 → Priority 20 → PriorityPlus 30 — over shared fields)
 - **`PVControl.cs`** — Registers the MQTT entities in HA, subscribes to sensor and command changes, runs the cycle every 15 seconds via cron (load schedule searches only when due, see `ReplanPolicy`)
 - **`Simulator/`** — `EnergySimulator` (pure 15-min slot simulation, now → end of tomorrow), `SimulationInput`/`SimulationResult` (incl. `HasNewGridVs`/`IsGridCheapVs`/`NetGridCostVs`), `SessionPlanner` (PriorityPlus price scan and follow-up sessions), `LoadSchedulingDecision`
 - **`Predictions/`** — Abstract `Prediction` base with `PredictionContainer` (validates 15-min interval data over 48h). Concrete: load (historical SQLite), PV (OpenMeteo API entities), NetEnergy (PV−Load), BatterySoC (simulation)

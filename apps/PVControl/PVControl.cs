@@ -595,8 +595,8 @@ namespace NetDeamon.apps.PVControl
     /// <param name="state">Mode published this cycle (its <see cref="InverterState.Bulk"/> as planned).</param>
     /// <param name="now">Current time.</param>
     /// <param name="charge">The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>); null = none.</param>
-    /// <returns>The command's attributes.</returns>
-    private Dictionary<string, object?> InverterCommandAttributes(InverterState state, DateTime now, PlannedCharge? charge)
+    /// <returns>The command (also kept in <see cref="_inverterCommand"/>, with its charge limit and throttling).</returns>
+    private InverterCommand UpdateInverterCommand(InverterState state, DateTime now)
     {
       var mode = state.Mode;
       double maxA = PVCC_Config.MaxBatteryChargePower;
@@ -616,26 +616,31 @@ namespace NetDeamon.apps.PVControl
       if (command != _inverterCommand)
         _inverterCommandIssued = now;
       _inverterCommand = command;
-      return new()
-      {
-        ["battery_power_w"] = command.BatteryPowerW,
-        ["bulk"] = command.Bulk,
-        ["charge_energy_wh"] = charge?.EnergyWh ?? 0,
-        ["charge_target_soc"] = charge?.TargetSocPercent,
-        ["charge_start"] = charge?.Start.ToISO8601(),
-        ["charge_until"] = charge?.End.ToISO8601(),
-        ["vpp_charge_limit_w"] = vppW,
-        ["seq"] = command.Seq,
-        ["issued"] = _inverterCommandIssued.ToISO8601(),
-        ["import_cap_reason"] = _importCap.Reason,
-        ["cap_kw"] = PVCC_Config.MaxGridImportW / 1000.0,
-        ["allowed_kw"] = Math.Round(_importCap.AllowedW / 1000.0, 2),
-        ["extra_loads_paused"] = _importCap.PauseExtraLoads,
-        ["headroom_w"] = _importCap.HeadroomW,
-        ["voltage_v"] = voltage,
-        ["battery_current_a"] = command.CurrentA,
-      };
+      return command;
     }
+
+    /// <summary>The command attributes of sensor.pv_control_mode (no side effects: <see cref="UpdateInverterCommand"/> first).</summary>
+    /// <param name="command">The command of this cycle.</param>
+    /// <param name="charge">The grid charge the plan runs now or next; null = none.</param>
+    private Dictionary<string, object?> InverterCommandAttributes(InverterCommand command, PlannedCharge? charge) => new()
+    {
+      ["battery_power_w"] = command.BatteryPowerW,
+      ["bulk"] = command.Bulk,
+      ["charge_energy_wh"] = charge?.EnergyWh ?? 0,
+      ["charge_target_soc"] = charge?.TargetSocPercent,
+      ["charge_start"] = charge?.Start.ToISO8601(),
+      ["charge_until"] = charge?.End.ToISO8601(),
+      ["vpp_charge_limit_w"] = _house.VppCurve.MaxW(_house.Battery.BatterySoc),
+      ["seq"] = command.Seq,
+      ["issued"] = _inverterCommandIssued.ToISO8601(),
+      ["import_cap_reason"] = _importCap.Reason,
+      ["cap_kw"] = PVCC_Config.MaxGridImportW / 1000.0,
+      ["allowed_kw"] = Math.Round(_importCap.AllowedW / 1000.0, 2),
+      ["extra_loads_paused"] = _importCap.PauseExtraLoads,
+      ["headroom_w"] = _importCap.HeadroomW,
+      ["voltage_v"] = PVCC_Config.BatteryVoltageV,
+      ["battery_current_a"] = command.CurrentA,
+    };
 
     /// <summary>The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>) — the one lookup
     /// behind sensor.pv_control_mode's charge attributes and binary_sensor.pv_control_need_to_charge_from_grid_today.</summary>
@@ -941,7 +946,7 @@ namespace NetDeamon.apps.PVControl
         _socUnavailableLogged = true;
       }
       _publishedState = new InverterState(InverterModes.normal);
-      var attributes = InverterCommandAttributes(_publishedState, now, null);
+      var attributes = InverterCommandAttributes(UpdateInverterCommand(_publishedState, now), null);
       attributes["next_charge_window_start"] = "none";
       attributes["next_charge_window_end"] = "none";
       attributes["price"] = "0";
@@ -988,11 +993,27 @@ namespace NetDeamon.apps.PVControl
       if (inverterState.Mode != _publishedState.Mode)
         _publishedStateSince = now;
       _publishedState = inverterState;
-      #region Mode
-      // The grid charge the plan runs now or next (the running slot counts: it ends after now).
+      // The grid charge the plan runs now or next (the running slot counts: it ends after now) — the one
+      // lookup behind the mode sensor's charge attributes and the need-to-charge sensor.
       var charge = PlannedGridCharge(now);
-      // One sensor for the decision and the inverter command HA applies (HA/InverterSync.yaml).
-      var attr_Mode = InverterCommandAttributes(inverterState, now, charge);
+      await PublishModeAsync(inverterState, charge, now);
+      await PublishLoadsAsync(now);
+      await ActAndPublishWarmWaterAsync(now);
+      await PublishBatteryAsync(now);
+      await PublishNeedToChargeAsync(charge, now);
+      await PublishPredictionsAsync(now);
+      await PublishPricesAsync(now);
+      await LogCostsAsync(now);
+      PVCC_Logger.LogTrace("Leave Schedule");
+    }
+
+    /// <summary>sensor.pv_control_mode — the decision and the inverter command HA applies (HA/InverterSync.yaml) — and the two switches it carries.</summary>
+    /// <param name="inverterState">The state published this cycle.</param>
+    /// <param name="charge">The grid charge the plan runs now or next; null = none.</param>
+    /// <param name="now">Current time.</param>
+    private async Task PublishModeAsync(InverterState inverterState, PlannedCharge? charge, DateTime now)
+    {
+      var attr_Mode = InverterCommandAttributes(UpdateInverterCommand(inverterState, now), charge);
       attr_Mode["next_charge_window_start"] = charge?.Start.ToISO8601() ?? "none";
       attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
       attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);
@@ -1004,9 +1025,12 @@ namespace NetDeamon.apps.PVControl
       await LearnVppCurveAsync(now);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, inverterState.ExportAllowed ? "ON" : "OFF");
-      #endregion
+    }
 
-      #region Schedulable Loads
+    /// <summary>The schedulable loads' charge_now switches and their plan attributes.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task PublishLoadsAsync(DateTime now)
+    {
       foreach (var load in _house.SchedulableLoads)
       {
         // The import cap pauses a running load on top of its plan (the plan itself stays).
@@ -1054,8 +1078,12 @@ namespace NetDeamon.apps.PVControl
         };
         await PVCC_EntityManager.SetAttributesAsync(load.ChargeNowEntity.EntityId, attr_load);
       }
-      #endregion
-      #region Warm water
+    }
+
+    /// <summary>Lets the warm-water controller act on its plan (start a one-time heating, end a boost) and publish it.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task ActAndPublishWarmWaterAsync(DateTime now)
+    {
       if (_house.WarmWater is { } warmWater)
       {
         // Not the cycle's `now`: the plan was just made (up to ~1 s later) and its current run
@@ -1064,8 +1092,12 @@ namespace NetDeamon.apps.PVControl
         await warmWater.ActAsync(DateTime.Now);
         await warmWater.PublishAsync(now);
       }
-      #endregion
-      #region Remaining battery
+    }
+
+    /// <summary>The battery sensors: remaining time, status, remaining energy.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task PublishBatteryAsync(DateTime now)
+    {
       await PVCC_EntityManager.SetStateAsync(_battery_RemainingTimeEntity.EntityId, _house.Battery.EstimatedTimeToBatteryFullOrEmpty.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingTime = new
       {
@@ -1076,8 +1108,7 @@ namespace NetDeamon.apps.PVControl
         time_on_max = (_house.SimulationState?.MaxSocDurationToday.TotalHours ?? 0).ToString(CultureInfo.InvariantCulture) + " h",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingTimeEntity.EntityId, attr_RemainingTime);
-      #endregion
-      #region Battery status
+
       await PVCC_EntityManager.SetStateAsync(_battery_StatusEntity.EntityId, _house.Battery.BatteryStatus.ToString());
       var attr_batStatus = new
       {
@@ -1089,8 +1120,7 @@ namespace NetDeamon.apps.PVControl
         current_SoC = _house.Battery.BatterySoc.ToString(CultureInfo.InvariantCulture) + "%",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_StatusEntity.EntityId, attr_batStatus);
-      #endregion
-      #region Remaining energy
+
       await PVCC_EntityManager.SetStateAsync(_battery_RemainingEnergyEntity.EntityId, _house.Battery.UsableBatteryEnergy.ToString(CultureInfo.InvariantCulture));
       var attr_RemainingEnergy = new
       {
@@ -1100,9 +1130,13 @@ namespace NetDeamon.apps.PVControl
         battery_capacity = _house.Battery.BatteryCapacity.ToString(CultureInfo.InvariantCulture) + " Wh",
       };
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
-      #endregion
-      #region NeedToCharge
-      // The same planned charge as the Mode section's attributes.
+    }
+
+    /// <summary>binary_sensor.pv_control_need_to_charge_from_grid_today: the planned grid charge (the same one as the mode sensor's) and the SoC low ahead.</summary>
+    /// <param name="charge">The grid charge the plan runs now or next; null = none.</param>
+    /// <param name="now">Current time.</param>
+    private async Task PublishNeedToChargeAsync(PlannedCharge? charge, DateTime now)
+    {
       await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, charge is not null ? "ON" : "OFF");
       var futureSoCEntries = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).ToList();
       var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.Battery.BatterySoc;
@@ -1118,8 +1152,12 @@ namespace NetDeamon.apps.PVControl
         charge_start_time = charge?.Start.ToISO8601() ?? "n/a",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
-      #endregion
-      #region Prediction
+    }
+
+    /// <summary>The prediction sensors: the SoC timeline and the midnight snapshot, charge/discharge predictions, today's and tomorrow's SoC extremes, PV and load forecasts.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task PublishPredictionsAsync(DateTime now)
+    {
       var curPredSoc = _house.Prediction_BatterySoC.TodayAndTomorrow.GetEntryAtTime(now);
       if (curPredSoc.Key != default)
       {
@@ -1189,8 +1227,7 @@ namespace NetDeamon.apps.PVControl
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_PredictedDischargeEntity.EntityId, attr_pred_charge);
       }
-      #endregion
-      #region SoC estimates
+
       var est_soc_today = _house.Prediction_BatterySoC.Today.Where(s => s.Key >= now).ToDictionary();
       var est_soc_tomorrow = _house.Prediction_BatterySoC.Tomorrow;
 
@@ -1235,8 +1272,7 @@ namespace NetDeamon.apps.PVControl
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_EstimatedMaxSoCTomorrowEntity.EntityId, attr_Max_SoC_Tomorrow);
       }
-      #endregion
-      #region charge/discharge forecasts
+
       var chargeToday = _house.Prediction_PV.Today;
       var chargeTomorrow = _house.Prediction_PV.Tomorrow;
       var dischargeToday = _house.Prediction_Load.Today;
@@ -1279,8 +1315,12 @@ namespace NetDeamon.apps.PVControl
         };
         await PVCC_EntityManager.SetAttributesAsync(_info_dischargeTomorrowEntity.EntityId, attr_dischargeTomorrow);
       }
-      #endregion
-      #region Prices
+    }
+
+    /// <summary>The price sensors: import and export price now with their breakdown and lists, the day's best prices.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task PublishPricesAsync(DateTime now)
+    {
       await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.PriceListImport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
       await PVCC_EntityManager.SetStateAsync(_activeNetworkPricePeriodEntity.EntityId, _house.Prices.ActiveNetworkPricePeriodName);
       var attr_currentImportPrice = new
@@ -1317,8 +1357,12 @@ namespace NetDeamon.apps.PVControl
         end_time = _house.Prices.PriceListImport.CheapestToday.EndTime.ToISO8601(),
       };
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
-      #endregion
-      #region cost logging
+    }
+
+    /// <summary>The cost log: one row per quarter (import/export totals and increases, the prices) in the energy costs DB.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task LogCostsAsync(DateTime now)
+    {
       if (_logEnergy && now >= _nextQuarterHour)
       {
         await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
@@ -1354,8 +1398,6 @@ namespace NetDeamon.apps.PVControl
         }
         _nextQuarterHour = now.GetNextQuarterHour();
       }
-      #endregion
-      PVCC_Logger.LogTrace("Leave Schedule");
     }
     /// <summary>Checks that the configured entities exist; errors are logged.</summary>
     /// <returns>False if a required entity is missing.</returns>

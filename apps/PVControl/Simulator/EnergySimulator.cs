@@ -485,8 +485,10 @@ public static class EnergySimulator
 
   // ── Mode decision ────────────────────────────────────────────────────────────────────────
   /// <summary>
-  /// Inverter mode of a slot. Order: negative import price → opportunistic discharge → user force
-  /// charge → NeedToCharge → normal; a negative export price only disables export.
+  /// Inverter mode of a slot. Order: negative import price (<see cref="NegativeImportPriceMode"/>) →
+  /// opportunistic discharge (<see cref="OpportunisticDischargeMode"/>) → daily target charge
+  /// (<see cref="DailyTargetChargeMode"/>) → NeedToCharge (<see cref="NeedToChargeMode"/>) → normal;
+  /// a negative export price only disables export.
   /// </summary>
   /// <param name="currentMode">Mode of the previous slot (hysteresis).</param>
   /// <param name="need">Charge need of this slot.</param>
@@ -506,35 +508,20 @@ public static class EnergySimulator
     float importPriceNow = input.ImportPrices.GetPrice(now);
     float exportPriceNow = input.ExportPrices.GetPrice(now);
 
-    // ── Negative import price ─────────────────────────────────────────────────────────────
-    // Grid is paying us to consume electricity → fill battery as fast as possible.
-    // But if a cheaper (more negative) import window is still coming today, defer grid
-    // charging to that window. Stay normal with battery charging and export both disabled
-    // so PV surplus is curtailed rather than exported (export price is also typically
-    // negative), preserving battery room for the cheapest grid energy.
-    // Once at or past the cheapest window: use force_charge_grid_only to fill the battery.
-    // If the battery is already ≥ 95 %: stay normal with export disabled (not grid_only) to
-    // avoid exporting PV surplus at negative export prices.
-    if (importPriceNow < 0)
-    {
-      bool cheaperImportComingToday = input.ImportPrices
-        .Any(p => p.StartTime.Date == now.Date && p.StartTime > now && p.Price < importPriceNow);
-      if (cheaperImportComingToday)
-        return new InverterState(InverterModes.normal, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false, exportAllowed: false);
-
-      int pvPowerW = Energy.SlotW(pvWhSlot);
-      var mode = (simulatedSoc <= 95 || pvPowerW < 100)
-        ? InverterModes.force_charge_grid_only
-        : InverterModes.normal; // avoid exporting PV at negative export prices
-      return new InverterState(mode, ForceChargeReasons.ImportPriceNegative, exportAllowed: false);
-    }
+    if (NegativeImportPriceMode(input, now, simulatedSoc, pvWhSlot, importPriceNow) is { } negativePrice)
+      return negativePrice;
 
     // ── Negative export price ─────────────────────────────────────────────────────────────
     // Grid charges us for feeding in → suppress export only; the charge/discharge decision
     // below still runs on its own merits (see comment above the function).
     bool exportAllowed = exportPriceNow >= 0;
 
-    var decided = DecideChargeDischargeMode();
+    // The charge/discharge decision, independent of whether export is currently allowed: the first
+    // rule that has something to say wins, else the inverter manages PV and battery itself.
+    var decided = OpportunisticDischargeMode(currentMode, need, input, now, simulatedSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot, exportPriceNow)
+      ?? DailyTargetChargeMode(currentMode, input, now, simulatedSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot)
+      ?? NeedToChargeMode(currentMode, need, input, now, endSlot, simulatedSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot, importPriceNow)
+      ?? new InverterState(InverterModes.normal, ForceChargeReasons.None);
     if (!exportAllowed)
       decided.ExportAllowed = false;
     // If negative import prices are coming later today, disable battery charging now so we
@@ -552,17 +539,57 @@ public static class EnergySimulator
       decided.ModeReason = ForceChargeReasons.RoomForNegativeExport;
     }
     return decided;
+  }
 
-    // ── Charge/discharge decision (independent of whether export is currently allowed) ────
-    InverterState DecideChargeDischargeMode()
-    {
+  /// <summary>
+  /// Negative import price: the grid pays for consuming → fill the battery as fast as possible
+  /// (force_charge_grid_only, PV disconnected). If a cheaper (more negative) window is still coming
+  /// today, wait for it in normal mode with battery charging and export disabled (PV surplus is
+  /// curtailed rather than exported at the typically negative export price, keeping room for the
+  /// cheapest grid energy). A battery over 95 % with PV stays normal with export disabled.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="importPriceNow">Import price now, €/kWh.</param>
+  /// <returns>The mode; null unless the import price is negative.</returns>
+  private static InverterState? NegativeImportPriceMode(SimulationInput input, DateTime now, int simulatedSoc, int pvWhSlot, float importPriceNow)
+  {
+    if (importPriceNow >= 0) return null;
+    bool cheaperImportComingToday = input.ImportPrices
+      .Any(p => p.StartTime.Date == now.Date && p.StartTime > now && p.Price < importPriceNow);
+    if (cheaperImportComingToday)
+      return new InverterState(InverterModes.normal, ForceChargeReasons.ImportPriceNegative, batteryChargeEnable: false, exportAllowed: false);
 
+    int pvPowerW = Energy.SlotW(pvWhSlot);
+    var mode = (simulatedSoc <= 95 || pvPowerW < 100)
+      ? InverterModes.force_charge_grid_only
+      : InverterModes.normal; // avoid exporting PV at negative export prices
+    return new InverterState(mode, ForceChargeReasons.ImportPriceNegative, exportAllowed: false);
+  }
+
+  /// <summary>
+  /// Opportunistic discharge (user switch): sell battery energy at the day's export price peaks when
+  /// the battery still reaches 100 % later via PV and stays above its floor; feed PV surplus in
+  /// while the battery would sit full anyway, leaving feed-in priority for the cheapest PV window
+  /// that refills it.
+  /// </summary>
+  /// <param name="currentMode">Mode of the previous slot (hysteresis).</param>
+  /// <param name="need">Charge need of this slot.</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  /// <param name="exportPriceNow">Export price now, €/kWh.</param>
+  /// <returns>The mode; null if the rule has nothing to say (off, or no case applies).</returns>
+  private static InverterState? OpportunisticDischargeMode(InverterState currentMode, NeedToChargeResult need, SimulationInput input,
+    DateTime now, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot, float exportPriceNow)
+  {
     float exportPriceNextHour = input.ExportPrices.GetPrice(now.AddHours(1));
 
-    // ── Opportunistic discharge ───────────────────────────────────────────────────────────
-    // When enabled, the system can earn money by selling battery energy at peak prices,
-    // provided we are confident the battery will still reach 100 % later (via PV) and
-    // stay above the minimum SoC floor.
     if (input.OpportunisticDischarge)
     {
       // Hysteresis: once in feedin_priority we stay a bit longer before switching back
@@ -625,20 +652,32 @@ public static class EnergySimulator
           return new InverterState(InverterModes.normal, ForceChargeReasons.None);
       }
     }
+    return null;
+  }
 
-    // ── Daily target charge (user switch) ─────────────────────────────────────────────────
-    // Reach ForceChargeTargetSoC by the end of the day's PV, buying only what PV won't deliver,
-    // in the cheapest quarters under the price limit (DailyTargetChargeMode).
-    if (DailyTargetChargeMode(currentMode, input, now, simulatedSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot) is { } daily)
-      return daily;
-
-    // ── NeedToCharge → force charge in the cheapest quarters before the deadline ──────────
-    // If the base SoC forecast predicts we will go below minimum and PV won't rescue us,
-    // we must buy electricity. The charge is sized to the deficit (DeficitChargeTargetSoc) and
-    // placed in the N cheapest quarters of the search window, N = quarters needed at the max
-    // charge rate. Waiting for the single cheapest quarter and charging forward from it instead
-    // spilled a larger deficit into the expensive quarters after a cheap band, while equally
-    // cheap quarters before that cheapest one went unused.
+  /// <summary>
+  /// NeedToCharge: the base SoC forecast reaches the floor before PV rescues it, so electricity has
+  /// to be bought. The charge is sized to the deficit (<see cref="DeficitChargeTargetSoc"/>) and placed
+  /// in the N cheapest quarters of the search window, N = quarters needed at the charge rate the load
+  /// leaves (waiting for the single cheapest quarter and charging forward from it spilled a larger
+  /// deficit into the expensive quarters after a cheap band, while equally cheap quarters before it
+  /// went unused). Until the window the battery is held at the floor with grid_only while PV doesn't
+  /// cover the load.
+  /// </summary>
+  /// <param name="currentMode">Mode of the previous slot (hysteresis).</param>
+  /// <param name="need">Charge need of this slot.</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="endSlot">End of the simulation.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  /// <param name="importPriceNow">Import price now, €/kWh.</param>
+  /// <returns>force_charge or grid_only; null if no charge is needed or nothing applies in this slot.</returns>
+  private static InverterState? NeedToChargeMode(InverterState currentMode, NeedToChargeResult need, SimulationInput input,
+    DateTime now, DateTime endSlot, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot, float importPriceNow)
+  {
     if (need.NeedToCharge)
     {
       // Choose the search window for the cheapest charge quarters.
@@ -731,11 +770,7 @@ public static class EnergySimulator
         return new InverterState(InverterModes.grid_only, floorReason);
       }
     }
-
-    // ── Default ───────────────────────────────────────────────────────────────────────────
-    // None of the special conditions apply → let the inverter manage PV/battery normally.
-    return new InverterState(InverterModes.normal, ForceChargeReasons.None);
-    }
+    return null;
   }
 
   // ── Energy flow calculation ───────────────────────────────────────────────────────────────

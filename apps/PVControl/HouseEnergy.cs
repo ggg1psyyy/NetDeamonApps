@@ -550,28 +550,173 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>The load decision: gates (off, target, emergency, latch), then the mode ladder Optimal → Priority → PriorityPlus; sets ChargeNow, reason, sessions and end.</summary>
+    /// <summary>The load decision (<see cref="LoadWindowSearch"/>): gates (off, target, emergency, latch), then the mode ladder Optimal → Priority → PriorityPlus; sets ChargeNow, reason, sessions and end.</summary>
     /// <param name="load">The load.</param>
     /// <param name="baseInput">Simulation input without this load.</param>
     /// <param name="baseResult">Simulation of <paramref name="baseInput"/>.</param>
-    private void DecideLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
-    {
-      var now = DateTime.Now;
-      var currentSlot = now.RoundToNearestQuarterHour();
-      bool wasActive = load.ChargeNow;
-      // Last cycle's final result. Rulesets lower in the climb may SetResult before the latch or
-      // the PriorityPlus scan run (e.g. Optimal's "scheduled tomorrow" outside PV hours), so
-      // those must read these copies, not load.ExtraLoads/PredictedEnd as they are by then.
-      var previousLoads = load.ExtraLoads;
-      var previousEnd = load.PredictedEnd;
-      load.PlannedSessions = [];
-      load.PriceScan = "n/a";
+    private void DecideLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult) =>
+      new LoadWindowSearch(this, load, baseInput, baseResult).Run();
 
-      // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
-      // ladder's generic "No valid window" catch-all at the very end: once set, a ruleset's own
-      // (possibly deferred, possibly more specific) result stands as final, and the generic
-      // catch-all is skipped rather than overwriting it.
-      bool decided = false;
+    /// <summary>
+    /// One load's window search of one cycle: the gates, then the rulesets Optimal → Priority → PriorityPlus
+    /// (<see cref="Climb"/>). What the rulesets share — the load, the base simulation, the energy still needed, the
+    /// window bounds, last cycle's result and whether anything has been decided — are its fields; the simulation
+    /// is the oracle (<see cref="RunSimFrom"/>), and <see cref="SetResult"/> the one way to decide.
+    /// </summary>
+    private sealed class LoadWindowSearch
+    {
+      readonly HouseEnergy _house;
+      readonly SchedulableLoadRuntime load;
+      readonly SimulationInput baseInput;
+      readonly SimulationResult baseResult;
+      DateTime now, currentSlot, farFuture, todayMax, tomorrowMax, priceHorizonEnd;
+      DateTime? previousEnd, readyBy;
+      bool wasActive, decided;
+      List<ExtraLoad> previousLoads = [];
+      int chargeRateW, energyNeededWh, durationMinutes;
+      ExtraLoad session = null!;
+
+      public LoadWindowSearch(HouseEnergy house, SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
+      {
+        _house = house;
+        this.load = load;
+        this.baseInput = baseInput;
+        this.baseResult = baseResult;
+      }
+
+      /// <summary>Decides the load: the gates, the ladder, the follow-up preview.</summary>
+      public void Run()
+      {
+        now = DateTime.Now;
+        currentSlot = now.RoundToNearestQuarterHour();
+        wasActive = load.ChargeNow;
+        // Last cycle's final result. Rulesets lower in the climb may SetResult before the latch or
+        // the PriorityPlus scan run (e.g. Optimal's "scheduled tomorrow" outside PV hours), so
+        // those must read these copies, not load.ExtraLoads/PredictedEnd as they are by then.
+        previousLoads = load.ExtraLoads;
+        previousEnd = load.PredictedEnd;
+        load.PlannedSessions = [];
+        load.PriceScan = "n/a";
+
+        // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
+        // ladder's generic "No valid window" catch-all at the very end: once set, a ruleset's own
+        // (possibly deferred, possibly more specific) result stands as final, and the generic
+        // catch-all is skipped rather than overwriting it.
+        decided = false;
+
+
+        if (load.Mode == LoadSchedulingMode.Off)
+        { SetResult([], false, "Off", null); return; }
+
+        if (load.Config.AvailabilityEntity is not null &&
+            (!load.Config.AvailabilityEntity.TryGetStateValue(out bool available) || !available))
+        { SetResult([], false, $"{load.Config.Name} not available (not present/plugged in)", null); return; }
+
+        if (load.Config.CurrentLevelEntity is null || load.EnergyPerLevelKwh <= 0)
+        { SetResult([], false, "CurrentLevelEntity or energy per level not configured", null); return; }
+
+        if (load.CurrentLevel >= load.TargetLevel)
+        { SetResult([], false, $"Target reached ({load.CurrentLevel:F0}{load.Config.LevelUnit} ≥ {load.TargetLevel:F0}{load.Config.LevelUnit})", null); return; }
+
+        chargeRateW = load.EffectivePowerW;
+        if (chargeRateW <= 0)
+        { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerW config", null); return; }
+
+        energyNeededWh = load.EnergyNeededWh;
+        durationMinutes = load.DurationMinutes; // chargeRateW = load.EffectivePowerW
+        // The load as a session template: SetResult/simulations take session.Between(start, end).
+        session = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, PowerW = chargeRateW };
+
+        // Emergency: always charge immediately, no simulation check.
+        if (load.Mode == LoadSchedulingMode.Emergency)
+        {
+          var endTime = EndFor(now);
+          SetResult(
+            [new ExtraLoad { Name = load.Config.Name, Priority = int.MaxValue, StartTime = now, EndTime = endTime, PowerW = chargeRateW }],
+            true,
+            $"Emergency ({load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
+            endTime);
+          return;
+        }
+
+        // Binary-search for the MAXIMUM session that satisfies each step's conditions.
+        // All condition predicates are monotone: a shorter session is never harder to satisfy,
+        // so the search returns the longest session that still passes — e.g. for Optimal this is
+        // "charge the EV as long as possible while the house battery still reaches ~100% via PV".
+        //
+        // Every step's session end is capped by tomorrowMax (not todayMax — computed below only
+        // for the early "no window at all" bail-out): each mode's own predicate (WillReachMaxSocToday,
+        // IsOvernightMinSocOk, …) is what actually constrains how far a session may run, letting a
+        // session that already satisfies its mode's requirement extend into the evening/overnight
+        // — e.g. Optimal draining the battery after reaching 100% via PV, or Priority/PriorityPlus
+        // continuing to drain past sunset down to minSoC.
+
+
+
+
+        // Today's and tomorrow's window ends (capped to full session duration if shorter).
+        // Fall back to far-future when no PV is forecast (null) so the session is only
+        // bounded by durationMinutes — same behaviour as the old PVWindows fallback.
+        var farFuture   = currentSlot.AddDays(2);
+        var todayMax    = Min(EndFor(currentSlot), baseResult.LastRelevantPVEnergyToday    ?? farFuture);
+        tomorrowMax = Min(EndFor(currentSlot), baseResult.FirstRelevantPVEnergyTomorrow ?? farFuture);
+
+        if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
+        { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
+
+        // The published import-price horizon (today + tomorrow once published) — bounds
+        // PriorityPlus's bonus ruleset's forward scan below: once prices run out there's nothing
+        // left to evaluate for a price-based decision. Published only: the simulation's prices
+        // beyond it are estimates, and a session shouldn't be committed to an estimated price.
+        priceHorizonEnd = baseInput.PriceHorizonEnd(currentSlot);
+
+        // Optional "ready by" deadline — only PriorityPlus's price scan uses it (it may then exceed
+        // the price threshold to finish in time); Optimal/Priority keep their own rules.
+        readyBy = load.ReadyByTime is { } rb ? TimeRange.NextOccurrence(rb, now) : null;
+
+        // ── Numbered-mode ladder, climbed from the bottom ───────────────────────────────────────
+        // Optimal/Priority/PriorityPlus (LoadSchedulingMode = 10/20/30) are each a complete,
+        // self-contained ruleset. Starting from the selected mode's own ruleset, the function
+        // runs Optimal's ruleset first (every mode is >= Optimal); if it returns ChargeNow=true,
+        // done — nothing else matters. If it returns false, and the selected mode is higher than
+        // Optimal, Priority's complete ruleset gets its turn, same logic. If that also returns
+        // false and the mode is PriorityPlus, PriorityPlus's one additional (bonus) ruleset gets
+        // the final say. The gaps in the mode numbering are deliberate room for a future ruleset
+        // to slot in without touching this structure.
+        //
+        // Optimal's ruleset doesn't decide anything "about Optimal mode" — it just answers "would
+        // PV alone cover this," which is equally meaningful regardless of which outer mode
+        // selected it, so it needs no change to run for Priority/PriorityPlus too: only its outer
+        // mode-equality check (now provided by the climb below) is gone, its internal SoC-
+        // threshold logic is untouched.
+        //
+        // Each ruleset function returns true once it has produced a result via SetResult
+        // (whether that result is ChargeNow=true or a definite/deferred "no"), and false if it
+        // genuinely decided nothing at all. The latter can only happen for whichever ruleset ends
+        // up being the mode's own ceiling (nothing above it to climb to), and matches today's
+        // existing fallthrough behaviour exactly: it reaches the same generic "No valid window"
+        // fallback at the very bottom that every mode already shares.
+
+
+
+
+
+        // `load.ChargeNow` otherwise still holds its STALE value from the previous cycle here —
+        // e.g. left over as true from Emergency mode, or from before a manual mode switch — until
+        // some ruleset below explicitly calls SetResult. Reset it so a ruleset that falls through
+        // without deciding anything (common — e.g. Optimal's conditions just don't match) is never
+        // misread by the "if (load.ChargeNow) return;" checks below as having just decided to
+        // charge, which would stop the climb on a leftover value instead of an actual decision.
+        load.ChargeNow = false;
+
+        Climb();
+
+        // Preview of the sessions after this one (e.g. a PV session ending at dusk, then a cheap
+        // window after midnight). Only PriorityPlus can price-plan ahead: Optimal/Priority decide
+        // on PV and battery state as it is at the time. Never fed into the control simulation.
+        if (load.Mode == LoadSchedulingMode.PriorityPlus)
+          load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd, readyBy);
+      }
 
       void SetResult(List<ExtraLoad> extraLoads, bool chargeNow, string reason, DateTime? end)
       {
@@ -582,59 +727,15 @@ namespace NetDeamon.apps.PVControl
         load.PredictedEnd = end;
       }
 
-      if (load.Mode == LoadSchedulingMode.Off)
-      { SetResult([], false, "Off", null); return; }
-
-      if (load.Config.AvailabilityEntity is not null &&
-          (!load.Config.AvailabilityEntity.TryGetStateValue(out bool available) || !available))
-      { SetResult([], false, $"{load.Config.Name} not available (not present/plugged in)", null); return; }
-
-      if (load.Config.CurrentLevelEntity is null || load.EnergyPerLevelKwh <= 0)
-      { SetResult([], false, "CurrentLevelEntity or energy per level not configured", null); return; }
-
-      if (load.CurrentLevel >= load.TargetLevel)
-      { SetResult([], false, $"Target reached ({load.CurrentLevel:F0}{load.Config.LevelUnit} ≥ {load.TargetLevel:F0}{load.Config.LevelUnit})", null); return; }
-
-      int chargeRateW = load.EffectivePowerW;
-      if (chargeRateW <= 0)
-      { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerW config", null); return; }
-
-      int energyNeededWh = load.EnergyNeededWh;
-      int durationMinutes = load.DurationMinutes; // chargeRateW = load.EffectivePowerW
-      // The load as a session template: SetResult/simulations take session.Between(start, end).
-      var session = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, PowerW = chargeRateW };
       // End of a session from `start` that delivers the energy still needed — the one conversion from
       // energy to window (SessionPlanner.EndForEnergy): counted from now in the running slot.
       DateTime EndFor(DateTime start) => SessionPlanner.EndForEnergy(start, energyNeededWh, chargeRateW, now);
-
-      // Emergency: always charge immediately, no simulation check.
-      if (load.Mode == LoadSchedulingMode.Emergency)
-      {
-        var endTime = EndFor(now);
-        SetResult(
-          [new ExtraLoad { Name = load.Config.Name, Priority = int.MaxValue, StartTime = now, EndTime = endTime, PowerW = chargeRateW }],
-          true,
-          $"Emergency ({load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit})",
-          endTime);
-        return;
-      }
-
-      // Binary-search for the MAXIMUM session that satisfies each step's conditions.
-      // All condition predicates are monotone: a shorter session is never harder to satisfy,
-      // so the search returns the longest session that still passes — e.g. for Optimal this is
-      // "charge the EV as long as possible while the house battery still reaches ~100% via PV".
-      //
-      // Every step's session end is capped by tomorrowMax (not todayMax — computed below only
-      // for the early "no window at all" bail-out): each mode's own predicate (WillReachMaxSocToday,
-      // IsOvernightMinSocOk, …) is what actually constrains how far a session may run, letting a
-      // session that already satisfies its mode's requirement extend into the evening/overnight
-      // — e.g. Optimal draining the battery after reaching 100% via PV, or Priority/PriorityPlus
-      // continuing to drain past sunset down to minSoC.
 
       // Helpers — all capture the local scope (currentSlot, chargeRateW, load, baseInput, …)
       // RunSim returns a full SimulationResult so predicates can use its derived properties
       // (WillReachMaxSocToday, IsOvernightMinSocOk, HasNewGridVs, IsGridCheapVs) directly.
       SimulationResult RunSimFrom(DateTime start, DateTime end) => baseInput.SimulateWith(session.Between(start, end));
+
       SimulationResult RunSim(DateTime end) => RunSimFrom(currentSlot, end);
 
       // True when a session from `start` to `end` is long enough to avoid the min-window
@@ -658,49 +759,6 @@ namespace NetDeamon.apps.PVControl
         var end = SessionPlanner.FindMaxSessionEnd(currentSlot, maxEnd, RunSim, predicate);
         return end is not null && MeetsMinWindow(currentSlot, end.Value) ? end : null;
       }
-
-      // Today's and tomorrow's window ends (capped to full session duration if shorter).
-      // Fall back to far-future when no PV is forecast (null) so the session is only
-      // bounded by durationMinutes — same behaviour as the old PVWindows fallback.
-      var farFuture   = currentSlot.AddDays(2);
-      var todayMax    = Min(EndFor(currentSlot), baseResult.LastRelevantPVEnergyToday    ?? farFuture);
-      var tomorrowMax = Min(EndFor(currentSlot), baseResult.FirstRelevantPVEnergyTomorrow ?? farFuture);
-
-      if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
-      { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
-
-      // The published import-price horizon (today + tomorrow once published) — bounds
-      // PriorityPlus's bonus ruleset's forward scan below: once prices run out there's nothing
-      // left to evaluate for a price-based decision. Published only: the simulation's prices
-      // beyond it are estimates, and a session shouldn't be committed to an estimated price.
-      var priceHorizonEnd = baseInput.PriceHorizonEnd(currentSlot);
-
-      // Optional "ready by" deadline — only PriorityPlus's price scan uses it (it may then exceed
-      // the price threshold to finish in time); Optimal/Priority keep their own rules.
-      DateTime? readyBy = load.ReadyByTime is { } rb ? TimeRange.NextOccurrence(rb, now) : null;
-
-      // ── Numbered-mode ladder, climbed from the bottom ───────────────────────────────────────
-      // Optimal/Priority/PriorityPlus (LoadSchedulingMode = 10/20/30) are each a complete,
-      // self-contained ruleset. Starting from the selected mode's own ruleset, the function
-      // runs Optimal's ruleset first (every mode is >= Optimal); if it returns ChargeNow=true,
-      // done — nothing else matters. If it returns false, and the selected mode is higher than
-      // Optimal, Priority's complete ruleset gets its turn, same logic. If that also returns
-      // false and the mode is PriorityPlus, PriorityPlus's one additional (bonus) ruleset gets
-      // the final say. The gaps in the mode numbering are deliberate room for a future ruleset
-      // to slot in without touching this structure.
-      //
-      // Optimal's ruleset doesn't decide anything "about Optimal mode" — it just answers "would
-      // PV alone cover this," which is equally meaningful regardless of which outer mode
-      // selected it, so it needs no change to run for Priority/PriorityPlus too: only its outer
-      // mode-equality check (now provided by the climb below) is gone, its internal SoC-
-      // threshold logic is untouched.
-      //
-      // Each ruleset function returns true once it has produced a result via SetResult
-      // (whether that result is ChargeNow=true or a definite/deferred "no"), and false if it
-      // genuinely decided nothing at all. The latter can only happen for whichever ruleset ends
-      // up being the mode's own ceiling (nothing above it to climb to), and matches today's
-      // existing fallthrough behaviour exactly: it reaches the same generic "No valid window"
-      // fallback at the very bottom that every mode already shares.
 
       // Shared by both rulesets below — fires regardless of which one's own blocks led here,
       // exactly where it always has. The simulation re-runs every 15 s and at borderline SoC
@@ -787,9 +845,9 @@ namespace NetDeamon.apps.PVControl
           return;
         }
 
-        int preferred  = Battery.PreferredMinimalSoC;
-        int stopFloor  = Math.Max(preferred - 10, Battery.AbsoluteMinimalSoC + 5);
-        int currentSoC = Battery.BatterySoc;
+        int preferred  = _house.Battery.PreferredMinimalSoC;
+        int stopFloor  = Math.Max(preferred - 10, _house.Battery.AbsoluteMinimalSoC + 5);
+        int currentSoC = _house.Battery.BatterySoc;
 
         if (!wasActive && currentSoC < preferred)
         {
@@ -844,7 +902,7 @@ namespace NetDeamon.apps.PVControl
         if (mainEnd is not null)
         {
           SetResult([session.Between(currentSlot, mainEnd.Value)],
-            true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", mainEnd);
+            true, $"Charging (Optimal {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)", mainEnd);
         }
       }
 
@@ -912,7 +970,7 @@ namespace NetDeamon.apps.PVControl
                   SetResult(
                     [session.Between(currentSlot, end)],
                     true,
-                    $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)",
+                    $"Charging ({load.Mode} {load.Config.Name}: last call before sunrise, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)",
                     end);
                 }
                 else
@@ -950,11 +1008,11 @@ namespace NetDeamon.apps.PVControl
         // again. PV surplus that already covers the charge rate bypasses the wait since it
         // won't draw the battery down further.
         {
-          int socFloor = Battery.EnforcePreferredSoC
-            ? Battery.PreferredMinimalSoC
-            : Battery.AbsoluteMinimalSoC;
-          int currentSoC = Battery.BatterySoc;
-          int netPvW = CurrentAveragePVPower - CurrentAverageHouseLoad;
+          int socFloor = _house.Battery.EnforcePreferredSoC
+            ? _house.Battery.PreferredMinimalSoC
+            : _house.Battery.AbsoluteMinimalSoC;
+          int currentSoC = _house.Battery.BatterySoc;
+          int netPvW = _house.CurrentAveragePVPower - _house.CurrentAverageHouseLoad;
 
           if (!LoadSchedulingDecision.PrioritySoCGateOk(wasActive, currentSoC, socFloor, netPvW, chargeRateW, PrioritySoCHysteresisPct, PvBypassMinSocBufferPct))
           {
@@ -1042,7 +1100,7 @@ namespace NetDeamon.apps.PVControl
         if (stepEnd is not null)
         {
           SetResult([session.Between(currentSlot, stepEnd.Value)],
-            true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", stepEnd);
+            true, $"Charging ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)", stepEnd);
         }
       }
 
@@ -1084,18 +1142,10 @@ namespace NetDeamon.apps.PVControl
           [Supplied(p.Start, end)],
           startNow,
           startNow
-            ? $"Charging (PriorityPlus {load.Config.Name}: {why}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)"
+            ? $"Charging (PriorityPlus {load.Config.Name}: {why}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)"
             : $"Scheduled ~{p.Start:HH:mm} (PriorityPlus {load.Config.Name}: {why})",
           end);
       }
-
-      // `load.ChargeNow` otherwise still holds its STALE value from the previous cycle here —
-      // e.g. left over as true from Emergency mode, or from before a manual mode switch — until
-      // some ruleset below explicitly calls SetResult. Reset it so a ruleset that falls through
-      // without deciding anything (common — e.g. Optimal's conditions just don't match) is never
-      // misread by the "if (load.ChargeNow) return;" checks below as having just decided to
-      // charge, which would stop the climb on a leftover value instead of an actual decision.
-      load.ChargeNow = false;
 
       // The climb. For the currently selected mode, each tier at or below its number gets a
       // turn in ascending order. ChargeNow == true stops immediately — nothing higher matters
@@ -1124,15 +1174,8 @@ namespace NetDeamon.apps.PVControl
         }
 
         if (!decided)
-          SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={Battery.BatterySoc}%)", null);
+          SetResult([], false, $"No valid window ({load.Mode} {load.Config.Name}: {load.CurrentLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)", null);
       }
-      Climb();
-
-      // Preview of the sessions after this one (e.g. a PV session ending at dusk, then a cheap
-      // window after midnight). Only PriorityPlus can price-plan ahead: Optimal/Priority decide
-      // on PV and battery state as it is at the time. Never fed into the control simulation.
-      if (load.Mode == LoadSchedulingMode.PriorityPlus)
-        load.PlannedSessions = SessionPlanner.PlanFollowUpSessions(baseInput, load.ExtraLoads, energyNeededWh, priceHorizonEnd, readyBy);
     }
 
     /// <summary>Latest start before a fixed end whose simulation passes a predicate; a linear scan backward (the predicate isn't monotone: grid charging jumps between price windows).</summary>

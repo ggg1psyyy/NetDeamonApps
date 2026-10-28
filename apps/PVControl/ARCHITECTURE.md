@@ -287,7 +287,10 @@ Normal Mode. After a real inverter restart the reconciler re-applies the current
 The bug-fix kick (a 15-s `force_discharge` when normal mode imports 50–300 W for ~75 s) stays; it
 didn't fire in those 11 days either, but it's cheap and harmless on the VPP path.
 
-After RunSimulation, `PVControl.ScheduledOperationsCore` lets the warm-water controller act on
+After RunSimulation, `PVControl.ScheduledOperationsCore` publishes the cycle in one method per
+sensor group (`PublishModeAsync` — the command is updated once, `UpdateInverterCommand`, and its
+attributes built without side effects —, loads, warm water, battery, need-to-charge, predictions,
+prices, the cost log) and lets the warm-water controller act on
 its plan (`ActAsync`: start a one-time heating, end a boost) and publish it.
 
 **Battery SoC dropouts.** `BatteryState.BatterySoc` keeps the last good reading while the SoC
@@ -361,6 +364,12 @@ room for a future mode to slot in between without renumbering anything else. `Of
 are unrelated, independent gates and don't need to fit this scheme.
 
 ### FindLoadWindow logic
+
+`FindLoadWindow` runs one `LoadWindowSearch` per load and cycle (a nested class of `HouseEnergy`):
+what the rulesets share — the load, the base simulation, the energy still needed, the window
+bounds, last cycle's result, whether anything has been decided — are its fields, each ruleset is a
+method, `SetResult` the one way to decide. Until the review 2026-10-28 this was one 580-line
+method with the rulesets as local functions over captured locals.
 
 Off/target-reached/Emergency are unconditional short-circuits (skip / skip / ChargeNow=true, no
 simulation check).
