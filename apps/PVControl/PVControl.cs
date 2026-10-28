@@ -591,18 +591,19 @@ namespace NetDeamon.apps.PVControl
     /// The inverter command for sensor.pv_control_mode's attributes: the battery power (W, + charges,
     /// − discharges), whether a grid charge runs on the full-power path (<c>bulk</c>), a version <c>seq</c>
     /// that grows with every change, and the planned charge (energy, target SoC, end). HA applies it
-    /// (script.pv_control_apply_mode) and a reconciler keeps the inverter in it. The power uses the
-    /// nominal voltage and the hardware maximum unless the import cap limits below what the path charges
-    /// — so it changes only when the cap really steps in, not with every voltage step.
+    /// (script.pv_control_apply_mode) and a reconciler keeps the inverter in it. The power is the hardware
+    /// maximum, or the import cap's limit while it throttles below what the path charges, at the measured
+    /// battery voltage — taken when the command changes, not with every voltage step.
     /// </summary>
     /// <param name="state">Mode published this cycle (its <see cref="InverterState.Bulk"/> as planned).</param>
     /// <param name="now">Current time.</param>
+    /// <param name="charge">The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>); null = none.</param>
     /// <returns>The command's attributes.</returns>
-    private Dictionary<string, object?> InverterCommandAttributes(InverterState state, DateTime now)
+    private Dictionary<string, object?> InverterCommandAttributes(InverterState state, DateTime now, PlannedCharge? charge)
     {
       var mode = state.Mode;
       double maxA = PVCC_Config.MaxBatteryChargePower;
-      int voltage = PVCC_Config.BatteryNominalVoltageV;
+      int voltage = PVCC_Config.BatteryVoltageV;
       bool gridCharging = mode is InverterModes.force_charge or InverterModes.force_charge_grid_only;
       double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, _importCap.ChargeLimitA, maxA, gridCharging);
       if (limitA != _chargeLimitA && gridCharging)
@@ -614,12 +615,10 @@ namespace NetDeamon.apps.PVControl
       double pathW = InverterCommand.BulkFor(mode, state.Bulk, forced, throttled: false) ? maxA * voltage : Math.Min(maxA * voltage, vppW);
       _chargeThrottled = gridCharging && limitA * voltage < pathW;
       bool bulk = InverterCommand.BulkFor(mode, state.Bulk, forced, _chargeThrottled);
-      var command = InverterCommand.Next(_inverterCommand, mode,
-        InverterCommand.PowerFor(mode, _chargeThrottled ? limitA : maxA, maxA, voltage), bulk, _restoredCommandSeq);
+      var command = InverterCommand.Next(_inverterCommand, mode, _chargeThrottled ? limitA : maxA, bulk, voltage, _restoredCommandSeq);
       if (command != _inverterCommand)
         _inverterCommandIssued = now;
       _inverterCommand = command;
-      var charge = InverterCommand.NextCharge(_house.SimulationTimeline, now, _house.Battery.BatteryCapacity);
       return new()
       {
         ["battery_power_w"] = command.BatteryPowerW,
@@ -637,8 +636,15 @@ namespace NetDeamon.apps.PVControl
         ["extra_loads_paused"] = _importCap.PauseExtraLoads,
         ["headroom_w"] = _importCap.HeadroomW,
         ["voltage_v"] = voltage,
+        ["battery_current_a"] = command.CurrentA,
       };
     }
+
+    /// <summary>The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>) — the one lookup
+    /// behind sensor.pv_control_mode's charge attributes and binary_sensor.pv_control_need_to_charge_from_grid_today.</summary>
+    /// <param name="now">Current time.</param>
+    private PlannedCharge? PlannedGridCharge(DateTime now) =>
+      InverterCommand.NextCharge(_house.SimulationTimeline, now, _house.Battery.BatteryCapacity);
 
     /// <summary>
     /// Learns the VPP charge curve (<see cref="Managers.VppChargeCurve"/>) from a remote-controlled grid
@@ -677,11 +683,20 @@ namespace NetDeamon.apps.PVControl
         _house.VppCurve.Restore(b.GetString());
     }
 
-    /// <summary>Continues the command version after a restart (the HA side compares it with the version it applied).</summary>
-    private void RestoreInverterCommandSeq()
+    /// <summary>Restores the command published before a restart (<see cref="InverterCommand.FromPublished"/>): an unchanged
+    /// command keeps its version, a changed one counts on from it (the HA side compares it with the version it applied).</summary>
+    private void RestoreInverterCommand()
     {
-      if (_modeEntity.TryGetJsonAttribute("seq", out System.Text.Json.JsonElement seq) && seq.TryGetInt32(out int value))
-        _restoredCommandSeq = value;
+      if (!(_modeEntity.TryGetJsonAttribute("seq", out System.Text.Json.JsonElement seq) && seq.TryGetInt32(out int value)))
+        return;
+      _restoredCommandSeq = value;
+      _inverterCommand = InverterCommand.FromPublished(_modeEntity.State,
+        _modeEntity.TryGetJsonAttribute("battery_power_w", out var p) && p.TryGetInt32(out int powerW) ? powerW : null,
+        _modeEntity.TryGetJsonAttribute("bulk", out var b) && b.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False ? b.GetBoolean() : null,
+        value, PVCC_Config.BatteryVoltageV);
+      _inverterCommandIssued = _modeEntity.TryGetJsonAttribute("issued", out var issued) && issued.ValueKind == System.Text.Json.JsonValueKind.String
+        && DateTimeOffset.TryParse(issued.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
+        ? at.LocalDateTime : DateTime.Now;
     }
 
     /// <summary>Restores the health issues that counted before a restart (<see cref="HealthMonitor.Restore"/>) from the sensor's <c>issues</c>.</summary>
@@ -749,7 +764,12 @@ namespace NetDeamon.apps.PVControl
     /// <param name="now">Current time.</param>
     private async Task ImportCapCycleAsync(DateTime now)
     {
-      if (PVCC_Config.TotalImportEnergyEntities.Count == 0) return;
+      if (PVCC_Config.TotalImportEnergyEntities.Count == 0)
+      {
+        // Without a counter the guard is blind: no limit (not the default decision's 0 A); the health check reports it.
+        _importCap = new ImportCap.GuardDecision(PVCC_Config.MaxBatteryChargePower, false, int.MaxValue, int.MaxValue, 0, "no import counter configured");
+        return;
+      }
       if (_quarterImport.Update(now, ReadImportCounters()) is { } finished)
       {
         int capW = PVCC_Config.MaxGridImportW;
@@ -917,14 +937,15 @@ namespace NetDeamon.apps.PVControl
         _socUnavailableLogged = true;
       }
       _publishedState = new InverterState(InverterModes.normal);
-      var attributes = InverterCommandAttributes(_publishedState, now);
+      var attributes = InverterCommandAttributes(_publishedState, now, null);
       attributes["next_charge_window_start"] = "none";
       attributes["next_charge_window_end"] = "none";
       attributes["price"] = "0";
       attributes["charge_Reason"] = "SoCUnavailable";
       attributes["soc_unavailable_since"] = _house.Battery.LastGoodSoC?.ToISO8601() ?? "start";
-      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, InverterModes.normal.ToString());
+      // Attributes before the state (two MQTT messages): the state change is what HA's automations react to.
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attributes);
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, InverterModes.normal.ToString());
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, "ON");
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, "ON");
     }
@@ -964,22 +985,18 @@ namespace NetDeamon.apps.PVControl
         _publishedStateSince = now;
       _publishedState = inverterState;
       #region Mode
-      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId,inverterState.Mode.ToString());
-      // Derive the current or next planned grid-charge window from the simulation timeline. The
-      // running slot counts (it ends after now): with "Time >= now" a charge in progress showed
-      // window "none", price 0 and need_to_charge off, flickering with the slot after it.
-      var nextChargeSlot = _house.SimulationTimeline
-        .FirstOrDefault(s => s.Time.AddMinutes(15) > now && s.State.Mode == InverterModes.force_charge);
-      var nextChargePrice = nextChargeSlot != null
-        ? _house.Prices.PriceListImport.FirstOrDefault(p => p.StartTime <= nextChargeSlot.Time && p.EndTime > nextChargeSlot.Time)
-        : default;
+      // The grid charge the plan runs now or next (the running slot counts: it ends after now).
+      var charge = PlannedGridCharge(now);
       // One sensor for the decision and the inverter command HA applies (HA/InverterSync.yaml).
-      var attr_Mode = InverterCommandAttributes(inverterState, now);
-      attr_Mode["next_charge_window_start"] = nextChargeSlot != null ? (nextChargePrice.StartTime != default ? nextChargePrice.StartTime : nextChargeSlot.Time).ToISO8601() : "none";
-      attr_Mode["next_charge_window_end"] = nextChargeSlot != null ? (nextChargePrice.EndTime != default ? nextChargePrice.EndTime : nextChargeSlot.Time.AddHours(1)).ToISO8601() : "none";
-      attr_Mode["price"] = nextChargePrice.Price.ToString(CultureInfo.InvariantCulture);
+      var attr_Mode = InverterCommandAttributes(inverterState, now, charge);
+      attr_Mode["next_charge_window_start"] = charge?.Start.ToISO8601() ?? "none";
+      attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
+      attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);
       attr_Mode["charge_Reason"] = inverterState.ModeReason.ToString();
+      // Attributes before the state (two MQTT messages): the reconciler reacts to the state change and must
+      // see the seq/power/bulk that belong to it, not the previous ones.
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);
+      await PVCC_EntityManager.SetStateAsync(_modeEntity.EntityId, inverterState.Mode.ToString());
       await LearnVppCurveAsync(now);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, inverterState.ExportAllowed ? "ON" : "OFF");
@@ -1081,9 +1098,8 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_battery_RemainingEnergyEntity.EntityId, attr_RemainingEnergy);
       #endregion
       #region NeedToCharge
-      // nextChargeSlot was already computed above for the Mode section's attributes — reused here.
-      bool simNeedToCharge = nextChargeSlot != null;
-      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, simNeedToCharge ? "ON" : "OFF");
+      // The same planned charge as the Mode section's attributes.
+      await PVCC_EntityManager.SetStateAsync(_needToChargeFromGridTodayEntity.EntityId, charge is not null ? "ON" : "OFF");
       var futureSoCEntries = _house.Prediction_BatterySoC.TodayAndTomorrow.Where(s => s.Key >= now).ToList();
       var simMinSoC = futureSoCEntries.Count > 0 ? futureSoCEntries.Min(s => s.Value) : _house.Battery.BatterySoc;
       var simMinSoCTime = futureSoCEntries.Count > 0 ? futureSoCEntries.MinBy(s => s.Value).Key : now;
@@ -1094,8 +1110,8 @@ namespace NetDeamon.apps.PVControl
         minimal_estimated_SoC = simMinSoC.ToString(CultureInfo.InvariantCulture) + "%",
         at_time = simMinSoCTime.ToISO8601(),
         current_average_gridpower = _house.CurrentAverageGridPower.ToString(CultureInfo.InvariantCulture) + " W",
-        reason = (nextChargeSlot?.State.ModeReason ?? ForceChargeReasons.None).ToString(),
-        charge_start_time = nextChargeSlot?.Time.ToISO8601() ?? "n/a",
+        reason = (charge?.Reason ?? ForceChargeReasons.None).ToString(),
+        charge_start_time = charge?.Start.ToISO8601() ?? "n/a",
       };
       await PVCC_EntityManager.SetAttributesAsync(_needToChargeFromGridTodayEntity.EntityId, attr_Charge);
       #endregion
@@ -1310,7 +1326,9 @@ namespace NetDeamon.apps.PVControl
           float gridImport = (float)((importCounter.IncreaseSince(_costImportSince) ?? 0) * 1000);
           float totalImportEnergy = importCounter.ActiveValue is { } kwh ? (float)(kwh * 1000) : _lastCostsEntry.GridImportTotal ?? 0;
           _costImportSince = importCounter.Snapshot();
-          PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float totalExportEnergy);
+          // An unavailable export counter keeps the last total and books 0 (the import side falls back the same way).
+          var (totalExportEnergy, gridExport) = CostTracker.CounterBooking(
+            PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float exportNow) ? exportNow : null, _lastCostsEntry.GridExportTotal);
           var basePriceEntry = _house.Prices.PriceListNetto.OrderBy(p => p.StartTime).LastOrDefault(p => p.StartTime < _nextQuarterHour);
           var basePrice = basePriceEntry.Price;
           Costs currentCost = new Costs
@@ -1319,7 +1337,7 @@ namespace NetDeamon.apps.PVControl
             GridImportTotal = totalImportEnergy,
             GridExportTotal = totalExportEnergy,
             GridImport = gridImport,
-            GridExport = totalExportEnergy - _lastCostsEntry.GridExportTotal,
+            GridExport = gridExport,
             BasePrice = basePrice,
             ImportPriceProvider = _house.Prices.CalculateBruttoPriceImport(basePrice, false),
             ImportPriceTotal = _house.Prices.CalculateBruttoPriceImport(basePrice, true),
@@ -1462,7 +1480,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.normal.ToString(),
         reRegister: reset);
-      RestoreInverterCommandSeq();
+      RestoreInverterCommand();
       
       _battChargeEnabledEntity = await RegisterSensor("binary_sensor.pv_control_battery_charging_enabled", "Battery Charging Eabled", "power", "mdi:power-plug-battery-outline",
         defaultValue: "ON",

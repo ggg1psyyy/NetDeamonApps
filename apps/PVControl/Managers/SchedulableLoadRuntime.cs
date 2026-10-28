@@ -251,16 +251,15 @@ namespace NetDeamon.apps.PVControl.Managers
       return now < until ? until : null;
     }
 
-    /// <summary>Moves sessions so none starts before a time, keeping their length.</summary>
+    /// <summary>Moves sessions so none starts before a time; each still delivers its energy (<see cref="SessionPlanner.EndForEnergy"/>:
+    /// one that began in the running slot has its end counted from now, not from its start) and keeps its supply (<see cref="ExtraLoad.FromGrid"/>).</summary>
     /// <param name="sessions">Sessions.</param>
     /// <param name="notBefore">Earliest start.</param>
+    /// <param name="now">Current time.</param>
     /// <returns>The sessions; unchanged ones are the same objects.</returns>
-    public static List<ExtraLoad> DelayUntil(IEnumerable<ExtraLoad> sessions, DateTime notBefore) =>
-      sessions.Select(e => e.StartTime >= notBefore ? e : new ExtraLoad
-      {
-        Name = e.Name, Priority = e.Priority, PowerW = e.PowerW,
-        StartTime = notBefore, EndTime = notBefore + (e.EndTime - e.StartTime),
-      }).ToList();
+    public static List<ExtraLoad> DelayUntil(IEnumerable<ExtraLoad> sessions, DateTime notBefore, DateTime now) =>
+      sessions.Select(e => e.StartTime >= notBefore ? e
+        : e.Between(notBefore, SessionPlanner.EndForEnergy(notBefore, (int)Math.Round(e.EnergyFromWh(now)), e.PowerW, now))).ToList();
 
     // ── Replanning (see ReplanPolicy) ──────────────────────────────────────────────────────
     /// <summary>The inputs of the last FindLoadWindow run. Null until the first plan.</summary>

@@ -71,16 +71,20 @@ public class ReplanPolicyTests
     Assert.Null(SchedulableLoadRuntime.OffLatchUntil(null, 15, T0, true));
 
   [Fact]
-  public void DelayUntil_MovesEarlierSessionsKeepingTheirLength()
+  public void DelayUntil_MovedSessionDeliversItsEnergyAndKeepsItsSupply()
   {
+    // A grid session that began in the running slot (its end counted from 17:22:30, 2 h of energy), held
+    // back by the min-off latch: moved by its window it would have run 2 h 7.5 min, and as a battery session.
+    var now = new DateTime(2026, 10, 18, 17, 22, 30);
     var notBefore = new DateTime(2026, 10, 18, 17, 45, 0);
-    var early = new ExtraLoad { Name = "EV", StartTime = new DateTime(2026, 10, 18, 17, 15, 0), EndTime = new DateTime(2026, 10, 18, 19, 15, 0), PowerW = 1850 };
+    var early = new ExtraLoad { Name = "EV", StartTime = new DateTime(2026, 10, 18, 17, 15, 0), EndTime = now.AddHours(2), PowerW = 1850, FromGrid = true };
     var later = new ExtraLoad { Name = "EV", StartTime = new DateTime(2026, 10, 18, 23, 0, 0), EndTime = new DateTime(2026, 10, 19, 1, 0, 0), PowerW = 1850 };
 
-    var moved = SchedulableLoadRuntime.DelayUntil([early, later], notBefore);
+    var moved = SchedulableLoadRuntime.DelayUntil([early, later], notBefore, now);
 
     Assert.Equal(notBefore, moved[0].StartTime);
     Assert.Equal(notBefore.AddHours(2), moved[0].EndTime);
+    Assert.True(moved[0].FromGrid);
     Assert.Same(later, moved[1]);
   }
 

@@ -26,7 +26,6 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _loadRunningAverage;
     private readonly RunningIntAverage _pvRunningAverage;
     private readonly RunningIntAverage _gridRunningAverage;
-    private string _currentInverterRunMode = "unknown";
     public Prediction Prediction_Load
     { get; private set; }
     public Prediction Prediction_PV
@@ -57,9 +56,6 @@ namespace NetDeamon.apps.PVControl
       _gridRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(1));
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _gridRunningAverage.AddValue(grid);
-
-      if (PVCC_Config.InverterStatusEntity.TryGetStateValue(out string inverterStatus))
-        _currentInverterRunMode = inverterStatus;
 
       if (string.IsNullOrEmpty(PVCC_Config.DBLocation))
         throw new NullReferenceException("No DBLocation available");
@@ -114,7 +110,6 @@ namespace NetDeamon.apps.PVControl
       PVCC_Config.DailyImportEnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.DailyImportEnergyEntity));
       PVCC_Config.BatteryInputEnergyEntity?.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.BatteryInputEnergyEntity));
       PVCC_Config.CurrentGridPowerEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.CurrentGridPowerEntity));
-      PVCC_Config.InverterStatusEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(PVCC_Config.InverterStatusEntity));
 
       if (PVCC_Config.WarmWater is { } wwConfig)
         WarmWater = new WarmWaterController(wwConfig) { Weather = Weather };
@@ -238,8 +233,10 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentImportPriceEntities.Any(e => e.EntityId == entity.EntityId)
         || (PVCC_Config.CurrentExportPriceEntities?.Any(e => e.EntityId == entity.EntityId) ?? false))
       {
-        Prices.UpdatePriceList();
-        RequestReplan("prices updated");
+        // The price entities change state every quarter and with every fetch; only prices that really
+        // differ (a new day published, a provider failover) are worth every load's full rescan.
+        if (Prices.UpdatePriceList())
+          RequestReplan("prices updated");
       }
       if (entity.EntityId == PVCC_Config.CurrentBatteryPowerEntity?.EntityId && PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
       {
@@ -320,32 +317,14 @@ namespace NetDeamon.apps.PVControl
       {
         _gridRunningAverage.AddValue(grid);
       }
-      if (entity.EntityId == PVCC_Config.InverterStatusEntity?.EntityId && PVCC_Config.InverterStatusEntity.TryGetStateValue(out string inverterStatus)
-          && inverterStatus != _currentInverterRunMode)
-      {
-        PVCC_Logger.LogInformation("Inverter RunMode changed from {CurrentInverterRunMode} to {InverterStatus}", _currentInverterRunMode, inverterStatus);
-        if (IsReturnToNormalMode(_currentInverterRunMode, inverterStatus, PVCC_Config.InverterStatusNormalString))
-        {
-          _resetCounter = 2;
-          PVCC_Logger.LogInformation("Inverter returned to normal run mode, sending {ResetCounter} reset signal(s)", _resetCounter);
-          _currentMode = new InverterState(InverterModes.reset, ForceChargeReasons.None);
-        }
-        _currentInverterRunMode = inverterStatus;
-      }
     }
 
-    /// <summary>Whether the inverter came back to normal mode from another mode (not remote), so the reset signal is needed; a brief "unknown" doesn't count.</summary>
-    /// <param name="previous">Last known run mode.</param>
-    /// <param name="current">Run mode now.</param>
-    /// <param name="normalString">The inverter's text for normal mode.</param>
-    /// <returns>True if a reset is needed.</returns>
-    public static bool IsReturnToNormalMode(string previous, string current, string normalString) =>
-      current != previous && previous != "Normal (R)" && current == normalString;
-
-    private int _resetCounter = 0;
     private int _bugFixCounter = 0;
     private readonly Dictionary<DateTime, int> _actualSoCHistory = new();
-    private InverterState _currentMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
+    /// <summary>The plan's decision for the running slot last cycle, fed back into the simulation as the previous
+    /// slot's mode (hysteresis: a running charge continues, its path stays). Only the plan writes it — the user
+    /// override and the bug-fix kick change what's published (<see cref="ProposedState"/>), not the plan.</summary>
+    private InverterState _planMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private SimulationResult? _simulationResult;
 
     /// <summary>Fills today's past SoC slots from the HA history at startup (the last reading at or before each slot start).</summary>
@@ -441,7 +420,7 @@ namespace NetDeamon.apps.PVControl
         OpportunisticDischarge = OpportunisticDischarge,
         ForceChargeMaxPrice = Prices.ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
-        CurrentMode = _currentMode,
+        CurrentMode = _planMode,
         ChargeVoltageV = PVCC_Config.BatteryVoltageV,
         MaxGridImportW = PVCC_Config.MaxGridImportW,
         VppChargePowerW = VppCurve.MaxW,
@@ -470,25 +449,31 @@ namespace NetDeamon.apps.PVControl
       }
 
       // Find valid window for each schedulable load (highest priority first) — only when it's
-      // due (ReplanPolicy); otherwise its last decision stays and is simulated below as is.
+      // due (ReplanPolicy); otherwise its last decision stays. Each load plans against a base that
+      // already contains the loads before it (decided this cycle or kept), so two loads never plan
+      // the same cheap quarters; after the loop the base is the simulation with every load.
       foreach (var load in SchedulableLoads.OrderByDescending(l => l.Config.Priority))
       {
         float level = load.Config.CurrentLevelEntity is not null && load.Config.CurrentLevelEntity.TryGetStateValue(out float lv) ? lv : -1;
         var snapshot = new ReplanSnapshot(now, Battery.BatterySoc, level, load.IsDrawingPower, IsLatched(load, now));
         var reason = ReplanPolicy.Reason(load.LastPlan, snapshot, load.Config.ReplanIntervalMinutes, load.TakeReplanRequest());
-        if (reason is null) continue;
-        FindLoadWindow(load, baseInput, baseResult);
-        load.LastPlan = snapshot with { Latched = IsLatched(load, now) };
-        load.LastPlanReason = reason;
+        if (reason is not null)
+        {
+          FindLoadWindow(load, baseInput, baseResult);
+          load.LastPlan = snapshot with { Latched = IsLatched(load, now) };
+          load.LastPlanReason = reason;
+        }
+        if (load.ExtraLoads.Count > 0)
+        {
+          baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. load.ExtraLoads]);
+          baseResult = EnergySimulator.Simulate(baseInput);
+        }
       }
 
-      // Run final simulation with all found ExtraLoads merged in.
-      var allExtraLoads = SchedulableLoads.SelectMany(l => l.ExtraLoads).ToList();
-      var finalInput = allExtraLoads.Count > 0
-        ? baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. allExtraLoads])
-        : baseInput;
-
-      _simulationResult = EnergySimulator.Simulate(finalInput);
+      // The final simulation: the base with every load. Its running slot is the plan's decision now,
+      // the previous slot's mode of the next cycle's simulation.
+      _simulationResult = baseResult;
+      _planMode = _simulationResult.Slots[0].State;
 
       // Build the two-day SoC dict for Prediction_BatterySoC:
       //   - simulation covers now→end-of-tomorrow (filled below from _simulationResult)
@@ -534,7 +519,7 @@ namespace NetDeamon.apps.PVControl
                load.SessionStopMode == load.Mode && load.SessionStopSettings == settings) is { } until)
       {
         var notBefore = until.Ceiling(TimeRange.SlotMinutes);
-        var delayed = SchedulableLoadRuntime.DelayUntil(load.ExtraLoads, notBefore);
+        var delayed = SchedulableLoadRuntime.DelayUntil(load.ExtraLoads, notBefore, now);
         load.ExtraLoads = delayed;
         load.PredictedEnd = delayed.Count > 0 ? delayed.Max(e => e.EndTime) : load.PredictedEnd;
         load.ChargeNow = false;
@@ -1184,46 +1169,32 @@ namespace NetDeamon.apps.PVControl
     /// <param name="b">Second time.</param>
     private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
 
-    /// <summary>Inverter command now: the simulation's running slot, or the user override.</summary>
+    /// <summary>Inverter command now: the simulation's running slot, or the user override. Neither the override nor
+    /// the bug-fix kick below changes the plan's own state (<see cref="_planMode"/>): the simulation always continues
+    /// from what it decided itself.</summary>
     public InverterState ProposedState
     {
       get
       {
         var now = DateTime.Now;
         if (_simulationResult is null || _simulationResult.Slots.Count == 0)
-          return _currentMode;
+          return _planMode;
 
-        var currentSlot = _simulationResult.Slots.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
-                          ?? _simulationResult.Slots[0];
-        _currentMode = currentSlot.State;
+        var planned = (_simulationResult.Slots.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
+                       ?? _simulationResult.Slots[0]).State;
 
         // ── User override ──────────────────────────────────────────────────────────────────
-        // Applied here (not in the simulator) so the simulation always reflects autonomous
-        // logic. The override only affects the command sent to the inverter right now.
+        // Only affects the command sent to the inverter right now.
         if (OverrideMode != InverterModes.automatic)
-        {
-          _currentMode = new InverterState(OverrideMode, ForceChargeReasons.UserMode);
-          return _currentMode;
-        }
-
-        // ── Reset signal ──────────────────────────────────────────────────────────────────
-        // After the inverter returns from manual/remote mode, _resetCounter is set to 2.
-        // Override the simulation result with reset for those ticks so the inverter hardware
-        // has time to re-initialise battery control before we resume normal commands.
-        if (_resetCounter > 0)
-        {
-          _resetCounter--;
-          _currentMode = new InverterState(InverterModes.reset, ForceChargeReasons.None);
-          return _currentMode;
-        }
+          return new InverterState(OverrideMode, ForceChargeReasons.UserMode);
 
         // ── Inverter bug fix ──────────────────────────────────────────────────────────────
-        // Some SMA inverters fail to switch to battery in "normal" mode at low house loads
-        // (50–300 W), drawing from the grid instead. This can't be predicted or simulated —
+        // An inverter that fails to switch to the battery in "normal" mode at low house loads
+        // (50–300 W) and draws from the grid instead. This can't be predicted or simulated —
         // it's detected live by watching the running-average grid power.
         // After ~1 min of the condition (4 consecutive ticks), briefly force-discharge to
         // kick the inverter back into battery mode.
-        if (_currentMode.Mode == InverterModes.normal
+        if (planned.Mode == InverterModes.normal
             && CurrentAverageGridPower is > 50 and < 300
             && Battery.BatterySoc > Math.Max(Battery.PreferredMinimalSoC, Battery.AbsoluteMinimalSoC))
         {
@@ -1234,7 +1205,7 @@ namespace NetDeamon.apps.PVControl
           else
           {
             _bugFixCounter = 0;
-            _currentMode = new InverterState(InverterModes.force_discharge, ForceChargeReasons.BugFixMode);
+            return new InverterState(InverterModes.force_discharge, ForceChargeReasons.BugFixMode);
           }
         }
         else
@@ -1242,7 +1213,7 @@ namespace NetDeamon.apps.PVControl
           _bugFixCounter = 0;
         }
 
-        return _currentMode;
+        return planned;
       }
     }
 

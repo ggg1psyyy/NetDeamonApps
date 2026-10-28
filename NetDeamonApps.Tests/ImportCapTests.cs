@@ -115,6 +115,26 @@ public class ImportCapTests
     Assert.Equal(800, q.ImportedWh!.Value, 0);
   }
 
+  // Clock changes (the machine's time zone must be Vienna-like, as for DataLoggerPeriodTests): the local
+  // quarters 02:45 → 02:00 (October) and 01:45 → 03:00 (March) aren't consecutive, as UTC instants they are.
+  [Theory]
+  [InlineData(2026, 10, 25, 0, 40, 2, 45)] // 02:40 CEST; the quarter 02:45 CEST ends at 02:00 CET (01:00 UTC)
+  [InlineData(2026, 3, 29, 0, 40, 1, 45)]  // 01:40 CET; the quarter 01:45 CET ends at 03:00 CEST (01:00 UTC)
+  public void Quarter_AcrossTheClockChange_StillFinishes(int y, int m, int d, int h, int min, int localHour, int localMinute)
+  {
+    var q = new QuarterImport(1);
+    var utc = new DateTime(y, m, d, h, min, 0, DateTimeKind.Utc);
+    q.Update(utc, [100.0]);
+    q.Update(utc.AddMinutes(4).AddSeconds(50), [100.2]);
+    Assert.Null(q.Update(utc.AddMinutes(5).AddSeconds(5), [100.3]));
+    Assert.True(q.Complete);
+    var done = q.Update(utc.AddMinutes(20).AddSeconds(5), [101.0]);
+    Assert.NotNull(done);
+    Assert.Equal(new DateTime(y, m, d, localHour, localMinute, 0), done.Value.Start);
+    Assert.Equal((101.0 - 100.2) * 4, done.Value.AvgKw, 3);
+    Assert.Equal(5, q.ElapsedSeconds(utc.AddMinutes(20).AddSeconds(5)), 0);
+  }
+
   // A closed period (DataLogger hour): the wM-Bus receiver lost its antenna 2026-10-28 — online, but a
   // receiver without telegrams keeps its last value; it must not log 0 kW while the inverter counts.
   [Theory]
@@ -192,9 +212,21 @@ public class ImportCapTests
   {
     // Same as 09:30 plus the heat pump (3 kW): the battery gets what's left of 9.8 kW.
     var d = ImportCapGuard.Decide(Live(300, 9513 * 300 / 3600.0, 12513, 5324));
-    double batteryW = d.ChargeLimitA * 245;
-    Assert.InRange(5324 - 1922 - 260 + 1930 + batteryW, d.AllowedW - 245, d.AllowedW);
+    // Budget 2450 − 793 − 313 (reaction) Wh over the 510 s left = 9490 W; less the house 3142 W and the EV 1930 W → 4418 W / 245 V.
+    Assert.Equal(9490, d.AllowedW);
+    Assert.Equal(18.0, d.ChargeLimitA, 1);
     Assert.False(d.PauseExtraLoads);
+  }
+
+  [Fact]
+  public void Guard_EvChargingOutsidePvControl_StillCountsAgainstTheBattery()
+  {
+    // The charger switched on by hand (charge_now off) draws 1.92 kW: import like any other, not battery headroom.
+    var asked = ImportCapGuard.Decide(Live(300, 9513 * 300 / 3600.0, 12513, 5324, evOn: true));
+    var byHand = ImportCapGuard.Decide(Live(300, 9513 * 300 / 3600.0, 12513, 5324, evOn: false));
+    Assert.InRange(byHand.ChargeLimitA, asked.ChargeLimitA - 0.1, asked.ChargeLimitA + 0.1); // 1922 W measured vs 1930 W nominal
+    Assert.InRange(byHand.HeadroomW, asked.HeadroomW - 10, asked.HeadroomW + 10);
+    Assert.False(byHand.PauseExtraLoads); // nothing of PVControl's to pause
   }
 
   [Fact]
@@ -275,5 +307,7 @@ public class ImportCapTests
     Assert.Single(HealthChecks.ImportCap(9800, 0, ids, new QuarterResult(T0, 10.1), T0.AddMinutes(30)));
     Assert.Empty(HealthChecks.ImportCap(9800, 0, ids, new QuarterResult(T0, 10.1), T0.AddHours(2)));
     Assert.Empty(HealthChecks.ImportCap(0, -1, ids, null, T0));
+    // The cap configured without a counter: the guard is blind — an error, not silence.
+    Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.ImportCap(9800, -1, [], null, T0)).Level);
   }
 }

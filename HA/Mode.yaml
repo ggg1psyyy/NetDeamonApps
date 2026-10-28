@@ -1,8 +1,7 @@
 alias: PV Control - Mode Settings
 description: >-
-  Notifications for sensor.pv_control_mode and the extras of `reset`. The inverter itself (work mode,
-  manual mode, VPP) is set only by script.pv_control_apply_mode, applied and kept by
-  "PV Control - Inverter Sync".
+  Notifications for sensor.pv_control_mode. The inverter itself (work mode, manual mode, VPP) is set
+  only by script.pv_control_apply_mode, applied and kept by "PV Control - Inverter Sync".
 triggers:
   - trigger: state
     entity_id:
@@ -16,21 +15,6 @@ triggers:
       seconds: 5
 conditions: []
 actions:
-  - if:
-      - condition: template
-        value_template: "{{ trigger.to_state.state == 'reset' }}"
-    then:
-      - action: number.set_value
-        metadata: {}
-        data:
-          value: '8000'
-        target:
-          entity_id: number.solax_export_control_user_limit
-      - action: button.press
-        metadata: {}
-        data: {}
-        target:
-          entity_id: button.solax_system_on
   - action: ntfy.publish
     metadata: {}
     data:

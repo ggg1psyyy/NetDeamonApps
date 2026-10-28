@@ -38,7 +38,6 @@ Design details live in [`apps/PVControl/ARCHITECTURE.md`](apps/PVControl/ARCHITE
 | `grid_only` | Grid powers the house, battery idle — holds the battery at its minimum until the scheduled charge window, or while a PriorityPlus session that needs grid runs without enough PV (`charge_Reason` `LoadFromGrid`) |
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
-| `reset` | Transient reset state |
 
 Whether PV surplus may currently be exported is a separate, orthogonal decision — see
 `binary_sensor.pv_control_export_allowed` below. It's independent of `sensor.pv_control_mode`
@@ -56,11 +55,11 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 |---|---|
 | `select.pv_control_mode_override` | Manually override the current mode |
 | `switch.pv_control_enforce_preferred_soc` | Keep SoC above preferred minimum at all times (grid backup mode) |
-| `switch.pv_control_force_charge_at_cheapest_period` | Always charge at cheapest daily window, even if not strictly needed |
+| `switch.pv_control_force_charge_at_cheapest_period` | Daily target charge: reach `number.pv_control_forcecharge_target_soc` by the end of the day's PV (headroom for the evening and the night), buying only what PV won't deliver by then, in the cheapest quarters under the price limit before it — tomorrow's PV end once today's has passed |
 | `switch.pv_control_enable_opportunistic_export` | Enable opportunistic discharge to grid during high-price periods |
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%) |
 | `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge; also the "cheap grid" threshold for PriorityPlus loads |
-| `number.pv_control_forcecharge_target_soc` | Target SoC (%) when force-charging at cheapest period |
+| `number.pv_control_forcecharge_target_soc` | Target SoC (%) of the daily target charge |
 
 #### Status entities
 
@@ -98,7 +97,7 @@ The house load forecast is the hour-of-day average of the last days (recent days
 | DataLogger | newest hourly row older than 2 h | — |
 | Weather forecast (load model) | none yet or older than 3 h | — |
 | Load forecast (`Mode: Model`) | fell back to the average | — |
-| Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works |
+| Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works, or none configured |
 | Inverter sync | inverter not in the commanded mode for 2 min | HA reconciler stopped retrying |
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
@@ -113,11 +112,11 @@ The network power price (from 2027) counts the month's highest 15-min mean grid 
 
 Nothing reacts instantly (automation delays such as the EV's 1 min, inverter and car ramps), so the guard assumes the current power keeps flowing for `ImportCapReactionSeconds` (90 s) after any change. A change late in a quarter only takes effect in the next one. The plan respects the cap too: grid charging only gets what the load leaves under it, so NeedToCharge takes more cheap quarters at lower power, and PriorityPlus never plans a load over the cap.
 
-The import is counted from `TotalImportEnergyEntities` in list order. The first counter (the utility meter via wM-Bus) is used while it works. The next one (the inverter) takes over only while the first is unavailable, or frozen while the next keeps counting. A counter that doesn't change is no failure: no import.
+The import is counted from `TotalImportEnergyEntities` in list order. The first counter (the utility meter via wM-Bus) is used while it works. The next one (the inverter) takes over only while the first is unavailable, or frozen while the next keeps counting. A counter that doesn't change is no failure: no import. The quarters are tracked as UTC instants, so the clock changes in March and October lose none. An extra load (EV) counts against the budget whether PVControl switched it on or not — a charger started by hand draws import all the same.
 
 | Entity | Content |
 |---|---|
-| `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge: hardware maximum × `BatteryNominalVoltageV`, lower only while the import cap limits below what the path charges), `bulk` (grid charge at full power, see below), `charge_energy_wh`, `charge_target_soc`, `charge_start`, `charge_until` (the running grid charge in the plan, else the next one: energy into the battery, the SoC it reaches, its slots), `vpp_charge_limit_w` (what a VPP charge reaches at the current SoC), `seq` (version, grows with every change), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` (the nominal voltage used) |
+| `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge: `battery_current_a` × the measured battery voltage — the hardware maximum, lower only while the import cap limits below what the path charges; the voltage is taken when the command changes, a 5-V step alone is no new command), `bulk` (grid charge at full power, see below), `charge_energy_wh`, `charge_target_soc`, `charge_start`, `charge_until` (the running grid charge in the plan, else the next one: energy into the battery, the SoC it reaches, its slots; `next_charge_window_start/end` and `price` are the same charge), `vpp_charge_limit_w` (what a VPP charge reaches at the current SoC), `seq` (version, grows with every change — not with a restart: the published command is restored and only a different one gets a new version), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` (the battery voltage used) |
 | `sensor.pv_control_vpp_charge_limit` | Battery charge power a remote-controlled (VPP) grid charge reaches at the current SoC (W); attributes `at_0_pct_w`, `slope_w_per_pct`, `learned`, `at_50_pct_w`, `buckets` (the learned readings, restored after a restart) |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
 | `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start`. After a restart restored from this sensor and the DataLogger's `maxquarterimport` (the higher one) |
@@ -127,11 +126,10 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 | `MaxGridImportW` | Highest mean grid import of any 15-min block, W; 0 = off |
 | `ImportCapReactionSeconds` | How long a requested change takes to show at the meter, s |
 | `TotalImportEnergyEntities` | Grid import counters (kWh) in priority order (also the cost log's import) |
-| `BatteryVoltageEntity` | Battery voltage while charging: W per A of the charge current (230 V without it) |
+| `BatteryVoltageEntity` | Battery voltage: W per A of the charge current, in the plan, the import cap and the command (230 V without it) |
 | `MaxBatteryChargeCurrrentValue` | Hardware charge current limit, A |
 | `InverterSyncEntity` | HA's feedback whether the inverter runs the command (`binary_sensor.pv_control_inverter_in_sync`) |
 | `VppChargePowerAt0PctW`, `VppChargePowerSlopeWPerPct` | Default line of the VPP charge power by SoC (W = At0 + Slope × SoC) until the curve is learned |
-| `BatteryNominalVoltageV` | Voltage for the command's battery power (A × V) |
 
 #### Inverter control (HA side)
 
@@ -142,12 +140,12 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | [`HA/InverterHelpers.yaml`](HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
 | [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
 | [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
-| [`HA/Mode.yaml`](HA/Mode.yaml) | Notifications and the extras of `reset` |
+| [`HA/Mode.yaml`](HA/Mode.yaml) | Mode change notifications |
 | [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: 30 A / 0 A |
 
 | PVControl mode | Inverter |
 |---|---|
-| `normal`, `reset` | Self Use, VPP off |
+| `normal` | Self Use, VPP off |
 | `feedin_priority` | Feedin Priority, VPP off |
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
 | `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
@@ -241,7 +239,7 @@ The house battery minimum follows `switch.pv_control_enforce_preferred_soc` in e
 
 **Latches** against on/off cycling: once started, a session runs at least `MinWindowMinutes`; once stopped, it restarts no earlier than `MinOffMinutes` later (stops themselves are never delayed). Both are bypassed by a mode change or a change of the settings the decision depends on (minimum SoC, enforce switch, price threshold, target, ready-by); the off-latch also by an availability change.
 
-**Replanning:** the house simulation and inverter mode update every 15 s, but a load's schedule search (the expensive part) only runs every `ReplanIntervalMinutes` or on a trigger — any setting change, availability change, new prices, a new quarter-hour, house battery SoC or the load's level changing, the load starting/stopping, the house load staying > 500 W and > 30 % off its forecast for 5 min, or a latch ending.
+**Replanning:** the house simulation and inverter mode update every 15 s, but a load's schedule search (the expensive part) only runs every `ReplanIntervalMinutes` or on a trigger — any setting change, availability change, prices that really changed (not every state change of the price entities), a new quarter-hour, house battery SoC or the load's level changing, the load starting/stopping, the house load staying > 500 W and > 30 % off its forecast for 5 min, or a latch ending.
 
 **Learning:** while the load draws power, `energy_per_level` is learned from the energy meter between whole level steps (at least 3 levels within one session, weighted against the stored value as if it had been measured over 20 levels), and `charge_power` follows the measured power (10-min average, only after 2 min of continuous draw). Both survive restarts and can be set by hand, e.g. after installing a new wallbox.
 
@@ -388,7 +386,7 @@ dotnet test NetDeamonApps.Tests/
 | `CheapWindowShorterThanSessionTests` | PriorityPlus with a cheap window shorter than the session (live 2026-10-25): charges the window, longest passing end, min window, follow-up |
 | `SessionPlannerTests` | PriorityPlus price scan: cheapest vs earliest start, minimum saving, sticky plan, ready-by deadline (same choice rules over the price limit), follow-up sessions, net grid cost |
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
-| `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch |
+| `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch (a moved session keeps its energy and supply) |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
 | `MorningTopUpTests` | Grid charge on a real night (prices, load forecast): night charge with forecast margin, no top-up at peak price before PV (grid_only holds the floor) |
 | `FoggyDayTopUpTests` | Grid charge before a foggy day: the trough is searched up to the PV peak after the critical point, not a small bump before it |
@@ -398,7 +396,8 @@ dotnet test NetDeamonApps.Tests/
 | `WarmWaterControlTests` | Starting, never stopping mid-run, raising the setpoint, off-time and minimum run of the one-time heating, boost lifecycle, comfort windows |
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
 | `PricePublicationTrackerTests` | When tomorrow's prices first appear (once per day, not after a restart) |
-| `PriceListTests` | Hourly/quarter-hourly price normalization, hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
+| `PriceListTests` | Hourly/quarter-hourly price normalization, list comparison (a replan only on a real price change), hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
+| `DailyTargetChargeTests` | Daily target charge: the target by the end of the day's PV, only what PV won't deliver, in the cheapest quarters under the limit |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
@@ -407,7 +406,7 @@ dotnet test NetDeamonApps.Tests/
 | `ChargeAbovePriceLimitTests` | Above the force-charge price limit a grid charge only protects the floor, never the forecast margin alone |
 | `EvDirectFromGridTests` | PriorityPlus: battery if no grid is needed, otherwise directly from the grid (battery held, or alongside a force_charge), round-trip loss in the cost |
 | `NeedChargeHysteresisTests` | A running grid charge never stops where starting one would begin it (no force_charge/normal flip-flop); no grid charge right before a PV peak that fills the battery anyway |
-| `InverterCommandTests` | Versioned inverter command: version only on change, continued after a restart, battery power per mode, sync health |
+| `InverterCommandTests` | Versioned inverter command: version only on change, the published command restored after a restart, battery power per mode, sync health |
 | `ImportCapTests` | Import cap: counters in priority order with fallback, the running quarter, the month's peak, the guard (battery first, then extra loads, reaction time), health |
 | `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
 | `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, state changes, time-weighted means, prevailing heat pump mode, migrations (v6, v7, v9) |

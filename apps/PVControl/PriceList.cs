@@ -29,6 +29,12 @@ namespace NetDeamon.apps.PVControl
     public IEnumerator<PriceTableEntry> GetEnumerator() => _entries.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => _entries.GetEnumerator();
 
+    /// <summary>Whether two lists hold the same entries (times and prices) in the same order.</summary>
+    /// <param name="other">The other list.</param>
+    public bool SameAs(PriceList other) =>
+      _entries.Count == other._entries.Count
+      && _entries.Zip(other._entries).All(p => p.First.StartTime == p.Second.StartTime && p.First.EndTime == p.Second.EndTime && p.First.Price == p.Second.Price);
+
     // ── Resolution handling ──────────────────────────────────────────────────────────────────
 
     /// <summary>Splits every entry into 15-min entries at the same price.</summary>

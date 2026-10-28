@@ -112,6 +112,19 @@ public class PriceListTests
     Assert.All(result, r => Assert.Equal(42f, r.Price));
   }
 
+  [Fact]
+  public void SameAs_SameTimesAndPrices_ElseNot()
+  {
+    // A price entity changes state every quarter and with every fetch; only prices that really differ replan the loads.
+    var t = new DateTime(2026, 10, 29, 0, 0, 0);
+    PriceList a = new([new PriceTableEntry(t, t.AddMinutes(15), 0.30f), new PriceTableEntry(t.AddMinutes(15), t.AddMinutes(30), 0.31f)]);
+    Assert.True(a.SameAs(new PriceList(a)));
+    Assert.False(a.SameAs(new PriceList([new PriceTableEntry(t, t.AddMinutes(15), 0.30f)])));                                      // fewer entries
+    Assert.False(a.SameAs(new PriceList([a.First(), new PriceTableEntry(t.AddMinutes(15), t.AddMinutes(30), 0.32f)])));           // a price differs
+    Assert.False(a.SameAs(new PriceList([a.First(), new PriceTableEntry(t.AddMinutes(30), t.AddMinutes(45), 0.31f)])));           // a time differs
+    Assert.True(new PriceList().SameAs(new PriceList()));
+  }
+
   // ── GetPriceRank / GetPricePercentage regression (hour-bucket bug) ──────
 
   [Fact]

@@ -38,7 +38,7 @@ template:
         # command maps to (the same mapping as script.pv_control_apply_mode):
         #   bulk force_charge          → Manual Mode + Force Charge, VPP off (full 30 A)
         #   other charges/hold/discharge → base Self Use + VPP mode 8
-        #   normal/feedin/reset        → VPP off, base Self Use (Feedin Priority for feedin_priority)
+        #   normal/feedin              → VPP off, base Self Use (Feedin Priority for feedin_priority)
         state: >-
           {% set mode = states('sensor.pv_control_mode') %}
           {% set seq = state_attr('sensor.pv_control_mode', 'seq') | int(-1) %}

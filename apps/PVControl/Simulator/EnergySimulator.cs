@@ -76,6 +76,8 @@ public static class EnergySimulator
       if (IsNeedCharge(newMode))
         chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
           withMargin: input.ImportPrices.GetPrice(slotTime) <= input.ForceChargeMaxPrice);
+      else if (newMode is { Mode: InverterModes.force_charge, ModeReason: ForceChargeReasons.ForcedChargeAtMinimumPrice })
+        chargeTargetSocPercent = DailyTargetChargeSoc(input, slotTime, currentSoc, baseFutureSoC) ?? chargeTargetSocPercent;
       // The charge path is chosen when a grid charge starts and kept while it runs.
       if (newMode.Mode == InverterModes.force_charge)
         newMode.Bulk = previousMode.Mode == InverterModes.force_charge
@@ -168,6 +170,109 @@ public static class EnergySimulator
   /// <param name="mode">The mode.</param>
   private static bool IsNeedCharge(InverterState mode) => mode.Mode == InverterModes.force_charge
     && mode.ModeReason is ForceChargeReasons.GoingUnderAbsoluteMinima or ForceChargeReasons.GoingUnderPreferredMinima;
+
+  /// <summary>Whether the SoC allows a grid charge: not over 96 % to start (too slow), up to 98 % once charging.</summary>
+  /// <param name="currentMode">Mode of the previous slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  private static bool SocOkToCharge(InverterState currentMode, int simulatedSoc) =>
+    currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
+
+  // ── Cheapest quarters ────────────────────────────────────────────────────────────────────
+  /// <summary>Price rank of the current quarter in a window: how many quarters are cheaper (a tie goes to the earlier one) and how many of those are under the price limit.</summary>
+  /// <param name="window">Quarter-hourly price entries the charge may use.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="maxPrice">Price limit.</param>
+  /// <returns>The current entry and the counts; null if the window doesn't cover now.</returns>
+  private static (PriceTableEntry Now, int Cheaper, int CheaperUnderMax)? RankNow(List<PriceTableEntry> window, DateTime now, float maxPrice)
+  {
+    // Exact boundary comparison: simulation slots are always on quarter-hour boundaries. Runs every
+    // slot of every simulation, so it ranks `now` in one pass instead of sorting.
+    int nowIndex = window.FindIndex(p => p.Covers(now));
+    if (nowIndex < 0) return null;
+    var nowEntry = window[nowIndex];
+    int cheaper = 0, cheaperUnderMax = 0;
+    for (int i = 0; i < window.Count; i++)
+      if (window[i].Price < nowEntry.Price || (window[i].Price == nowEntry.Price && i < nowIndex))
+      {
+        cheaper++;
+        if (window[i].Price <= maxPrice) cheaperUnderMax++;
+      }
+    return (nowEntry, cheaper, cheaperUnderMax);
+  }
+
+  /// <summary>
+  /// Whether a grid charge to a target charges in the current quarter: it is one of the N cheapest quarters
+  /// under the price limit, N = quarters the deficit needs at the charge rate the load leaves under the
+  /// import cap — or a VPP start now beats a later full-power one (<see cref="VppNowBeatsBulkLater"/>).
+  /// Only those N: an over-threshold quarter ahead of a cheaper one isn't worth it. Price ties go to the
+  /// earlier quarter.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="cheaperUnderMax">Cheaper quarters under the limit (<see cref="RankNow"/>).</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="targetSoc">Target SoC of the charge, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  private static bool ChargesInCheapestQuarters(SimulationInput input, DateTime now, int cheaperUnderMax, int simulatedSoc, int targetSoc,
+    Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot)
+  {
+    int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
+    int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
+    int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
+    return cheaperUnderMax < quartersNeeded
+      || VppNowBeatsBulkLater(input, now, simulatedSoc, targetSoc, baseFutureSoC, cheaperUnderMax, maxChargeWh);
+  }
+
+  // ── Daily target charge (user switch) ────────────────────────────────────────────────────
+  /// <summary>
+  /// SoC the daily target charge charges to now: <see cref="SimulationInput.ForceChargeTargetSocPercent"/> by
+  /// the end of the day's PV (<see cref="SimulationInput.DailyTargetDeadline"/>) — headroom for the evening and
+  /// the night — buying only what PV won't deliver by then (the look-ahead's SoC at the deadline), and at most
+  /// the room a PV peak before it leaves (<see cref="PvRoomBeforeLow"/>).
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <returns>The SoC to charge to, %; null if there's nothing worth buying (at most <see cref="MinPvRoomPct"/>).</returns>
+  public static int? DailyTargetChargeSoc(SimulationInput input, DateTime now, int simulatedSoc, Dictionary<DateTime, int> baseFutureSoC)
+  {
+    if (input.DailyTargetDeadline(now) is not { } deadline) return null;
+    int target = Math.Min(100, input.ForceChargeTargetSocPercent);
+    int socAtDeadline = baseFutureSoC.TryGetValue(deadline, out int at) ? at
+      : baseFutureSoC.Where(s => s.Key < deadline).Select(s => (int?)s.Value).LastOrDefault() ?? simulatedSoc;
+    int deficit = Math.Max(0, target - socAtDeadline);
+    int charge = Math.Min(deficit, PvRoomBeforeLow(simulatedSoc, now, deadline, baseFutureSoC));
+    return charge > MinPvRoomPct ? Math.Min(target, simulatedSoc + charge) : null;
+  }
+
+  /// <summary>
+  /// The daily target charge's mode for a slot: force_charge in one of the cheapest quarters under the price
+  /// limit before the deadline (<see cref="ChargesInCheapestQuarters"/>), else nothing.
+  /// </summary>
+  /// <param name="currentMode">Mode of the previous slot (hysteresis).</param>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  /// <returns>The mode; null if the charge doesn't run in this slot.</returns>
+  private static InverterState? DailyTargetChargeMode(InverterState currentMode, SimulationInput input, DateTime now, int simulatedSoc,
+    Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot)
+  {
+    if (!input.EnableCheapForceCharge || !SocOkToCharge(currentMode, simulatedSoc)
+        || DailyTargetChargeSoc(input, now, simulatedSoc, baseFutureSoC) is not { } chargeTo
+        || input.DailyTargetDeadline(now) is not { } deadline)
+      return null;
+    var window = input.QuarterHourlyImportPrices.Where(p => p.EndTime > now && p.StartTime < deadline).ToList();
+    return RankNow(window, now, input.ForceChargeMaxPrice) is { } rank && rank.Now.Price <= input.ForceChargeMaxPrice
+           && ChargesInCheapestQuarters(input, now, rank.CheaperUnderMax, simulatedSoc, chargeTo, baseFutureSoC, pvWhSlot, totalLoadWhSlot)
+      ? new InverterState(InverterModes.force_charge, ForceChargeReasons.ForcedChargeAtMinimumPrice)
+      : null;
+  }
 
   // ── NeedToCharge charge target ──────────────────────────────────────────────────────────
   /// <summary>Target SoC of a NeedToCharge grid charge: lifts the unclamped trough before the next PV peak to floor + forecast margin + <see cref="ChargeTargetBufferPct"/>.</summary>
@@ -521,45 +626,11 @@ public static class EnergySimulator
       }
     }
 
-    // ── User-initiated force charge at cheapest window ────────────────────────────────────
-    // The ForceCharge switch tells us to fill the battery to ForceChargeTargetSoC % at the
-    // cheapest hour of the day. We look 1 h before to 2 h after the cheapest slot.
-    // If charging takes more than 60 min and the hour BEFORE cheapest is still cheap,
-    // we start early so we finish exactly at the cheapest moment.
-    if (input.EnableCheapForceCharge)
-    {
-      var cheapestToday = input.ImportPrices.GetCheapestWindowToday(now);
-      if (cheapestToday.StartTime != default &&
-          cheapestToday.Price <= input.ForceChargeMaxPrice &&
-          now > cheapestToday.StartTime.AddHours(-1) && now < cheapestToday.StartTime.AddHours(2))
-      {
-        // Hysteresis: if already charging in this slot, keep going until target is reached
-        if (currentMode.ModeReason == ForceChargeReasons.ForcedChargeAtMinimumPrice
-            && currentMode.Mode == InverterModes.force_charge
-            && simulatedSoc <= Math.Min(98, input.ForceChargeTargetSocPercent + 2))
-          return currentMode;
-
-        // How long will charging take from the base SoC at the cheapest start time?
-        int socAtBestTime = baseFutureSoC.GetValueOrDefault(cheapestToday.StartTime, simulatedSoc);
-        int chargeTime = input.CalculateChargingDuration(socAtBestTime, 100);
-        int rankBefore = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(-1));
-        int rankAfter = input.ImportPrices.GetPriceRank(cheapestToday.StartTime.AddHours(1));
-        DateTime chargeStart = cheapestToday.StartTime;
-
-        // If charging takes >60 min and the preceding hour is cheaper than the following,
-        // start before the cheapest slot so we end at the cheapest hour (cheapest-end charging)
-        if (chargeTime > 60 && rankBefore < rankAfter)
-        {
-          var priceHourBefore = input.ImportPrices.FirstOrDefault(p => p.StartTime == chargeStart.AddHours(-1));
-          if (priceHourBefore.Price < input.ForceChargeMaxPrice)
-            chargeStart = cheapestToday.StartTime.AddMinutes(-(chargeTime - 50));
-        }
-
-        if (now > chargeStart && now < chargeStart.AddMinutes(chargeTime + 10)
-            && simulatedSoc < Math.Min(96, input.ForceChargeTargetSocPercent))
-          return new InverterState(InverterModes.force_charge, ForceChargeReasons.ForcedChargeAtMinimumPrice);
-      }
-    }
+    // ── Daily target charge (user switch) ─────────────────────────────────────────────────
+    // Reach ForceChargeTargetSoC by the end of the day's PV, buying only what PV won't deliver,
+    // in the cheapest quarters under the price limit (DailyTargetChargeMode).
+    if (DailyTargetChargeMode(currentMode, input, now, simulatedSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot) is { } daily)
+      return daily;
 
     // ── NeedToCharge → force charge in the cheapest quarters before the deadline ──────────
     // If the base SoC forecast predicts we will go below minimum and PV won't rescue us,
@@ -604,42 +675,23 @@ public static class EnergySimulator
         window = upcoming.Where(p => p.StartTime <= need.LatestChargeTime).ToList(); // safety fallback
 
       // Always charge in the single cheapest quarter (re-picked every slot, so the charge runs
-      // forward from it while it stays the cheapest). On top of that, charge in the N cheapest
-      // quarters that are under ForceChargeMaxPrice, N = quarters needed for the deficit — but
-      // only those: an over-threshold quarter ahead of the cheapest one isn't worth it, since
-      // holding the floor with grid_only buys the load at that same price anyway without
-      // filling the battery before the cheap quarter. Price ties go to the earlier quarter.
-      // Exact boundary comparison: simulation slots are always on quarter-hour boundaries.
-      // Runs every slot of every simulation, so it ranks `now` in one pass instead of sorting.
+      // forward from it while it stays the cheapest) if that beats holding the floor. On top of
+      // that, charge in the N cheapest quarters under ForceChargeMaxPrice, N = quarters needed for
+      // the deficit (ChargesInCheapestQuarters): an over-threshold quarter ahead of the cheapest one
+      // isn't worth it, since holding the floor with grid_only buys the load at that same price
+      // anyway without filling the battery before the cheap quarter.
       bool inWindow = false;
-      int nowIndex = window.FindIndex(p => p.Covers(now));
-      if (nowIndex >= 0)
+      if (RankNow(window, now, input.ForceChargeMaxPrice) is { } rank)
       {
-        var nowEntry = window[nowIndex];
-        bool CheaperThanNow(PriceTableEntry p, int i) => p.Price < nowEntry.Price || (p.Price == nowEntry.Price && i < nowIndex);
-        int cheaperCount = 0, cheaperUnderMax = 0;
-        for (int i = 0; i < window.Count; i++)
-          if (CheaperThanNow(window[i], i))
-          {
-            cheaperCount++;
-            if (window[i].Price <= input.ForceChargeMaxPrice) cheaperUnderMax++;
-          }
-
         // Holding the floor bridges the low until PV takes over after it — not today's PV that is
         // already running at midday (live 2026-10-26 13:30: that left one cheap night hour to compare
         // with, so 0.3649 now lost and the night charged at 0.3727; at 00:30 the span reached
         // tomorrow's PV and the morning peak).
-        inWindow = cheaperCount == 0
+        inWindow = rank.Cheaper == 0
           && ChargingBeatsHolding(window, upcoming, need, PvTakeoverAfter(need.LatestChargeTime, baseFutureSoC.Keys, input), input);
-        if (!inWindow && nowEntry.Price <= input.ForceChargeMaxPrice)
-        {
-          int targetSoc = DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input);
-          int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
-          int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
-          int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
-          inWindow = cheaperUnderMax < quartersNeeded
-            || VppNowBeatsBulkLater(input, now, simulatedSoc, targetSoc, baseFutureSoC, cheaperUnderMax, maxChargeWh);
-        }
+        if (!inWindow && rank.Now.Price <= input.ForceChargeMaxPrice)
+          inWindow = ChargesInCheapestQuarters(input, now, rank.CheaperUnderMax, simulatedSoc,
+            DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input), baseFutureSoC, pvWhSlot, totalLoadWhSlot);
       }
       // Above the price limit only for the floor itself, never for the forecast margin alone (live
       // 2026-10-25 12:15: 35.4 ct for a margin 19 h ahead; an EV drawing the battery triggered it again).
@@ -647,8 +699,7 @@ public static class EnergySimulator
       if (inWindow && !marginAllowed
           && !ComputeNeedToCharge(simulatedSoc, baseFutureSoC, currentMode, input, now, withMargin: false).NeedToCharge)
         inWindow = false;
-      // Don't start over 96 % (too slow); allow up to 98 % once already charging
-      bool socOk = currentMode.Mode == InverterModes.force_charge ? simulatedSoc <= 98 : simulatedSoc <= 96;
+      bool socOk = SocOkToCharge(currentMode, simulatedSoc);
       // Not before a PV peak that fills the battery anyway (live 2026-10-25 11:45: 95 %, PV to 100 %
       // by 12:15, the low only tomorrow 07:00 — the charge bought at 35 ct what PV then exported).
       // The rest of the deficit is bought after the peak.
@@ -752,7 +803,7 @@ public static class EnergySimulator
       InverterModes.feedin_priority
         => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, batteryChargeEnable: false),
 
-      _ // normal, automatic, reset — all follow the standard PV-first flow
+      _ // normal, automatic — the standard PV-first flow
         => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, state.BatteryChargeEnable, state.ExportAllowed),
     };
   }

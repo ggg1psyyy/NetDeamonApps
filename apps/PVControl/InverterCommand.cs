@@ -13,35 +13,56 @@ namespace NetDeamon.apps.PVControl;
 /// <param name="Mode">Inverter mode.</param>
 /// <param name="BatteryPowerW">Battery power, W: positive charges, negative discharges, 0 holds (or the inverter's own control in normal).</param>
 /// <param name="Bulk">A large grid charge at full power (HA may use a faster path than for small top-ups).</param>
-/// <param name="Seq">Version; increases with every change of mode, power or <see cref="Bulk"/>.</param>
-public readonly record struct InverterCommand(InverterModes Mode, int BatteryPowerW, bool Bulk, int Seq)
+/// <param name="Seq">Version; increases with every change of mode, current or <see cref="Bulk"/>.</param>
+/// <param name="CurrentA">Battery current the power was made from, A (0 when the battery is held or on its own).</param>
+public readonly record struct InverterCommand(InverterModes Mode, int BatteryPowerW, bool Bulk, int Seq, double CurrentA = 0)
 {
-  /// <summary>The command of this cycle: the previous one if nothing changed, else a new version.</summary>
-  /// <param name="previous">Command published last; null = none yet.</param>
-  /// <param name="mode">Mode now.</param>
-  /// <param name="batteryPowerW">Battery power now, W.</param>
-  /// <param name="bulk">Bulk charge now.</param>
-  /// <param name="restoredSeq">Last version before a restart (continues counting from it).</param>
-  /// <returns>The command.</returns>
-  public static InverterCommand Next(InverterCommand? previous, InverterModes mode, int batteryPowerW, bool bulk, int restoredSeq = 0)
-  {
-    if (previous is { } p && p.Mode == mode && p.BatteryPowerW == batteryPowerW && p.Bulk == bulk) return p;
-    return new InverterCommand(mode, batteryPowerW, bulk, (previous?.Seq ?? restoredSeq) + 1);
-  }
+  /// <summary>Currents closer than this are the same command, A (the cap's limit moves in whole amps).</summary>
+  public const double SameCurrentA = 0.5;
 
   /// <summary>
-  /// Battery power of a mode: charging from the grid at the import cap's limit (whole amps, so it
-  /// changes rarely), discharging at the maximum, otherwise 0.
+  /// The command of this cycle: the previous one if mode, bulk and current are unchanged, else a new
+  /// version with the power from the current at the battery voltage now. The voltage is measured and
+  /// steps by 5 V with the SoC; it only goes into a command that changes anyway, so a running charge
+  /// isn't re-applied with every step.
   /// </summary>
+  /// <param name="previous">Command published last; null = none yet.</param>
+  /// <param name="mode">Mode now.</param>
+  /// <param name="currentA">Battery current the mode runs at, A: the cap's limit or the hardware maximum (<see cref="PowerFor"/>).</param>
+  /// <param name="bulk">Bulk charge now.</param>
+  /// <param name="voltageV">Battery voltage now, V.</param>
+  /// <param name="restoredSeq">Last version before a restart (continues counting from it).</param>
+  /// <returns>The command.</returns>
+  public static InverterCommand Next(InverterCommand? previous, InverterModes mode, double currentA, bool bulk, int voltageV, int restoredSeq = 0)
+  {
+    int powerW = PowerFor(mode, currentA, voltageV);
+    if (powerW == 0) currentA = 0;
+    if (previous is { } p && p.Mode == mode && p.Bulk == bulk && Math.Abs(p.CurrentA - currentA) < SameCurrentA) return p;
+    return new InverterCommand(mode, powerW, bulk, (previous?.Seq ?? restoredSeq) + 1, currentA);
+  }
+
+  /// <summary>The command as published before a restart (the sensor's state and attributes), so an unchanged
+  /// command keeps its version instead of a new one per restart.</summary>
+  /// <param name="mode">The sensor's state.</param>
+  /// <param name="batteryPowerW">Attribute battery_power_w.</param>
+  /// <param name="bulk">Attribute bulk.</param>
+  /// <param name="seq">Attribute seq.</param>
+  /// <param name="voltageV">Battery voltage now, V (the current behind the power).</param>
+  /// <returns>The command; null if anything is missing or unparsable.</returns>
+  public static InverterCommand? FromPublished(string? mode, int? batteryPowerW, bool? bulk, int? seq, int voltageV) =>
+    Enum.TryParse(mode, out InverterModes m) && batteryPowerW is { } p && bulk is { } b && seq is { } s
+      ? new InverterCommand(m, p, b, s, voltageV > 0 ? Math.Abs(p) / (double)voltageV : 0)
+      : null;
+
+  /// <summary>Battery power of a mode: charging at the current, discharging at it, otherwise 0.</summary>
   /// <param name="mode">Inverter mode.</param>
-  /// <param name="chargeLimitA">Charge current the import cap allows (<see cref="ImportCap.ImportCapGuard.NextLimit"/>), A.</param>
-  /// <param name="maxA">Hardware maximum, A.</param>
+  /// <param name="currentA">Battery current, A: the cap's limit or the hardware maximum.</param>
   /// <param name="voltageV">Battery voltage, V.</param>
   /// <returns>W: positive charges, negative discharges.</returns>
-  public static int PowerFor(InverterModes mode, double chargeLimitA, double maxA, int voltageV) => mode switch
+  public static int PowerFor(InverterModes mode, double currentA, int voltageV) => mode switch
   {
-    InverterModes.force_charge or InverterModes.force_charge_grid_only => (int)Math.Round(Math.Min(chargeLimitA, maxA) * voltageV),
-    InverterModes.force_discharge => -(int)Math.Round(maxA * voltageV),
+    InverterModes.force_charge or InverterModes.force_charge_grid_only => (int)Math.Round(currentA * voltageV),
+    InverterModes.force_discharge => -(int)Math.Round(currentA * voltageV),
     _ => 0,
   };
 
@@ -63,7 +84,7 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
       ? rest[end].SoC                                                     // SoC at the start of the slot after the charge
       : Math.Min(100, Soc.FromWh(Soc.ToWh(last.SoC, capacityWh) + last.BatteryChargeWh - last.BatteryDischargeWh, capacityWh));
     return new PlannedCharge(rest.Skip(first).Take(end - first).Sum(s => s.BatteryChargeWh), targetSoc,
-      rest[first].Time, last.Time.AddMinutes(TimeRange.SlotMinutes));
+      rest[first].Time, last.Time.AddMinutes(TimeRange.SlotMinutes), rest[first].State.ModeReason);
   }
 
   /// <summary>
@@ -106,4 +127,5 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
 /// <param name="TargetSocPercent">SoC at its end, %.</param>
 /// <param name="Start">Start of its first slot.</param>
 /// <param name="End">End of its last slot.</param>
-public readonly record struct PlannedCharge(int EnergyWh, int TargetSocPercent, DateTime Start, DateTime End);
+/// <param name="Reason">Why it charges (the first slot's reason).</param>
+public readonly record struct PlannedCharge(int EnergyWh, int TargetSocPercent, DateTime Start, DateTime End, ForceChargeReasons Reason = ForceChargeReasons.None);

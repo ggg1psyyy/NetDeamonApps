@@ -15,36 +15,62 @@ public class InverterCommandTests
   [Fact]
   public void Next_Unchanged_KeepsTheVersion()
   {
-    var first = InverterCommand.Next(null, InverterModes.force_charge, 7350, bulk: true);
-    Assert.Equal(1, first.Seq);
-    Assert.Equal(first, InverterCommand.Next(first, InverterModes.force_charge, 7350, bulk: true));
+    var first = InverterCommand.Next(null, InverterModes.force_charge, 30, bulk: true, voltageV: 245);
+    Assert.Equal((1, 7350), (first.Seq, first.BatteryPowerW));
+    Assert.Equal(first, InverterCommand.Next(first, InverterModes.force_charge, 30, bulk: true, voltageV: 245));
   }
 
   [Fact]
-  public void Next_ModeOrPowerChanged_NewVersion()
+  public void Next_ModeOrCurrentChanged_NewVersion()
   {
-    var a = InverterCommand.Next(null, InverterModes.force_charge, 7350, bulk: true);
-    var b = InverterCommand.Next(a, InverterModes.force_charge, 6860, bulk: false);   // throttled: no longer bulk
-    var c = InverterCommand.Next(b, InverterModes.normal, 0, bulk: false);
-    Assert.Equal((2, 3), (b.Seq, c.Seq));
+    var a = InverterCommand.Next(null, InverterModes.force_charge, 30, bulk: true, voltageV: 245);
+    var b = InverterCommand.Next(a, InverterModes.force_charge, 28, bulk: false, voltageV: 245);   // throttled: no longer bulk
+    var c = InverterCommand.Next(b, InverterModes.normal, 30, bulk: false, voltageV: 245);
+    Assert.Equal((2, 6860, 3, 0), (b.Seq, b.BatteryPowerW, c.Seq, c.BatteryPowerW));
+  }
+
+  [Fact]
+  public void Next_VoltageStepAlone_IsNotANewVersion()
+  {
+    // The measured battery voltage steps by 5 V with the SoC; a running charge isn't re-applied for that.
+    // The next real change (the cap's limit) takes the voltage of that moment.
+    var a = InverterCommand.Next(null, InverterModes.force_charge, 30, bulk: false, voltageV: 240);
+    Assert.Equal(a, InverterCommand.Next(a, InverterModes.force_charge, 30, bulk: false, voltageV: 245));
+    var b = InverterCommand.Next(a, InverterModes.force_charge, 28, bulk: false, voltageV: 245);
+    Assert.Equal((2, 6860), (b.Seq, b.BatteryPowerW));
+    // The battery held or on its own: the current doesn't matter.
+    var hold = InverterCommand.Next(b, InverterModes.grid_only, 28, bulk: false, voltageV: 245);
+    Assert.Equal(hold, InverterCommand.Next(hold, InverterModes.grid_only, 30, bulk: false, voltageV: 250));
   }
 
   [Fact]
   public void Next_AfterRestart_ContinuesTheVersion()
   {
     // HA still holds the version it applied before the restart: counting on avoids a false "in sync".
-    Assert.Equal(58, InverterCommand.Next(null, InverterModes.normal, 0, bulk: false, restoredSeq: 57).Seq);
+    Assert.Equal(58, InverterCommand.Next(null, InverterModes.normal, 30, bulk: false, voltageV: 245, restoredSeq: 57).Seq);
+  }
+
+  [Fact]
+  public void FromPublished_RestoredCommand_UnchangedKeepsItsVersion()
+  {
+    // The sensor still holds the command from before the restart: the same command again isn't a new version
+    // (every restart re-applied it to the inverter), a different one counts on from it.
+    var restored = InverterCommand.FromPublished("force_charge", 7350, false, 57, voltageV: 245);
+    Assert.Equal(new InverterCommand(InverterModes.force_charge, 7350, false, 57, 30), restored);
+    Assert.Equal(57, InverterCommand.Next(restored, InverterModes.force_charge, 30, bulk: false, voltageV: 245, restoredSeq: 57).Seq);
+    Assert.Equal(58, InverterCommand.Next(restored, InverterModes.normal, 30, bulk: false, voltageV: 245, restoredSeq: 57).Seq);
+    Assert.Null(InverterCommand.FromPublished("unavailable", 0, false, 57, 245));
+    Assert.Null(InverterCommand.FromPublished("grid_only", null, false, 57, 245));
   }
 
   [Theory]
   [InlineData(InverterModes.force_charge, 28.0, 7000)]           // grid charging at the import cap's limit
-  [InlineData(InverterModes.force_charge_grid_only, 30.0, 7500)] // negative price: at most the hardware maximum
-  [InlineData(InverterModes.force_charge, 35.0, 7500)]           // never above the maximum
-  [InlineData(InverterModes.force_discharge, 12.0, -7500)]       // discharging at the maximum
+  [InlineData(InverterModes.force_charge_grid_only, 30.0, 7500)] // negative price: the hardware maximum
+  [InlineData(InverterModes.force_discharge, 30.0, -7500)]       // discharging at the maximum
   [InlineData(InverterModes.grid_only, 30.0, 0)]                 // battery held
   [InlineData(InverterModes.normal, 30.0, 0)]                    // the inverter's own control
-  public void PowerFor_ByMode(InverterModes mode, double limitA, int expectedW) =>
-    Assert.Equal(expectedW, InverterCommand.PowerFor(mode, limitA, maxA: 30, voltageV: 250));
+  public void PowerFor_ByMode(InverterModes mode, double currentA, int expectedW) =>
+    Assert.Equal(expectedW, InverterCommand.PowerFor(mode, currentA, voltageV: 250));
 
   static SimulationSlot Slot(DateTime t, int soc, InverterModes mode, int chargeWh) =>
     new(t, soc, new InverterState(mode, ForceChargeReasons.None), 0, 100, 0, chargeWh, 0, chargeWh, 0);
@@ -58,7 +84,7 @@ public class InverterCommandTests
       Slot(t0.AddMinutes(60), 59, InverterModes.normal, 0)];
 
     var running = InverterCommand.NextCharge(plan, t0.AddMinutes(5), 11_520)!.Value;
-    Assert.Equal((2300, 50, t0, t0.AddMinutes(30)), (running.EnergyWh, running.TargetSocPercent, running.Start, running.End));
+    Assert.Equal((2300, 50, t0, t0.AddMinutes(30), ForceChargeReasons.None), (running.EnergyWh, running.TargetSocPercent, running.Start, running.End, running.Reason));
     // Between charges: the next one (the SoC after it from the slot that follows).
     var next = InverterCommand.NextCharge(plan, t0.AddMinutes(35), 11_520)!.Value;
     Assert.Equal((1150, 59, t0.AddMinutes(45)), (next.EnergyWh, next.TargetSocPercent, next.Start));

@@ -102,21 +102,6 @@ entities:
       width: 0
       shape: spline
 
-  - entity: sensor.pv_control_info_predicted_soc
-    name: reset
-    showlegend: false
-    filters:
-      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'reset' ? s.soc : null) })"
-    type: scatter
-    mode: lines
-    connectgaps: false
-    fill: tozeroy
-    fillcolor: "rgba(220,50,50,0.32)"
-    line:
-      color: "rgba(0,0,0,0)"
-      width: 0
-      shape: spline
-
   # ── Export-disallowed overlay: orthogonal to mode, drawn last so it tints whatever
   # mode fill (if any) is active underneath — e.g. force_charge + export disallowed at once.
   - entity: sensor.pv_control_info_predicted_soc

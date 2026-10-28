@@ -105,7 +105,7 @@ public static class HealthChecks
   /// <summary>How long a quarter over the import cap stays reported.</summary>
   public static readonly TimeSpan OverCapReportedFor = TimeSpan.FromHours(1);
 
-  /// <summary>Import cap: no import counter = error (the guard is blind), only a fallback counter = degraded, a recent quarter over the cap = degraded.</summary>
+  /// <summary>Import cap: no import counter configured or working = error (the guard is blind), only a fallback counter = degraded, a recent quarter over the cap = degraded.</summary>
   /// <param name="capW">The cap, W; 0 = off (no issues).</param>
   /// <param name="activeSource">Index of the counter in use; -1 = none works.</param>
   /// <param name="sources">Counter entity ids in priority order.</param>
@@ -114,8 +114,10 @@ public static class HealthChecks
   /// <returns>The issues.</returns>
   public static IEnumerable<HealthIssue> ImportCap(int capW, int activeSource, IReadOnlyList<string> sources, ImportCap.QuarterResult? lastOverCap, DateTime now)
   {
-    if (capW <= 0 || sources.Count == 0) yield break;
-    if (activeSource < 0)
+    if (capW <= 0) yield break;
+    if (sources.Count == 0)
+      yield return new HealthIssue("import_cap", HealthLevel.error, "Import cap configured without an import counter (TotalImportEnergyEntities) — it can't be kept");
+    else if (activeSource < 0)
       yield return new HealthIssue("import_cap", HealthLevel.error, "No grid import counter works — import cap can't be kept");
     else if (activeSource > 0)
       yield return new HealthIssue("import_counter", HealthLevel.degraded, $"Import counter {sources[0]} failed — using {sources[activeSource]}");

@@ -625,7 +625,7 @@ public class FindWindowConditionTests : TestBase
       ImportPrices                = prices,
       ExportPrices                = prices,
       LoadPredictionWh            = FlatLoad(baseDate, LoadWh),
-      PVPredictionWh              = DaytimePV(baseDate, PvWh),
+      PVPredictionWh              = FlatLoad(baseDate, 0), // no PV: the daily target (60 %) is bought in the cheap hour
       ExtraLoads                  = [],
       EnableCheapForceCharge      = true, // switch.pv_control_force_charge_at_cheapest_period
       OpportunisticDischarge      = false,

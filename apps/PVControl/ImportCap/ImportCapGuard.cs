@@ -9,7 +9,7 @@ namespace NetDeamon.apps.PVControl.ImportCap;
 /// <param name="GridImportW">Grid import now, W ≥ 0.</param>
 /// <param name="HouseLoadW">House load now, W — everything except the battery, extra loads included.</param>
 /// <param name="PvW">PV power now, W.</param>
-/// <param name="ExtraLoadsW">Power of the running extra loads now (EV), W.</param>
+/// <param name="ExtraLoadsW">Measured power of the extra loads now (EV), W — also one that runs outside PVControl's switch.</param>
 /// <param name="ExtraLoadsOn">Extra loads asked to run (charge_now), whether or not they draw yet.</param>
 /// <param name="ExtraLoadsNominalW">Their usual power, W (counted while they ramp up, and to decide a resume).</param>
 /// <param name="ExtraLoadsPaused">The guard paused them last cycle.</param>
@@ -68,9 +68,11 @@ public static class ImportCapGuard
     double budgetWh = Energy.Wh(g.CapW, TimeSpan.FromMinutes(TimeRange.SlotMinutes)) - imported - Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(reaction));
     double allowedW = effective >= MinEffectSeconds ? Math.Min(g.CapW, budgetWh * 3600 / effective) : g.CapW;
 
-    // What the battery may take: the cap less the house's own net draw and the extra loads.
+    // What the battery may take: the cap less the house's own net draw and the extra loads. A load
+    // asked to run counts at least its usual power (it may still ramp up); one drawing without being
+    // asked (the charger switched on outside PVControl) counts what it draws — it's import all the same.
     int baseW = g.HouseLoadW - g.ExtraLoadsW - g.PvW;
-    int extraW = g.ExtraLoadsOn && !g.ExtraLoadsPaused ? Math.Max(g.ExtraLoadsW, g.ExtraLoadsNominalW) : 0;
+    int extraW = g.ExtraLoadsOn && !g.ExtraLoadsPaused ? Math.Max(g.ExtraLoadsW, g.ExtraLoadsNominalW) : g.ExtraLoadsW;
     double batteryW = allowedW - baseW - extraW;
     double limitA = Math.Clamp(Math.Floor(batteryW / Math.Max(1, g.VoltageV) * 10) / 10, 0, g.MaxChargeA);
 

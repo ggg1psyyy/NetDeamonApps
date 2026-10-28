@@ -88,7 +88,21 @@ of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
   The same fix holds the floor instead of charging at the same price when only later hours are
   cheap (an afternoon EV drain: grid_only at 0.30 until a 0.05 hour, not a 0.30 charge + loss).
 
-**Mode order** (`ComputeMode`): negative import price → opportunistic discharge → user force
+**Daily target charge** (`switch.pv_control_force_charge_at_cheapest_period`,
+`DailyTargetChargeSoc`/`DailyTargetChargeMode`): reach `ForceChargeTargetSoC` by the end of the
+day's PV (`SimulationInput.DailyTargetDeadline`: the end of the last slot with PV, a day without
+PV at its end; tomorrow's once today's has passed) — headroom for the evening and the night. It
+buys only what the no-charging look-ahead doesn't reach at the deadline, at most the room a PV
+peak before it leaves (`PvRoomBeforeLow`), and only when that's more than `MinPvRoomPct`; the
+quarters are the N cheapest under the price limit before the deadline, on the same machinery as
+the NeedToCharge charge (`RankNow`, `ChargesInCheapestQuarters`: quarters needed at the rate the
+load leaves under the import cap, VPP-vs-bulk start, SoC 96/98 %). Until the review 2026-10-28 the
+switch was the hourly-price-era code: the cheapest *hour* of the calendar day (1 h before to 2 h
+after it, ±1 h price ranks, "start `chargeTime − 50` min early"), the duration sized to 100 %
+regardless of the PV still to come, stopping at min(96 %, target) — it charged the full
+target even when the afternoon PV would have delivered most of it.
+
+**Mode order** (`ComputeMode`): negative import price → opportunistic discharge → daily target
 charge → NeedToCharge → normal. A negative export price is not a step but a modifier
 (`InverterState.ExportAllowed = false`): it used to return house_only early, which blocked the
 cheap force charge and the NeedToCharge safety net during every negative-export window — and
@@ -245,15 +259,33 @@ subtracted from the house load (`avg_house_load_now` down to −1.2 kW) until th
    heating whatever the other loads do, so they plan against a baseline that contains it
 
 5. For each schedulable load (highest Priority first):
-       FindLoadWindow(load, baseInput, baseline)
+       if due (ReplanPolicy): FindLoadWindow(load, baseInput, baseline)
        → writes load.ChargeNow / ChargeReason / PredictedEnd / ExtraLoads
+       baseInput += its ExtraLoads (decided now or kept) and baseline = Simulate(baseInput):
+       the next load plans against a base that contains it (two loads never plan the same
+       cheap quarters — review 2026-10-28; with one EV it changes nothing)
 
-6. finalInput = baseInput + all found ExtraLoads
-
-7. _simulationResult = Simulate(finalInput)
+6. _simulationResult = the last baseline (the base with every load)
    → this is what ProposedState reads from
+   → its running slot's state is the plan's own previous mode for the next cycle
    → also used to update Prediction_BatterySoC
 ```
+
+**The plan's state is its own.** The simulation gets the previous slot's mode (`CurrentMode`) for
+hysteresis — a running charge continues to its target, its path stays, the margin rules differ
+while charging. That mode is what the plan decided last cycle (`_planMode`), never what was
+published: the user override and the bug-fix kick only change `ProposedState`'s result. Before
+the review 2026-10-28 one field served both, so under an override `force_charge` the next
+simulation started as if it had chosen that charge (slot 0 with the continue rules and `Bulk`
+copied from the override) and the dashboard's plan drifted from the autonomous one.
+
+**`reset` mode removed** (review 2026-10-28): it was published for two cycles when the inverter's
+run mode came back to "Normal Mode" and HA then wrote `export_control_user_limit` (a holding
+register) and pressed `system_on`. In the 11 days the recorder held, it fired twice (10-19) — both
+the run-mode sensor dropout fixed that day (`1d4a14d`) — and the inverter never actually left
+Normal Mode. After a real inverter restart the reconciler re-applies the current command anyway.
+The bug-fix kick (a 15-s `force_discharge` when normal mode imports 50–300 W for ~75 s) stays; it
+didn't fire in those 11 days either, but it's cheap and harmless on the VPP path.
 
 After RunSimulation, `PVControl.ScheduledOperationsCore` lets the warm-water controller act on
 its plan (`ActAsync`: start a one-time heating, end a boost) and publish it.
@@ -435,12 +467,18 @@ charge window), and that added import is the load's own grid use at that slot's 
 `FindLoadWindow`, a restart within MinOffMinutes of the last stop is held back — ChargeNow stays
 false and the planned session moves to the end of the off-time ("Off-latched …"). Stops are
 never delayed. Bypassed by a mode change, a change of `SessionStartSettings`, or an availability
-change. The end of either latch triggers a replan.
+change. The end of either latch triggers a replan. The moved session is rebuilt from its energy
+(`SessionPlanner.EndForEnergy`) and keeps `FromGrid`: moving it by its window length carried the
+running-slot surplus (up to 14 min) along, and the copy without `FromGrid` was simulated as a
+battery session — the very flip the sticky grid supply of 2026-10-28 was meant to end (review
+2026-10-28).
 
 **Replanning** (`ReplanPolicy`, per-load `ReplanIntervalMinutes`, default 5): every 15-s cycle
 still runs the house simulation, the final simulation and the inverter command, but a load's
 `FindLoadWindow` (the expensive part) only runs when due — interval elapsed, a requested replan
-(any user change, availability change, new prices, house load off its forecast for 5 min via
+(any user change, availability change, prices that really changed — `PriceManager.UpdatePriceList`
+compares the fetched lists, since the two quarter-hourly price entities changed state ~93× a day
+each and every change rescanned every load —, house load off its forecast for 5 min via
 `LoadDeviationTracker`), a new quarter-hour, house battery SoC or the load's level changed, or
 the load started/stopped drawing power. In between, its last decision (ChargeNow, sessions)
 stays and is simulated as is. The load's live safety checks live inside `FindLoadWindow`, so
@@ -746,8 +784,11 @@ chosen when a charge starts, by the power it needs: VPP if it gets the energy in
 of the same price, else bulk. The provider bills hourly (`ImportPriceResolution: Hourly`), so four
 quarters at ~4 kW cost the same as one at 7.4 kW — VPP covers most charges without EEPROM writes;
 with quarter-hourly prices the one cheap quarter usually needs the full power. The battery limit
-counts PV in (VPP limits the battery power, not the grid's share). The command's power uses a
-nominal voltage: the measured one in 5-V steps made 2–3 new versions per charge (7050/7200/7350 W).
+counts PV in (VPP limits the battery power, not the grid's share). The command's power is current ×
+the measured battery voltage, but the voltage only goes into a command that changes anyway
+(`InverterCommand.Next` compares mode, bulk and current): following every 5-V step made 2–3 new
+versions per charge (7050/7200/7350 W), and a nominal 240 V — the fix until the review 2026-10-28 —
+was a second voltage next to the measured one the import cap guard budgets with (~4 % apart).
 A started charge runs at least a minute — RAM writes don't wear, but a stop 15 s after the start
 (live 01:31:15–01:31:30) is noise.
 An earlier VPP start beats a later bulk one (`VppNowBeatsBulkLater`): the N-cheapest-quarters rule
@@ -821,6 +862,11 @@ The battery input counter is read in Wh (base unit) like the import/export count
 three go through `CostTracker.CounterDeltaKwh`. The battery used its own copy that took the Wh
 value as kWh: each 0.1-kWh step counted as 100 kWh, so the average swung between the grid price
 (2026-10-21 00:00, 0.0001 → 0.317 €/kWh in one step) and 0 (07:33 → 0.0056) instead of blending.
+The cost log's quarter rows (`costs` table) book the lifetime counters through
+`CostTracker.CounterBooking`: an unreadable counter keeps the last total and books 0. The export
+side used to ignore a failed read, so a dropout at a quarter boundary stored total 0, a large
+negative export, and the next row booked the whole counter as export (review 2026-10-28; the
+import side already fell back via `PriorityCounter`).
 
 ---
 

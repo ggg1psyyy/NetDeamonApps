@@ -155,12 +155,12 @@ public class SessionPlannerTests : TestBase
   const int TwoHours = 120;
 
   static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice, DateTime? preferred = null,
-    float minSaving = SessionPlanner.DefaultMinSavingFraction)
+    float minSaving = SessionPlanner.DefaultMinSavingFraction, DateTime? now = null)
   {
     var input = Input(12, price, maxPrice);
     var baseline = EnergySimulator.Simulate(input);
     return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), (int)Math.Ceiling(EvW * TwoHours / 60.0), EvW,
-      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, minSaving, preferredStart: preferred);
+      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, minSaving, preferredStart: preferred, now: now);
   }
 
   // Sticky plan: live inputs move every cycle, so a planned start's saving hovers around the
@@ -307,6 +307,18 @@ public class SessionPlannerTests : TestBase
     Assert.NotNull(p);
     Assert.Equal(StartChoice.DeadlineNow, p.Value.Choice);
     Assert.Equal(EveningFrom, p.Value.Start);
+  }
+
+  [Fact]
+  public void Deadline_RunningSlotDeliversFromNow_TooCloseStartsNow()
+  {
+    // 18:05 in the 18:00 slot, 2 h of energy, ready by 20:00: from the slot's start it would just fit,
+    // from now it ends 20:05 — "can't finish in time", not a start chosen as if it did.
+    var fits   = Best(_ => 0.30f, deadline: EveningFrom.AddHours(2));
+    var tooLate = Best(_ => 0.30f, deadline: EveningFrom.AddHours(2), now: EveningFrom.AddMinutes(5));
+    Assert.Equal(StartChoice.Earliest, fits!.Value.Choice);
+    Assert.Equal(StartChoice.DeadlineNow, tooLate!.Value.Choice);
+    Assert.Equal(EveningFrom, tooLate.Value.Start);
   }
 
   [Fact]

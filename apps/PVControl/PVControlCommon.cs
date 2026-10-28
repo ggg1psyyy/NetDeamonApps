@@ -198,7 +198,6 @@ namespace NetDeamon.apps.PVControl
     public float ExportPriceTax { get; set; } = default;
     public PriceResolution ExportPriceResolution { get; set; } = PriceResolution.Hourly;
     public Entity InverterStatusEntity { get; set; } = null!;
-    public string InverterStatusNormalString { get; set; } = "Normal Mode";
     public Entity DailyImportEnergyEntity { get; set; } = null!;
     public Entity DailyExportEnergyEntity { get; set; } = null!;
     public Entity? BatteryInputEnergyEntity { get; set; }
@@ -269,9 +268,6 @@ namespace NetDeamon.apps.PVControl
     public double VppChargePowerAt0PctW { get; set; } = 5950;
     /// <summary>Change of the VPP grid charge power per % SoC, W (negative: falls with the SoC).</summary>
     public double VppChargePowerSlopeWPerPct { get; set; } = -41;
-    /// <summary>Nominal battery voltage for the inverter command's power, V: the command shouldn't follow
-    /// the measured voltage (every 5-V step was a new command version).</summary>
-    public int BatteryNominalVoltageV { get; set; } = 240;
     /// <summary>HA's feedback whether the inverter runs the published inverter command (on = in sync; attribute
     /// <c>blocked</c> = the reconciler gave up); null = not checked.</summary>
     public Entity? InverterSyncEntity { get; set; }

@@ -156,4 +156,15 @@ public class CostTracker
     lastKwh = kwh;
     return diff;
   }
+
+  /// <summary>
+  /// Booking of a total counter in the cost log (import, export): the total to store and the increase
+  /// since the last row. An unreadable counter keeps the last total and books 0 — a 0 total made the
+  /// row's export negative and the next row book the whole counter as export.
+  /// </summary>
+  /// <param name="reading">The counter now; null = unavailable.</param>
+  /// <param name="lastTotal">Total of the last row; null = none yet.</param>
+  /// <returns>Total and increase (never negative), in the counter's unit.</returns>
+  public static (float Total, float Increase) CounterBooking(float? reading, float? lastTotal) =>
+    reading is { } r ? (r, lastTotal is { } last ? Math.Max(0, r - last) : 0) : (lastTotal ?? 0, 0);
 }

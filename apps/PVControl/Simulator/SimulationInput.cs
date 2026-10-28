@@ -242,6 +242,23 @@ public class SimulationInput
   public DateTime GetFirstRelevantPVTime(DateTime date, DateTime from) =>
     RelevantPVEdge(date, first: true, from) ?? date.AddDays(2).AddMinutes(-1);
 
+  /// <summary>
+  /// Deadline of the daily target charge (<see cref="EnergySimulator.DailyTargetChargeSoc"/>): when the day's PV is
+  /// over — the end of its last slot with PV, or the day's end on a day without any — tomorrow's once today's has passed.
+  /// </summary>
+  /// <param name="now">Current slot.</param>
+  /// <returns>The deadline; null if none lies ahead within the forecast.</returns>
+  public DateTime? DailyTargetDeadline(DateTime now)
+  {
+    for (var date = now.Date; date <= now.Date.AddDays(1); date = date.AddDays(1))
+    {
+      var lastPv = PVPredictionWh.Where(k => k.Key.Date == date && k.Value > 0).Select(k => (DateTime?)k.Key).Max();
+      var deadline = lastPv is { } last ? last.AddMinutes(TimeRange.SlotMinutes) : date.AddDays(1);
+      if (deadline > now) return deadline;
+    }
+    return null;
+  }
+
   /// <summary>End of the day's relevant PV (<see cref="RelevantPVEdge"/>, last).</summary>
   /// <param name="date">Day.</param>
   /// <returns>Slot start; far future (date + 2 days − 1 min) if none.</returns>

@@ -94,6 +94,18 @@ public class SourceSharesTests
     Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 200), 4);    // counts on from the new day
   }
 
+  [Fact]
+  public void CounterBooking_UnavailableCounter_KeepsTheTotalAndBooksNothing()
+  {
+    // The export counter unavailable at a quarter boundary: the row stored total 0 and export −(last total),
+    // the next row then booked the whole counter as export.
+    Assert.Equal((2_410_500f, 1_500f), CostTracker.CounterBooking(2_410_500, 2_409_000));
+    Assert.Equal((2_410_500f, 0f), CostTracker.CounterBooking(null, 2_410_500));
+    Assert.Equal((2_412_000f, 1_500f), CostTracker.CounterBooking(2_412_000, 2_410_500)); // counts on from the kept total
+    Assert.Equal((100f, 0f), CostTracker.CounterBooking(100, null));                      // first row: nothing to compare with
+    Assert.Equal((50f, 0f), CostTracker.CounterBooking(50, 100));                          // a replaced counter: never negative
+  }
+
   // ── Price lookup ─────────────────────────────────────────────────────────────────────
 
   [Fact]

@@ -69,9 +69,11 @@ public static class SessionPlanner
     // Every candidate delivers the same energy: its end from the energy, not from start + duration.
     int durationMinutes = Energy.Minutes(energyWh, powerW);
     DateTime End(DateTime start) => EndForEnergy(start, energyWh, powerW, now);
-    var lastStart = deadline is null ? horizonEnd : deadline.Value.AddMinutes(-durationMinutes);
-    if (deadline is not null && lastStart < minStart)
+    // Even the earliest start can't finish in time (in the running slot it delivers from now, so its end
+    // is later than start + duration): start now.
+    if (deadline is { } by && End(minStart) > by)
       return new PlannedStart(minStart, StartChoice.DeadlineNow);
+    var lastStart = deadline is null ? horizonEnd : deadline.Value.AddMinutes(-durationMinutes);
 
     // A session near the simulation's end isn't fully costed or price-checked: the part after
     // the end looks free, and the grid need it causes (e.g. the following night) falls outside

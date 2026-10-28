@@ -19,11 +19,17 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Maximum import price (€/kWh) at which force-charging is permitted.</summary>
     public float ForceChargeMaxPrice { get; set; }
 
-    /// <summary>Clears the netto caches, forcing a re-fetch on the next access.</summary>
-    public void UpdatePriceList()
+    /// <summary>Fetches the netto prices again.</summary>
+    /// <returns>True if they differ from the ones held so far (the price entities change state every quarter and with
+    /// every fetch; a replan is only worth a real change).</returns>
+    public bool UpdatePriceList()
     {
-      _priceListCache = new();
-      _independentExportPriceListCache = new();
+      var import = FetchNettoPriceList(PVCC_Config.CurrentImportPriceEntity);
+      var export = FetchNettoPriceList(PVCC_Config.CurrentExportPriceEntity);
+      bool changed = !import.SameAs(_priceListCache) || !export.SameAs(_independentExportPriceListCache);
+      _priceListCache = import;
+      _independentExportPriceListCache = export;
+      return changed;
     }
 
     /// <summary>Netto prices from a price entity's "data" attribute (ha_epex_spot format), quarter-hourly.</summary>
