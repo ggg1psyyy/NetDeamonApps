@@ -90,6 +90,47 @@ namespace NetDeamon.apps
     /// <param name="wh">Energy of the slot in Wh.</param>
     /// <returns>Mean power in W.</returns>
     public static int SlotW(int wh) => wh * 4;
+
+    /// <summary>Mean power of a 15-min slot (any unit: kWh gives kW).</summary>
+    /// <param name="wh">Energy of the slot.</param>
+    /// <returns>Mean power.</returns>
+    public static double SlotW(double wh) => wh * 60 / TimeRange.SlotMinutes;
+
+    /// <summary>
+    /// Energy counted by a meter over its readings: the sum of its increases. A drop below 90 % of the
+    /// last counted reading is a reset (counts from 0) unless the meter returns near its level within
+    /// <see cref="GlitchLookahead"/> readings (a glitch, skipped); smaller drops are noise.
+    /// </summary>
+    /// <param name="readings">Meter readings in time order.</param>
+    /// <returns>The increase; works for daily-reset and running-total meters.</returns>
+    public static float CounterIncrease(IReadOnlyList<float> readings)
+    {
+      if (readings.Count == 0) return 0;
+      float total = 0;
+      float reference = readings[0]; // last reading that counted — skipped readings never become the base
+      for (int i = 1; i < readings.Count; i++)
+      {
+        float current = readings[i];
+        if (current >= reference) { total += current - reference; reference = current; }
+        else if (current < reference * 0.9f && !ReturnsTo(readings, i + 1, reference * 0.9f))
+        { total += current; reference = current; }
+      }
+      return total;
+    }
+
+    /// <summary>Readings a meter has to get back to its level in for a drop to be a glitch, not a reset (<see cref="CounterIncrease"/>).</summary>
+    public const int GlitchLookahead = 5;
+
+    /// <summary>Whether a meter gets back to a level within <see cref="GlitchLookahead"/> readings.</summary>
+    /// <param name="readings">Meter readings.</param>
+    /// <param name="from">Index to look from.</param>
+    /// <param name="level">Level to reach.</param>
+    private static bool ReturnsTo(IReadOnlyList<float> readings, int from, float level)
+    {
+      for (int i = from; i < Math.Min(readings.Count, from + GlitchLookahead); i++)
+        if (readings[i] >= level) return true;
+      return false;
+    }
   }
 
   /// <summary>Battery state of charge (%) and energy (Wh).</summary>

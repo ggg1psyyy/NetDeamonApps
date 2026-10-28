@@ -90,7 +90,7 @@ public class SourceSharesTests
     float last = float.NaN;
     Assert.Equal(0f, CostTracker.CounterDeltaKwh(ref last, 1200));        // first reading: baseline
     Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 1300), 4);   // 0.1 kWh, not 100
-    Assert.True(CostTracker.CounterDeltaKwh(ref last, 100) < 0);          // midnight reset: ignored by callers
+    Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 100), 4);    // midnight reset: the new day's first 0.1 kWh counts (Energy.CounterIncrease)
     Assert.Equal(0.1f, CostTracker.CounterDeltaKwh(ref last, 200), 4);    // counts on from the new day
   }
 

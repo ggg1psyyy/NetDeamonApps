@@ -166,13 +166,8 @@ namespace NetDeamon.apps.PVControl
     private IEnumerable<PriceTableEntry> TodayByPrice(DateTime now) =>
       _entries.Where(p => p.StartTime >= now.Date && p.EndTime <= now.Date.AddDays(1)).OrderBy(p => p.Price);
 
-    /// <summary>Cheapest entry of today.</summary>
-    /// <param name="now">Any time of today.</param>
-    /// <returns>The entry; default if there is none.</returns>
-    public PriceTableEntry GetCheapestWindowToday(DateTime now) => TodayByPrice(now).FirstOrDefault();
-
-    /// <summary>Cheapest entry of today (now).</summary>
-    public PriceTableEntry CheapestToday => GetCheapestWindowToday(DateTime.Now);
+    /// <summary>Cheapest entry of today (now); default if there is none.</summary>
+    public PriceTableEntry CheapestToday => TodayByPrice(DateTime.Now).FirstOrDefault();
 
     /// <summary>Most expensive entry of today (now).</summary>
     public PriceTableEntry MostExpensiveToday => TodayByPrice(DateTime.Now).LastOrDefault();
@@ -192,29 +187,6 @@ namespace NetDeamon.apps.PVControl
       if (need.NeedToCharge)
         return upcoming.Where(p => p.StartTime <= need.LatestChargeTime).OrderBy(p => p.Price).FirstOrDefault();
       return upcoming.OrderBy(p => p.Price).FirstOrDefault();
-    }
-
-    // ── Ranking / percentile ─────────────────────────────────────────────────────────────────
-
-    /// <summary>Rank of the entry covering a time among all entries.</summary>
-    /// <param name="time">Time to look up.</param>
-    /// <returns>1 = cheapest; 0 if no entry covers it.</returns>
-    public int GetPriceRank(DateTime time)
-    {
-      var ordered = _entries.OrderBy(p => p.Price).ToList();
-      return ordered.IndexOf(EntryAt(time) ?? default) + 1;
-    }
-
-    /// <summary>Position of the price at a time between the list's minimum and maximum.</summary>
-    /// <param name="time">Time to look up.</param>
-    /// <returns>0 = cheapest … 100 = most expensive; −1 for an empty list.</returns>
-    public int GetPricePercentage(DateTime time)
-    {
-      if (_entries.Count == 0) return -1;
-      float minPrice = _entries.Min(p => p.Price);
-      float maxPrice = _entries.Max(p => p.Price);
-      float price = EntryAt(time)?.Price ?? 0;
-      return maxPrice - minPrice == 0 ? 0 : (int)Math.Round((price - minPrice) / (maxPrice - minPrice) * 100, 0);
     }
 
     // ── Local maxima ─────────────────────────────────────────────────────────────────────────

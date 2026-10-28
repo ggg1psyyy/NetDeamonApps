@@ -380,7 +380,7 @@ dotnet test NetDeamonApps.Tests/
 | Test class | What it covers |
 |---|---|
 | `PredictionContainerTests` | 192-slot 15-min window validation (`DataOK`) |
-| `MidnightRolloverTests` | Load data staleness detection after midnight |
+| `MidnightRolloverTests` | The load prediction's day rollover after midnight, the PV forecast's window cut |
 | `SimulatorTests` | End-to-end `EnergySimulator.Simulate()` with injectable `SimulationInput` |
 | `FindWindowConditionTests` | Simulation conditions behind the load scheduling rules (PV surplus, overnight minimum, new/cheap grid, grid charge sized into the cheap band) |
 | `CheapWindowShorterThanSessionTests` | PriorityPlus with a cheap window shorter than the session (live 2026-10-25): charges the window, longest passing end, min window, follow-up |

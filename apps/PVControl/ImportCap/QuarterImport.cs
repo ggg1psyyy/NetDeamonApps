@@ -47,7 +47,7 @@ public sealed class QuarterImport(int sources)
       // The finished quarter ends with this update's readings (a few seconds of the new one count to it).
       if (_quarter is { } old && _start is not null && old == quarter - TimeRange.Slot
           && _counter.IncreaseSince(_start) is { } kwh)
-        finished = new QuarterResult(old.ToLocalTime(), kwh * 60 / TimeRange.SlotMinutes);
+        finished = new QuarterResult(old.ToLocalTime(), Energy.SlotW(kwh));
       // Starts from the last update before the quarter — not after a restart or a gap.
       _start = _previousTime is { } t && quarter - t <= MaxStartGap ? _previous : null;
       _quarter = quarter;

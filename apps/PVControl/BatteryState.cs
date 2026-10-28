@@ -154,9 +154,6 @@ public class BatteryState
 
   public int CurrentAverageBatteryChargeDischargePower => _battChargeAverage.GetAverage();
 
-  public int AvailablePower => 0;
-  public int AvailableEnergy => 0;
-
   /// <summary>Energy above a floor at a SoC.</summary>
   /// <param name="soc">SoC, %.</param>
   /// <param name="minSoC">Floor, %; −1 = the preferred minimum.</param>

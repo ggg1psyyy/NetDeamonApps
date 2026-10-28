@@ -125,40 +125,6 @@ public class PriceListTests
     Assert.True(new PriceList().SameAs(new PriceList()));
   }
 
-  // ── GetPriceRank / GetPricePercentage regression (hour-bucket bug) ──────
-
-  [Fact]
-  public void GetPriceRank_WithQuarterHourEntries_PicksMatchingSlot()
-  {
-    var start = new DateTime(2026, 8, 10, 12, 0, 0);
-    var list = new PriceList([
-      new PriceTableEntry(start, start.AddMinutes(15), 40f),           // rank 4
-      new PriceTableEntry(start.AddMinutes(15), start.AddMinutes(30), 10f), // rank 1
-      new PriceTableEntry(start.AddMinutes(30), start.AddMinutes(45), 30f), // rank 3
-      new PriceTableEntry(start.AddMinutes(45), start.AddMinutes(60), 20f), // rank 2
-    ]);
-
-    Assert.Equal(4, list.GetPriceRank(start));
-    Assert.Equal(1, list.GetPriceRank(start.AddMinutes(15)));
-    Assert.Equal(3, list.GetPriceRank(start.AddMinutes(30)));
-    Assert.Equal(2, list.GetPriceRank(start.AddMinutes(45)));
-  }
-
-  [Fact]
-  public void GetPricePercentage_WithQuarterHourEntries_PicksMatchingSlot()
-  {
-    var start = new DateTime(2026, 8, 10, 12, 0, 0);
-    var list = new PriceList([
-      new PriceTableEntry(start, start.AddMinutes(15), 0f),
-      new PriceTableEntry(start.AddMinutes(15), start.AddMinutes(30), 50f),
-      new PriceTableEntry(start.AddMinutes(30), start.AddMinutes(45), 100f),
-    ]);
-
-    Assert.Equal(0, list.GetPricePercentage(start));
-    Assert.Equal(50, list.GetPricePercentage(start.AddMinutes(15)));
-    Assert.Equal(100, list.GetPricePercentage(start.AddMinutes(30)));
-  }
-
   // ── GetBestChargeWindow ──────────────────────────────────────────────────
 
   /// <summary>

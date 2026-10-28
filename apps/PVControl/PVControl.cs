@@ -111,22 +111,19 @@ namespace NetDeamon.apps.PVControl
         waitSeconds++;
       }
 
-      // Remove old legacy sensors
-      #if DEBUG
+      // Entities of earlier versions (the EV's own mode/target/charge_now, heavy loads, the inverter command
+      // sensor — now part of sensor.pv_control_mode) are removed; once they're gone from HA this is a no-op.
       foreach (var id in new[] {
         "select.pv_control_ev_charging_mode",
         "number.pv_control_ev_target_soc",
         "binary_sensor.pv_control_ev_charge_now",
-        "sensor.pv_control_run_heavyloads_now"
+        "sensor.pv_control_run_heavyloads_now",
+        "sensor.pv_control_inverter_command",
       })
       {
         if (new Entity(PVCC_HaContext, id).State != null)
           await PVCC_EntityManager.RemoveAsync(id);
       }
-      #endif
-      // The inverter command is part of sensor.pv_control_mode (it was a sensor of its own).
-      if (new Entity(PVCC_HaContext, "sensor.pv_control_inverter_command").State != null)
-        await PVCC_EntityManager.RemoveAsync("sensor.pv_control_inverter_command");
       _house = new HouseEnergy();
       await _house.SeedSoCHistoryAsync(cancellationToken);
       if (await RegisterControlSensors(false))
@@ -656,9 +653,8 @@ namespace NetDeamon.apps.PVControl
     private async Task LearnVppCurveAsync(DateTime now)
     {
       int soc = _house.Battery.BatterySoc;
-      bool inSync = PVCC_Config.InverterSyncEntity is not { } sync || sync.State == "on";
       if (_inverterCommand is { Mode: InverterModes.force_charge or InverterModes.force_charge_grid_only, Bulk: false } c
-          && !_chargeThrottled && inSync && now - _inverterCommandIssued >= TimeSpan.FromMinutes(1) && soc is > 5 and < 97
+          && !_chargeThrottled && InverterInSync && now - _inverterCommandIssued >= TimeSpan.FromMinutes(1) && soc is > 5 and < 97
           && _house.Battery.CurrentAverageBatteryChargeDischargePower is var w && w > 0 && w < c.BatteryPowerW - 300)
         _house.VppCurve.Observe(soc, w);
       if (_vppCurveEntity is null || now - _vppCurvePublished < TimeSpan.FromMinutes(1)) return;
@@ -741,8 +737,7 @@ namespace NetDeamon.apps.PVControl
       try
       {
         var monthStart = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
-        using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={PVCC_Config.DBFullLocation};Mode=ReadOnly");
-        con.Open();
+        using var con = OpenHistoryDb();
         using var cmd = con.CreateCommand();
         cmd.CommandText = "SELECT timestamp, maxquarterimport FROM hourly WHERE maxquarterimport IS NOT NULL AND timestamp >= $from ORDER BY maxquarterimport DESC LIMIT 1";
         cmd.Parameters.AddWithValue("$from", monthStart.ToISO8601());
@@ -838,6 +833,17 @@ namespace NetDeamon.apps.PVControl
 
     static bool Unavailable(Entity? e) => e is null || e.State is null or "unknown" or "unavailable";
 
+    /// <summary>Whether the inverter runs the published command (HA's feedback, <see cref="PVConfig.InverterSyncEntity"/>); true if not checked.</summary>
+    private static bool InverterInSync => PVCC_Config.InverterSyncEntity is not { } sync || sync.State == "on";
+
+    /// <summary>Opens the DataLogger's history DB (the load prediction's source) read-only.</summary>
+    private static Microsoft.Data.Sqlite.SqliteConnection OpenHistoryDb()
+    {
+      var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={PVCC_Config.DBFullLocation};Mode=ReadOnly;Pooling=False");
+      connection.Open();
+      return connection;
+    }
+
     /// <summary>Runs all <see cref="HealthChecks"/> on the values of this cycle.</summary>
     /// <param name="now">Current time.</param>
     /// <returns>The current issues.</returns>
@@ -863,8 +869,7 @@ namespace NetDeamon.apps.PVControl
 
       issues.AddRange(HealthChecks.Cycle(_cycleFailures, _lastCycleError));
       var sync = PVCC_Config.InverterSyncEntity;
-      bool inSync = sync is null || sync.State is not ("off" or "unavailable" or "unknown");
-      _inverterOutOfSyncSince = inSync ? null : _inverterOutOfSyncSince ?? now;
+      _inverterOutOfSyncSince = InverterInSync ? null : _inverterOutOfSyncSince ?? now;
       bool blocked = sync is not null && sync.TryGetJsonAttribute("blocked", out System.Text.Json.JsonElement b) && b.ValueKind == System.Text.Json.JsonValueKind.True;
       issues.AddRange(HealthChecks.InverterSync(sync is not null, _inverterOutOfSyncSince, blocked, now));
       issues.AddRange(HealthChecks.ImportCap(PVCC_Config.MaxGridImportW, _quarterImport.Counter.ActiveIndex,
@@ -887,8 +892,7 @@ namespace NetDeamon.apps.PVControl
     {
       try
       {
-        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={PVCC_Config.DBFullLocation};Mode=ReadOnly;Pooling=False");
-        connection.Open();
+        using var connection = OpenHistoryDb();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT max(timestamp) FROM hourly";
         return command.ExecuteScalar() is string text
@@ -1374,17 +1378,6 @@ namespace NetDeamon.apps.PVControl
         checkResult = false;
         PVCC_Logger.LogError("{entity} is not available in configuration ({entityid})", "TodayPVEnergyEntity", PVCC_Config.TodayPVEnergyEntity?.EntityId);
       }
-      //if (_config.ForecastPVEnergyTodayEntity?.State is null)
-      //{
-      //  checkResult = false;
-      //  _logger.LogError("ForecastPVEnergyTodayEntity is not available in configuration (" + _config.ForecastPVEnergyTodayEntity?.EntityId + ")");
-      //}
-      //if (_config.ForecastPVEnergyTodayEntity?.State is null)
-      //{
-      //  checkResult = false;
-      //  _logger.LogError("ForecastPVEnergyTodayEntity is not available in configuration (" + _config.ForecastPVEnergyTodayEntity?.EntityId + ")");
-      //}
-
       return checkResult;
     }
     /// <summary>Registers PVControl's HA entities (sensors, selects, numbers, switches) via MQTT and reads their current values.</summary>
@@ -1477,7 +1470,7 @@ namespace NetDeamon.apps.PVControl
         reRegister: reset);
 
       _modeEntity = await RegisterSensor("sensor.pv_control_mode", "Mode", "ENUM", "mdi:form-select",
-        addConfig: new { options = Enum.GetNames<InverterModes>() },
+        addConfig: new { options = Enum.GetNames<InverterModes>().Where(m => m != nameof(InverterModes.automatic)).ToArray() }, // automatic is the override's "none"
         defaultValue: InverterModes.normal.ToString(),
         reRegister: reset);
       RestoreInverterCommand();

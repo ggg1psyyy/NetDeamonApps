@@ -40,6 +40,22 @@ public class VppChargePathTests
   }
 
   [Fact]
+  public void Curve_TooFewReadingsOrTooNarrowASpan_StaysOnTheDefault()
+  {
+    // Fewer than MinReadings in a bucket, or buckets spanning less than MinSpanPct: no line is fitted.
+    var few = new VppChargeCurve(5950, -41);
+    for (int i = 0; i < VppChargeCurve.MinReadings - 1; i++) { few.Observe(31, 4000); few.Observe(61, 2800); }
+    Assert.False(few.Line.Learned);
+    few.Observe(31, 4000); few.Observe(61, 2800);
+    Assert.True(few.Line.Learned);
+
+    var narrow = new VppChargeCurve(5950, -41);
+    for (int i = 0; i < 20; i++) { narrow.Observe(31, 4000); narrow.Observe(41, 3600); } // buckets 30 and 40: a 10 % span
+    Assert.False(narrow.Line.Learned);
+    Assert.Equal(5950 - 41 * 46, narrow.MaxW(46));
+  }
+
+  [Fact]
   public void Curve_SerializeRestore_RoundTrip()
   {
     var curve = new VppChargeCurve(5950, -41);

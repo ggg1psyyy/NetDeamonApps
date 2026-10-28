@@ -80,7 +80,7 @@ public sealed class PriorityCounter(int sources)
   /// <summary>
   /// Energy counted since a snapshot of the readings, by the first working source that has a snapshot
   /// value (a source switched to mid-interval counts from its own start value). Counter resets and
-  /// glitches as in <see cref="global::PVControl.DataLogger.CounterIncrease"/>.
+  /// glitches as in <see cref="Energy.CounterIncrease"/>.
   /// </summary>
   /// <param name="since">Readings at the start, per source (<see cref="Values"/> then).</param>
   /// <returns>kWh; null if no working source has a start value.</returns>
@@ -88,7 +88,7 @@ public sealed class PriorityCounter(int sources)
   {
     for (int i = 0; i < _values.Length; i++)
       if (!Failed(i) && i < since.Count && since[i] is { } start && _values[i] is { } now)
-        return global::PVControl.DataLogger.CounterIncrease([(float)start, (float)now]);
+        return Energy.CounterIncrease([(float)start, (float)now]);
     return null;
   }
 

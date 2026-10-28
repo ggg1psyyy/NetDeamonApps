@@ -10,25 +10,22 @@ namespace NetDeamon.apps.PVControl.Predictions
   {
     private readonly string _dbLocation;
     private readonly float _weightScaling;
-    private readonly bool _baseLoadOnly;
     private readonly IReadOnlyList<string> _excludeColumns;
 
     /// <summary>Creates and fills the load forecast from the energy history DB.</summary>
     /// <param name="dbLocation">Path of the SQLite energy history DB.</param>
     /// <param name="weightScaling">Age weighting: a day weighs exp(−age in days / weightScaling).</param>
-    /// <param name="baseLoadOnly">Subtract EV charging and warm water from the house load.</param>
     /// <param name="excludeColumns">
     /// DB columns subtracted from the house load (loads added back as ExtraLoads):
-    /// "carcharge", "warmwaterenergy", "heatpumpenergy". Ignored with <paramref name="baseLoadOnly"/>.
+    /// "carcharge", "warmwaterenergy", "heatpumpenergy".
     /// </param>
-    public HourlyWeightedAverageLoadPrediction(string dbLocation, float weightScaling = 20f, bool baseLoadOnly = false, IReadOnlyList<string>? excludeColumns = null)
+    public HourlyWeightedAverageLoadPrediction(string dbLocation, float weightScaling = 20f, IReadOnlyList<string>? excludeColumns = null)
     {
       _dbLocation = dbLocation;
       if (string.IsNullOrEmpty(_dbLocation) || !System.IO.File.Exists(_dbLocation))
         throw new ArgumentException("DBLocation missing or file not found");
 
       _weightScaling = weightScaling;
-      _baseLoadOnly = baseLoadOnly;
       _excludeColumns = excludeColumns ?? [];
       Initialize("Load Prediction");
     }
@@ -80,8 +77,6 @@ namespace NetDeamon.apps.PVControl.Predictions
     private int ComputeValue(int? houseenergy, int? carcharge, int? warmwaterenergy, int? heatpumpenergy)
     {
       int value = houseenergy ?? 0;
-      if (_baseLoadOnly)
-        return value - (carcharge ?? 0) - (warmwaterenergy ?? 0);
       return value - (int)ExcludedEnergy(_excludeColumns, carcharge, warmwaterenergy, heatpumpenergy);
     }
 

@@ -37,17 +37,6 @@ namespace NetDeamon.apps.PVControl
   }
 
   /// <summary>A snapshot of the house.</summary>
-  /// <param name="houseLoad">House load, W.</param>
-  /// <param name="soC">Battery SoC, %.</param>
-  /// <param name="inverterState">Inverter mode.</param>
-  /// <param name="pvPower">PV power, W.</param>
-  public struct SystemState(int houseLoad, int soC, InverterState inverterState, int pvPower)
-  {
-    public int PVPower = pvPower;
-    public int HouseLoad = houseLoad;
-    public int SoC = soC;
-    public InverterState InverterState = inverterState;
-  }
   /// <summary>An inverter command: mode, reason and the two modifiers.</summary>
   /// <param name="mode">Inverter mode.</param>
   /// <param name="modeReason">Why this mode.</param>

@@ -68,23 +68,23 @@ namespace NetDeamon.apps.PVControl.Predictions
         foreach (var item in resultDTO)
           result.Add(item.Key.DateTime, item.Value);
 
-        if (result != null)
+        // Power at each timestamp holds until the next one (the last: the interval before).
+        var interval = TimeRange.Slot;
+        for (int i = 0; i < result.Count; i++)
         {
-          // Power at each timestamp holds until the next one (the last: the interval before).
-          var interval = TimeRange.Slot;
-          for (int i = 0; i < result.Count; i++)
-          {
-            var r = result.ElementAt(i).Key;
-            if (result[r] == 0)
-              continue;
-            if (i < result.Count - 1)
-              interval = result.ElementAt(i + 1).Key - r;
-            result[r] = (int)Energy.Wh(result[r], interval);
-          }
-          return result;
+          var r = result.ElementAt(i).Key;
+          if (result[r] == 0)
+            continue;
+          if (i < result.Count - 1)
+            interval = result.ElementAt(i + 1).Key - r;
+          result[r] = (int)Energy.Wh(result[r], interval);
         }
+        return result;
       }
-      catch { }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogError(ex, "Could not read the PV forecast of {Entity}", entity.EntityId);
+      }
       return [];
     }
   }

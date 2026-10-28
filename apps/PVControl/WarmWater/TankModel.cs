@@ -96,13 +96,15 @@ public sealed record TankModel(
     {
       var xs = powerRuns.Select(r => (r.StartTemp + r.EndTemp) / 2).ToList();
       var ys = powerRuns.Select(r => r.AvgPowerW!.Value).ToList();
+      // The line through the runs' mean at a slope, read at 45 °C (the fitted slope, or the model's when the runs don't spread enough).
+      double PowerAt45(double slope) => Math.Clamp(ys.Average() + slope * (45 - xs.Average()), 300, 5000);
       if (xs.Max() - xs.Min() >= MinSpreadForSlopeK && Regression.LinearFit(xs, ys) is { } fit)
       {
         double slope = Math.Clamp(fit.Slope, 0, 200);
-        model = model with { PowerSlopeWPerK = slope, PowerAt45W = Math.Clamp(ys.Average() + slope * (45 - xs.Average()), 300, 5000) };
+        model = model with { PowerSlopeWPerK = slope, PowerAt45W = PowerAt45(slope) };
       }
       else
-        model = model with { PowerAt45W = Math.Clamp(ys.Average() - model.PowerSlopeWPerK * (xs.Average() - 45), 300, 5000) };
+        model = model with { PowerAt45W = PowerAt45(model.PowerSlopeWPerK) };
     }
 
     // Standby loss: drop over one-hour windows (stepped every 15 min) away from any heating.

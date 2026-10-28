@@ -145,14 +145,15 @@ public class CostTracker
     }
   }
 
-  /// <summary>Energy since the last reading of a daily counter — the one conversion for all three counters.</summary>
+  /// <summary>Energy since the last reading of a daily counter — the one conversion for all three counters,
+  /// resets and glitches as for every meter (<see cref="Energy.CounterIncrease"/>: the reading after the midnight reset counts from 0).</summary>
   /// <param name="lastKwh">Last reading in kWh (NaN = none yet); set to this reading.</param>
   /// <param name="counterWh">This reading in Wh (the base unit of <see cref="Extensions.TryGetStateValue{T}"/>).</param>
-  /// <returns>kWh since the last reading; 0 for the first reading, negative at the midnight reset.</returns>
+  /// <returns>kWh since the last reading; 0 for the first reading.</returns>
   public static float CounterDeltaKwh(ref float lastKwh, float counterWh)
   {
     float kwh = counterWh / 1000;
-    float diff = float.IsNaN(lastKwh) ? 0 : kwh - lastKwh;
+    float diff = float.IsNaN(lastKwh) ? 0 : Energy.CounterIncrease([lastKwh, kwh]);
     lastKwh = kwh;
     return diff;
   }

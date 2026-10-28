@@ -60,7 +60,7 @@ public static class ImportCapGuard
     double estimate = Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(g.ElapsedSeconds));
     bool plausible = g.ImportedWh is { } measured && measured <= Energy.Wh(MaxPlausibleW, TimeSpan.FromSeconds(g.ElapsedSeconds + 60));
     double imported = plausible ? g.ImportedWh!.Value : estimate;
-    double projectedKw = (imported + Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(remaining))) * 60 / TimeRange.SlotMinutes / 1000;
+    double projectedKw = Energy.SlotW(imported + Energy.Wh(g.GridImportW, TimeSpan.FromSeconds(remaining))) / 1000;
 
     // Mean import allowed once a change takes effect.
     double reaction = Math.Min(g.ReactionSeconds, remaining);
@@ -74,12 +74,14 @@ public static class ImportCapGuard
     int baseW = g.HouseLoadW - g.ExtraLoadsW - g.PvW;
     int extraW = g.ExtraLoadsOn && !g.ExtraLoadsPaused ? Math.Max(g.ExtraLoadsW, g.ExtraLoadsNominalW) : g.ExtraLoadsW;
     double batteryW = allowedW - baseW - extraW;
-    double limitA = Math.Clamp(Math.Floor(batteryW / Math.Max(1, g.VoltageV) * 10) / 10, 0, g.MaxChargeA);
+    // Battery power → charge current, 0.1 A steps rounded down, within the hardware limit.
+    double AmpsFor(double w) => Math.Clamp(Math.Floor(w / Math.Max(1, g.VoltageV) * 10) / 10, 0, g.MaxChargeA);
+    double limitA = AmpsFor(batteryW);
 
     bool pause = g.ExtraLoadsOn && (g.ExtraLoadsPaused
       ? allowedW - baseW < g.ExtraLoadsNominalW + ResumeMarginW   // resumes only with room to spare
       : batteryW < 0);                                            // battery at 0 A and still over
-    if (pause) limitA = Math.Clamp(Math.Floor((allowedW - baseW) / Math.Max(1, g.VoltageV) * 10) / 10, 0, g.MaxChargeA);
+    if (pause) limitA = AmpsFor(allowedW - baseW);
 
     int headroom = (int)(Math.Min(allowedW, g.CapW) - baseW - (pause ? 0 : extraW));
     string reason = pause ? $"extra loads paused: {allowedW / 1000:F1} kW allowed, house {baseW / 1000.0:F1} kW"

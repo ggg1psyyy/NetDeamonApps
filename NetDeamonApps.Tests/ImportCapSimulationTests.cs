@@ -72,7 +72,7 @@ public class ImportCapSimulationTests : TestBase
     // House at 4 kW: under a 6 kW cap the battery gets 2 kW instead of 7.35.
     var free = EnergySimulator.Simulate(Input(0, loadWhSlot: 1000));
     var capped = EnergySimulator.Simulate(Input(6000, loadWhSlot: 1000));
-    Assert.True(Quarters(capped) >= Quarters(free), $"capped {Quarters(capped)} vs free {Quarters(free)} quarters");
+    Assert.True(Quarters(capped) > Quarters(free), $"capped {Quarters(capped)} vs free {Quarters(free)} quarters");
     Assert.All(capped, s => Assert.True(Energy.SlotW(s.GridImportWh) <= 6000 * 1.001 || s.State.Mode != InverterModes.force_charge));
   }
 

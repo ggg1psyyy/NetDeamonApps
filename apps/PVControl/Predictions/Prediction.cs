@@ -23,7 +23,6 @@ namespace NetDeamon.apps.PVControl.Predictions
     public bool DataOK { get; private set; }
     /// <summary>Time of the last valid update; default if none.</summary>
     public DateTime LastUpdated { get; private set; }
-    //public bool CachePerDay { get; set; }
     /// <summary>The window; setting it validates against today (<see cref="UpdateData"/>).</summary>
     public Dictionary<DateTime, int> PredictionData
     {
@@ -86,7 +85,6 @@ namespace NetDeamon.apps.PVControl.Predictions
     /// <param name="description">Name for logs.</param>
     protected void Initialize(string description)
     {
-      //_cachedPrediction.CachePerDay = cachePerDay;
       Description = description;
       UpdateData();
     }

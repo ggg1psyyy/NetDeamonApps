@@ -705,24 +705,6 @@ namespace NetDeamon.apps
     public void Set(int index, T item) => _items[index] = item;
   }
 
-  /// <summary>Queue that drops its oldest item when full.</summary>
-  /// <typeparam name="T">Item type.</typeparam>
-  /// <param name="capacity">Maximum number of items.</param>
-  public class FixedSizeQueue<T>(int capacity) : Queue<T> where T : struct
-  {
-    private readonly int _capacity = capacity;
-
-    /// <summary>Adds an item, dropping the oldest one when full.</summary>
-    /// <param name="item">Item to add.</param>
-    public new void Enqueue(T item)
-    {
-      if (Count >= _capacity)
-      {
-        Dequeue();
-      }
-      base.Enqueue(item);
-    }
-  }
   /// <summary>
   /// An energy counter with coarse steps made continuous: the last counter value plus the power
   /// integrated since it last changed, at most one step.

@@ -158,7 +158,7 @@ public sealed class WarmWaterController
     var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur);
     Plan = WarmWaterPlanner.Plan(request);
     Automatic = AutomaticSetpoint is { } setpoint
-      ? WarmWaterPlanner.PredictAutomatic(request with { Comfort = comfort }, setpoint, Config.AutomaticHysteresisK, Heating)
+      ? WarmWaterPlanner.PredictAutomatic(request, setpoint, Config.AutomaticHysteresisK, Heating)
       : WarmWaterPlan.Empty;
   }
 

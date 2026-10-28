@@ -1,4 +1,5 @@
 using NetDeamon.apps.PVControl.Predictions;
+using NetDeamon.apps;
 using DataLogger = PVControl.DataLogger;
 using System;
 using System.Collections.Generic;
@@ -39,26 +40,26 @@ public class HistoryTimestampTests
   {
     // Day window starting with yesterday's total, reset to a small value (no exact 0 seen):
     // everything since the reset counts, i.e. the day's final reading.
-    Assert.Equal(2.5f, DataLogger.CounterIncrease([12.5f, 0.1f, 1.0f, 2.5f]), 3);
+    Assert.Equal(2.5f, Energy.CounterIncrease([12.5f, 0.1f, 1.0f, 2.5f]), 3);
   }
 
   [Fact]
   public void CounterIncrease_RunningTotal_IsLastMinusFirst()
   {
     // Heat pump meter 2026-10-16: 74.527 → 77.220 kWh. The old "skip to the first 0" logic logged 0.
-    Assert.Equal(2.693f, DataLogger.CounterIncrease([74.527f, 75.0f, 76.1f, 77.22f]), 3);
+    Assert.Equal(2.693f, Energy.CounterIncrease([74.527f, 75.0f, 76.1f, 77.22f]), 3);
   }
 
   [Fact]
   public void CounterIncrease_SmallDrop_IsNoiseNotReset() =>
-    Assert.Equal(1.0f, DataLogger.CounterIncrease([10f, 9.5f, 11f]), 3); // the dip isn't counted twice
+    Assert.Equal(1.0f, Energy.CounterIncrease([10f, 9.5f, 11f]), 3); // the dip isn't counted twice
 
   [Fact]
   public void CounterIncrease_GlitchToZeroAndBack_IsNotAReset()
   {
     // Heat pump total, live 2026-10-12 09:09–09:17: drops to 0 and back within a second.
     float[] readings = [60.713f, 0f, 60.714f, 63.106f, 63.107f, 60.716f, 0f, 60.717f, 63.109f, 63.110f, 63.111f, 63.112f];
-    Assert.Equal(63.112f - 60.713f, DataLogger.CounterIncrease(readings), 3);
+    Assert.Equal(63.112f - 60.713f, Energy.CounterIncrease(readings), 3);
   }
 
   [Fact]
@@ -66,7 +67,7 @@ public class HistoryTimestampTests
   {
     // Live 2026-10-14 20:25: 70.962 → 2.678 → 0 → 68.284 → 70.962.
     float[] readings = [70.962f, 2.678f, 0f, 68.284f, 70.962f, 70.963f, 70.964f];
-    Assert.Equal(0.002f, DataLogger.CounterIncrease(readings), 3);
+    Assert.Equal(0.002f, Energy.CounterIncrease(readings), 3);
   }
 
   [Fact]
@@ -76,7 +77,7 @@ public class HistoryTimestampTests
     // part resets first → 2.984, then the other → 0. That's two resets, the first one counted as
     // 2.984 kWh of new energy (true for that hour: ~0.04). Why DataLogger reads the never-resetting
     // sensor.wp_energy_lifetime_total instead.
-    Assert.Equal(2.984f, DataLogger.CounterIncrease([86.005f, 2.984f, 0f, 0.0001f]), 3);
+    Assert.Equal(2.984f, Energy.CounterIncrease([86.005f, 2.984f, 0f, 0.0001f]), 3);
   }
 
   [Fact]
@@ -86,14 +87,14 @@ public class HistoryTimestampTests
     // back by 0.001 kWh before each restart and goes unavailable once (not a reading).
     float[] readings = [0.003f, 0.004f, 0.005f, 0.006f, 0.005f, 0.006f, 0.007f, 0.008f, 0.009f, 0.010f, 0.009f, 0.010f,
       0.011f, 0.012f, 0.013f, 0.014f, 0.015f, 0.015f, 0.016f, 0.015f, 0.016f, 0.017f, 0.018f, 0.019f];
-    Assert.Equal(0.016f, DataLogger.CounterIncrease(readings), 3);
+    Assert.Equal(0.016f, Energy.CounterIncrease(readings), 3);
   }
 
   [Theory]
   [InlineData(new float[] { })]
   [InlineData(new float[] { 5f })]
   public void CounterIncrease_NoChange_IsZero(float[] readings) =>
-    Assert.Equal(0f, DataLogger.CounterIncrease(readings));
+    Assert.Equal(0f, Energy.CounterIncrease(readings));
 
   [Fact]
   public void Migration_RemovesDuplicateTimestamps_KeepingTheFirstRow()

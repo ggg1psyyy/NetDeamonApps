@@ -141,8 +141,9 @@ public sealed class HeatingTest : IAsyncInitializable
           _logger.LogWarning("Heating test: {reason}", _lastDecision);
           break;
         }
-        long id = await _db.StartRunAsync(d.Kind!.Value, now, end, d.Kind == RunKind.Test ? settings.OffsetK : 0, original, Number(_config.OutdoorEntity));
-        _active = new HeatingRun(id, d.Kind.Value, now, end, settings.OffsetK, original);
+        double offsetK = d.Kind == RunKind.Test ? settings.OffsetK : 0; // a reference run has no offset — stored and held the same
+        long id = await _db.StartRunAsync(d.Kind!.Value, now, end, offsetK, original, Number(_config.OutdoorEntity));
+        _active = new HeatingRun(id, d.Kind.Value, now, end, offsetK, original);
         _lastKind = d.Kind;
         if (original is { } level)
         {

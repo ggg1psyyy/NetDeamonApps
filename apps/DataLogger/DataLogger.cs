@@ -311,28 +311,6 @@ namespace PVControl
       return timeStamp;
     }
 
-    /// <summary>
-    /// Energy counted by a meter over its readings: the sum of its increases. A drop below 90 % of the
-    /// last counted reading is a reset (counts from 0) unless the meter returns near its level within
-    /// <see cref="GlitchLookahead"/> readings (a glitch, skipped); smaller drops are noise.
-    /// </summary>
-    /// <param name="readings">Meter readings in time order.</param>
-    /// <returns>The increase; works for daily-reset and running-total meters.</returns>
-    public static float CounterIncrease(IReadOnlyList<float> readings)
-    {
-      if (readings.Count == 0) return 0;
-      float total = 0;
-      float reference = readings[0]; // last reading that counted — skipped readings never become the base
-      for (int i = 1; i < readings.Count; i++)
-      {
-        float current = readings[i];
-        if (current >= reference) { total += current - reference; reference = current; }
-        else if (current < reference * 0.9f && !ReturnsTo(readings, i + 1, reference * 0.9f))
-        { total += current; reference = current; }
-      }
-      return total;
-    }
-
     /// <summary>Minutes in a period during which the state matched.</summary>
     /// <param name="changes">(time, state) in time order; the first one is the state at the period start.</param>
     /// <param name="from">Period start.</param>
@@ -370,20 +348,6 @@ namespace PVControl
         .Select(s => (State: s, Minutes: MinutesInState(changes, from, to, x => x == s)))
         .Where(x => x.Minutes > 0)
         .OrderByDescending(x => x.Minutes).Select(x => x.State).FirstOrDefault();
-
-    /// <summary>Readings after a big drop checked for a return to the old level (glitch, not reset).</summary>
-    public const int GlitchLookahead = 5;
-
-    /// <summary>Whether a meter gets back to a level within <see cref="GlitchLookahead"/> readings.</summary>
-    /// <param name="readings">Meter readings.</param>
-    /// <param name="from">Index to look from.</param>
-    /// <param name="level">Level to reach.</param>
-    private static bool ReturnsTo(IReadOnlyList<float> readings, int from, float level)
-    {
-      for (int i = from; i < Math.Min(readings.Count, from + GlitchLookahead); i++)
-        if (readings[i] >= level) return true;
-      return false;
-    }
 
     /// <summary>Reads the period's values from the HA history and writes one hourly or daily row.</summary>
     /// <param name="historyStart">Period start (UTC).</param>
@@ -510,11 +474,11 @@ namespace PVControl
         }
       }
       int used = NetDeamon.apps.PVControl.ImportCap.PriorityCounter.FirstWorking(sources
-        .Select(r => r is { Count: > 0 } ? (double?)CounterIncrease(r.Select(x => (float)x.Item2).ToList()) : null).ToList());
+        .Select(r => r is { Count: > 0 } ? (double?)Energy.CounterIncrease(r.Select(x => (float)x.Item2).ToList()) : null).ToList());
       return used >= 0 && MaxQuarterKw(sources[used]!, from, to.AddSeconds(1)) is { } kw ? Math.Round(kw, 3) : null;
     }
 
-    /// <summary>Highest mean import of the 15-min blocks of a period from a kWh counter (resets and glitches as in <see cref="CounterIncrease"/>).</summary>
+    /// <summary>Highest mean import of the 15-min blocks of a period from a kWh counter (resets and glitches as in <see cref="Energy.CounterIncrease"/>).</summary>
     /// <param name="readings">(time, kWh) in time order; the first one may lie before the period.</param>
     /// <param name="from">Period start, on a quarter.</param>
     /// <param name="to">Period end (exclusive).</param>
@@ -529,7 +493,7 @@ namespace PVControl
         var values = new List<float> { (float)StepFunction.ValueAt(readings, q) };
         values.AddRange(readings.Where(r => r.Time > q && r.Time < end).Select(r => (float)r.Kwh));
         values.Add((float)StepFunction.ValueAt(readings, end));
-        double kw = CounterIncrease(values) * 60.0 / TimeRange.SlotMinutes;
+        double kw = Energy.SlotW(Energy.CounterIncrease(values));
         max = Math.Max(max ?? 0, kw);
       }
       return max;
@@ -672,7 +636,7 @@ namespace PVControl
       }
       return null;
     }
-    /// <summary>Aggregation of a period's numeric readings (diff = <see cref="CounterIncrease"/>).</summary>
+    /// <summary>Aggregation of a period's numeric readings (diff = <see cref="Energy.CounterIncrease"/>).</summary>
     private enum FloatTask
     {
       average, sum, min, max, diff, first, last
@@ -705,7 +669,7 @@ namespace PVControl
           FloatTask.sum     => list.Sum(),
           FloatTask.min     => list.Min(),
           FloatTask.max     => list.Max(),
-          FloatTask.diff    => CounterIncrease(list),
+          FloatTask.diff    => Energy.CounterIncrease(list),
           FloatTask.first   => list.First(),
           _                 => list.Last(),
         };

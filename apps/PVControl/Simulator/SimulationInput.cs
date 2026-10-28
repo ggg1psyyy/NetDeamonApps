@@ -177,13 +177,6 @@ public class SimulationInput
       ? MaxChargeWhPerSlot(fraction)
       : Math.Min(MaxChargeWhPerSlot(fraction), (int)(Energy.SlotWh(VppChargePowerW(socPercent)) * fraction));
 
-  /// <summary>Time to charge at the maximum power (<see cref="Soc.ChargeMinutes"/>).</summary>
-  /// <param name="startSoC">Start SoC, %.</param>
-  /// <param name="endSoC">End SoC, %.</param>
-  /// <returns>Minutes.</returns>
-  public int CalculateChargingDuration(int startSoC, int endSoC) =>
-    Soc.ChargeMinutes(startSoC, endSoC, BatteryCapacityWh, InverterEfficiency, MaxChargePowerW);
-
   /// <summary>Energy of a SoC with this battery (<see cref="Soc.ToWh"/>).</summary>
   /// <param name="socPercent">SoC or SoC difference, %.</param>
   /// <returns>Wh.</returns>

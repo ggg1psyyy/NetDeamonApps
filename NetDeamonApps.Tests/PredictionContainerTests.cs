@@ -11,20 +11,19 @@ public class PredictionContainerTests : TestBase
 {
   // ── helpers ──────────────────────────────────────────────────────────────
 
+  // A fixed clock (a test must not flip at midnight): the window is validated against this day.
+  static readonly DateTime Now = new(2026, 10, 19, 12, 0, 0);
+  static readonly DateTime Day = Now.Date;
+
   // Set data on a fresh container and return DataOK.
-  static bool DataOK(Dictionary<DateTime, int> data)
-  {
-    var c = new PredictionContainer();
-    c.PredictionData = data;
-    return c.DataOK;
-  }
+  static bool DataOK(Dictionary<DateTime, int> data) => new PredictionContainer().UpdateData(data, Now);
 
   // ── valid cases ───────────────────────────────────────────────────────────
 
   [Fact]
   public void CurrentWindow_192Slots_IsAccepted()
   {
-    var data = MakeWindow(DateTime.Now.Date);
+    var data = MakeWindow(Day);
     Assert.True(DataOK(data));
   }
 
@@ -34,14 +33,14 @@ public class PredictionContainerTests : TestBase
   public void YesterdayWindow_IsRejected()
   {
     // This is exactly what happens after midnight: the old 48h window starts yesterday.
-    var data = MakeWindow(DateTime.Now.Date.AddDays(-1));
+    var data = MakeWindow(Day.AddDays(-1));
     Assert.False(DataOK(data));
   }
 
   [Fact]
   public void TomorrowWindow_IsRejected()
   {
-    var data = MakeWindow(DateTime.Now.Date.AddDays(1));
+    var data = MakeWindow(Day.AddDays(1));
     Assert.False(DataOK(data));
   }
 
@@ -51,7 +50,7 @@ public class PredictionContainerTests : TestBase
   public void OnlyToday_96Slots_IsRejected()
   {
     // Only today's half of the window — tomorrow's slots are missing.
-    var data = MakeWindow(DateTime.Now.Date).Take(96).ToDictionary();
+    var data = MakeWindow(Day).Take(96).ToDictionary();
     Assert.False(DataOK(data));
   }
 
@@ -60,7 +59,7 @@ public class PredictionContainerTests : TestBase
   {
     // The Open-Meteo HA entity may provide hourly keys; 15-min slots would be missing.
     var data = new Dictionary<DateTime, int>();
-    for (var t = DateTime.Now.Date; t < DateTime.Now.Date.AddDays(2); t = t.AddHours(1))
+    for (var t = Day; t < Day.AddDays(2); t = t.AddHours(1))
       data[t] = 0;
     Assert.False(DataOK(data));
   }
@@ -111,8 +110,8 @@ public class PredictionContainerTests : TestBase
   public void ExtraEntries_IsRejected()
   {
     // Data that covers the right window but has an extra stale entry.
-    var data = MakeWindow(DateTime.Now.Date);
-    data[DateTime.Now.Date.AddDays(-1)] = 99; // extra stale entry → count mismatch
+    var data = MakeWindow(Day);
+    data[Day.AddDays(-1)] = 99; // extra stale entry → count mismatch
     Assert.False(DataOK(data));
   }
 }
