@@ -1074,10 +1074,10 @@ namespace NetDeamon.apps.PVControl
           SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Sim;
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSuppliedSimFrom, baseResult,
           readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
-          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes);
+          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now);
         if (planned is not { } p) return;
 
-        var end = p.End ?? p.Start.AddMinutes(durationMinutes);
+        var end = p.End ?? SessionPlanner.SessionEnd(p.Start, durationMinutes, now);
         if (!MeetsMinWindow(p.Start, end)) return;
 
         string why = p.Choice switch

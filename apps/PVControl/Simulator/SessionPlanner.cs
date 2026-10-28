@@ -54,12 +54,14 @@ public static class SessionPlanner
   /// <param name="minSavingFraction">Saving a later start needs over the earliest one (0.01 = 1 %).</param>
   /// <param name="preferredStart">Last cycle's planned start; kept while it passes and is cheaper than the earliest (stops flipping).</param>
   /// <param name="minWindowMinutes">Shortest session worth starting (<see cref="StartChoice.Partial"/>); at least one slot.</param>
+  /// <param name="now">Current time: a session starting in the running slot lasts its duration from now
+  /// (<see cref="SessionEnd"/>); null = from its start.</param>
   /// <returns>The start and why; null if none passes, not even shortened (no deadline).</returns>
   public static PlannedStart? FindBestPriceAwareStart(
     DateTime minStart, DateTime horizonEnd, int durationMinutes,
     Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline,
     DateTime? deadline = null, float minSavingFraction = DefaultMinSavingFraction,
-    DateTime? preferredStart = null, int minWindowMinutes = 0)
+    DateTime? preferredStart = null, int minWindowMinutes = 0, DateTime? now = null)
   {
     var lastStart = deadline is null ? horizonEnd : deadline.Value.AddMinutes(-durationMinutes);
     if (deadline is not null && lastStart < minStart)
@@ -77,7 +79,7 @@ public static class SessionPlanner
     (DateTime Start, float Cost)? earliest = null, cheapest = null, preferred = null, earliestAny = null, cheapestAny = null, preferredAny = null;
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
     {
-      var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
+      var sim = runSim(candidate, SessionEnd(candidate, durationMinutes, now));
       float cost = sim.NetGridCostVs(baseline);
       earliestAny ??= (candidate, cost);
       if (cheapestAny is null || cost < cheapestAny.Value.Cost) cheapestAny = (candidate, cost);
@@ -107,13 +109,26 @@ public static class SessionPlanner
     {
       // Monotone: if the shortest session fails, every longer one from here does too.
       var from = candidate;
-      if (minMinutes >= durationMinutes || !PassesPriceCheck(runSim(from, from.AddMinutes(minMinutes)), baseline)) continue;
-      var end = FindMaxSessionEnd(from, from.AddMinutes(durationMinutes), e => runSim(from, e), sim => PassesPriceCheck(sim, baseline));
+      if (minMinutes >= durationMinutes || !PassesPriceCheck(runSim(from, SessionEnd(from, minMinutes, now)), baseline)) continue;
+      var end = FindMaxSessionEnd(from, SessionEnd(from, durationMinutes, now), e => runSim(from, e), sim => PassesPriceCheck(sim, baseline));
       if (end is { } partialEnd && (partialEnd - from).TotalMinutes >= minMinutes)
         return new PlannedStart(from, StartChoice.Partial, End: partialEnd);
     }
     return null;
   }
+
+  /// <summary>
+  /// End of a session of a given length: from its start, or from now if it starts in the running slot —
+  /// the simulation counts only the rest of that slot, so a session ending start + duration would charge
+  /// less and look cheaper (live 2026-10-28 21:28: "start 21:15" simulated ~77 of 90 min, 0.4 kWh less,
+  /// and won the scan at the evening's highest price).
+  /// </summary>
+  /// <param name="start">Session start (a slot).</param>
+  /// <param name="durationMinutes">Length.</param>
+  /// <param name="now">Current time; null = the start.</param>
+  /// <returns>The end.</returns>
+  public static DateTime SessionEnd(DateTime start, int durationMinutes, DateTime? now) =>
+    (now is { } n && n > start ? n : start).AddMinutes(durationMinutes);
 
   /// <summary>
   /// The start choice of a scan: the earliest unless a later start saves at least
