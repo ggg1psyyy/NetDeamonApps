@@ -40,6 +40,20 @@ public sealed class HealthMonitor(TimeSpan raiseAfter, TimeSpan clearAfter)
 
   readonly Dictionary<string, Tracked> _tracked = [];
 
+  /// <summary>
+  /// Takes the issues that counted before a restart (from the sensor): they count on with their start, so a
+  /// problem that lasts doesn't read "ok" until it has been present for raiseAfter again (live 2026-10-28
+  /// 12:19:46: NetDaemon re-initialised the app on HA's reconnect, the level went ok and 45 s later back
+  /// to degraded — two notifications). One that is gone clears after clearAfter as usual.
+  /// </summary>
+  /// <param name="now">Current time (counts as last seen).</param>
+  /// <param name="issues">The issues published last.</param>
+  public void Restore(DateTime now, IEnumerable<ActiveIssue> issues)
+  {
+    foreach (var i in issues)
+      _tracked[i.Key] = new Tracked(new HealthIssue(i.Key, i.Level, i.Message), i.Since) { LastSeen = now, Active = true };
+  }
+
   /// <summary>Adds this cycle's issues and returns the overall health.</summary>
   /// <param name="now">Current time.</param>
   /// <param name="current">Issues found this cycle.</param>

@@ -26,6 +26,11 @@ triggers:
     id: RUNNING
 conditions: []
 actions:
+  # PVControl publishes the summary before the level (two MQTT messages); the short wait only makes sure
+  # both are in. Every level change notifies — no `for:` on the trigger (a hiccup shorter than it sent
+  # only the "ok" back, without the problem before).
+  - delay:
+      seconds: 2
   - action: ntfy.publish
     target:
       entity_id: notify.ha_warnings

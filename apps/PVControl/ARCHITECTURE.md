@@ -273,6 +273,13 @@ failures, warm-water heat pump, DataLogger's newest hourly row — read every 5 
 `HealthMonitor` debounces them: counted after 30 s present, cleared after 1 min gone, an issue
 with `EscalateAfter` becomes an error after that long. Published as `sensor.pv_control_health`
 (worst level, issues, `last_cycle`); the HA notification automation is `HA/Health.yaml`.
+Level and attributes are two MQTT messages: published level-first, the automation (triggered by the
+level) read the previous summary — 2026-10-28 "degraded: All checks ok", then "ok: DataLogger: last
+hourly row …". The attributes go first now, and the automation waits 2 s before reading. Not `for:`
+on the trigger: a hiccup shorter than it would send only the "ok" back. The level also flipped
+because a restart started the monitor empty (12:19:46, NetDaemon re-initialised the app on HA's
+reconnect: ok, 45 s later degraded again) — the issues that counted are restored from the sensor now
+(`HealthMonitor.Restore`): a lasting problem stays, a gone one clears after its minute.
 
 ---
 

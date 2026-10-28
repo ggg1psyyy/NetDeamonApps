@@ -684,6 +684,28 @@ namespace NetDeamon.apps.PVControl
         _restoredCommandSeq = value;
     }
 
+    /// <summary>Restores the health issues that counted before a restart (<see cref="HealthMonitor.Restore"/>) from the sensor's <c>issues</c>.</summary>
+    private void RestoreHealthIssues()
+    {
+      try
+      {
+        if (!_healthEntity.TryGetJsonAttribute("issues", out System.Text.Json.JsonElement list) || list.ValueKind != System.Text.Json.JsonValueKind.Array)
+          return;
+        var issues = list.EnumerateArray()
+          .Where(i => i.TryGetProperty("key", out _) && i.TryGetProperty("level", out _) && i.TryGetProperty("since", out _))
+          .Select(i => new ActiveIssue(i.GetProperty("key").GetString()!,
+            Enum.TryParse(i.GetProperty("level").GetString(), out HealthLevel l) ? l : HealthLevel.degraded,
+            i.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "",
+            Extensions.FromISO8601(i.GetProperty("since").GetString()!)))
+          .ToList();
+        _health.Restore(DateTime.Now, issues);
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Health: issues not restored");
+      }
+    }
+
     /// <summary>Restores the month's import peak from the sensor after a restart.</summary>
     private void RestoreMonthPeak()
     {
@@ -871,7 +893,8 @@ namespace NetDeamon.apps.PVControl
           "Health {Level}: {Issues}", status.Level, string.Join("; ", status.Issues.Select(i => i.Message)));
         _lastHealthLevel = status.Level;
       }
-      await PVCC_EntityManager.SetStateAsync(_healthEntity.EntityId, status.Level.ToString());
+      // Attributes before the level (two MQTT messages): an automation triggered by the level reads the
+      // summary right away — published after it, the text was the previous one ("degraded: All checks ok").
       await PVCC_EntityManager.SetAttributesAsync(_healthEntity.EntityId, new
       {
         summary = status.Issues.Count == 0 ? "All checks ok" : string.Join("; ", status.Issues.Select(i => i.Message)),
@@ -879,6 +902,7 @@ namespace NetDeamon.apps.PVControl
         last_cycle = now.ToISO8601(),
         version = AppVersion.Current,
       });
+      await PVCC_EntityManager.SetStateAsync(_healthEntity.EntityId, status.Level.ToString());
     }
     #endregion
 
@@ -1358,6 +1382,7 @@ namespace NetDeamon.apps.PVControl
         addConfig: new { options = Enum.GetNames<HealthLevel>() },
         defaultValue: HealthLevel.ok.ToString(),
         reRegister: reset);
+      RestoreHealthIssues();
       _pricePublicationEntity = await RegisterSensor("sensor.pv_control_price_publication", "Price publication (tomorrow)", null, "mdi:clock-check-outline",
         reRegister: reset);
       RestorePricePublications();

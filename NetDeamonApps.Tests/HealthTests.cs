@@ -16,6 +16,30 @@ public class HealthTests
 
   // ── HealthMonitor ──────────────────────────────────────────────────────────────────────────
 
+  // Live 2026-10-28 12:19:46: NetDeamon re-initialised the app on HA's reconnect, the monitor started
+  // empty, the level read "ok" and 45 s later "degraded" again — two notifications for one problem.
+  static readonly ActiveIssue LoggedBefore = new("datalogger", HealthLevel.degraded, "DataLogger: last hourly row 28.10. 09:59", T0.AddMinutes(-2));
+  static readonly HealthIssue LoggerStillLate = new("datalogger", HealthLevel.degraded, "DataLogger: last hourly row 28.10. 09:59");
+
+  [Fact]
+  public void Restore_LastingProblem_StaysDegradedThroughTheRestart()
+  {
+    var m = Monitor();
+    m.Restore(T0, [LoggedBefore]);
+    var s = m.Evaluate(T0.AddSeconds(15), [LoggerStillLate]);   // first cycle: no 30-s wait, no "ok" in between
+    Assert.Equal(HealthLevel.degraded, s.Level);
+    Assert.Equal(T0.AddMinutes(-2), Assert.Single(s.Issues).Since);
+  }
+
+  [Fact]
+  public void Restore_ProblemGone_ClearsAfterItsMinute()
+  {
+    var m = Monitor();
+    m.Restore(T0, [LoggedBefore]);
+    Assert.Equal(HealthLevel.degraded, m.Evaluate(T0.AddSeconds(30), []).Level);
+    Assert.Equal(HealthLevel.ok, m.Evaluate(T0.AddSeconds(75), []).Level);
+  }
+
   [Fact]
   public void SingleCycleBlip_Live132815_StaysOk()
   {
