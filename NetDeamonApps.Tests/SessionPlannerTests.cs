@@ -159,7 +159,7 @@ public class SessionPlannerTests : TestBase
   {
     var input = Input(12, price, maxPrice);
     var baseline = EnergySimulator.Simulate(input);
-    return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), TwoHours,
+    return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), (int)Math.Ceiling(EvW * TwoHours / 60.0), EvW,
       (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, minSaving, preferredStart: preferred);
   }
 
@@ -295,7 +295,7 @@ public class SessionPlannerTests : TestBase
     var input    = Input(12, _ => 0.30f, maxPrice: 0.10f);
     var baseline = EnergySimulator.Simulate(input);
 
-    Assert.Null(SessionPlanner.FindBestPriceAwareStart(EveningFrom, EveningFrom.AddHours(3), TwoHours,
+    Assert.Null(SessionPlanner.FindBestPriceAwareStart(EveningFrom, EveningFrom.AddHours(3), (int)Math.Ceiling(EvW * TwoHours / 60.0), EvW,
       (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline));
   }
 

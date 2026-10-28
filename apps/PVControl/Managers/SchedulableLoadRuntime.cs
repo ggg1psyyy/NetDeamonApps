@@ -201,6 +201,8 @@ namespace NetDeamon.apps.PVControl.Managers
 
     /// <summary>Predicted end of the current active session. Null when not running.</summary>
     public DateTime? PredictedEnd { get; internal set; }
+    /// <summary>The PriorityPlus scan's candidates of the last search (<see cref="Simulator.PlannedStart.Scan"/>); "n/a" when it didn't run.</summary>
+    public string PriceScan { get; internal set; } = "n/a";
 
     /// <summary>
     /// Wall-clock time when the current session started (ChargeNow transitioned false→true).

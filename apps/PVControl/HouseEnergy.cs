@@ -580,6 +580,7 @@ namespace NetDeamon.apps.PVControl
       var previousLoads = load.ExtraLoads;
       var previousEnd = load.PredictedEnd;
       load.PlannedSessions = [];
+      load.PriceScan = "n/a";
 
       // Tracks whether ANY call to SetResult has happened yet this cycle. Checked by the
       // ladder's generic "No valid window" catch-all at the very end: once set, a ruleset's own
@@ -617,11 +618,14 @@ namespace NetDeamon.apps.PVControl
       int durationMinutes = load.DurationMinutes; // chargeRateW = load.EffectivePowerW
       // The load as a session template: SetResult/simulations take session.Between(start, end).
       var session = new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, PowerW = chargeRateW };
+      // End of a session from `start` that delivers the energy still needed — the one conversion from
+      // energy to window (SessionPlanner.EndForEnergy): counted from now in the running slot.
+      DateTime EndFor(DateTime start) => SessionPlanner.EndForEnergy(start, energyNeededWh, chargeRateW, now);
 
       // Emergency: always charge immediately, no simulation check.
       if (load.Mode == LoadSchedulingMode.Emergency)
       {
-        var endTime = now.AddMinutes(durationMinutes);
+        var endTime = EndFor(now);
         SetResult(
           [new ExtraLoad { Name = load.Config.Name, Priority = int.MaxValue, StartTime = now, EndTime = endTime, PowerW = chargeRateW }],
           true,
@@ -658,7 +662,7 @@ namespace NetDeamon.apps.PVControl
       bool MeetsMinWindow(DateTime start, DateTime end) =>
         durationMinutes < load.Config.MinWindowMinutes ||
         load.Config.MinWindowMinutes <= 0 ||
-        (end - start).TotalMinutes >= load.Config.MinWindowMinutes;
+        (end - Max(start, now)).TotalMinutes >= load.Config.MinWindowMinutes;
 
       // Binary search: max session end in (currentSlot, maxEnd] satisfying predicate.
       // Predicate must be monotone: shorter session → easier to satisfy.
@@ -674,8 +678,8 @@ namespace NetDeamon.apps.PVControl
       // Fall back to far-future when no PV is forecast (null) so the session is only
       // bounded by durationMinutes — same behaviour as the old PVWindows fallback.
       var farFuture   = currentSlot.AddDays(2);
-      var todayMax    = Min(currentSlot.AddMinutes(durationMinutes), baseResult.LastRelevantPVEnergyToday    ?? farFuture);
-      var tomorrowMax = Min(currentSlot.AddMinutes(durationMinutes), baseResult.FirstRelevantPVEnergyTomorrow ?? farFuture);
+      var todayMax    = Min(EndFor(currentSlot), baseResult.LastRelevantPVEnergyToday    ?? farFuture);
+      var tomorrowMax = Min(EndFor(currentSlot), baseResult.FirstRelevantPVEnergyTomorrow ?? farFuture);
 
       if (todayMax <= currentSlot && tomorrowMax <= currentSlot)
       { SetResult([], false, $"No charging window before next PV ({load.Config.Name})", null); return; }
@@ -777,7 +781,7 @@ namespace NetDeamon.apps.PVControl
           var tomorrowPVEnd   = baseResult.LastRelevantPVEnergyTomorrow;
           if (tomorrowPVStart.HasValue && tomorrowPVEnd.HasValue)
           {
-            var tomorrowOptMax = Min(tomorrowPVStart.Value.AddMinutes(durationMinutes), tomorrowPVEnd.Value);
+            var tomorrowOptMax = Min(EndFor(tomorrowPVStart.Value), tomorrowPVEnd.Value);
             if (tomorrowOptMax > tomorrowPVStart.Value)
             {
               var end = SessionPlanner.FindMaxSessionEnd(tomorrowPVStart.Value, tomorrowOptMax,
@@ -817,7 +821,7 @@ namespace NetDeamon.apps.PVControl
             bool recoveryIsToday = recoverySlot.Date == now.Date;
             var  pvEnd     = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday
                                              : baseResult.LastRelevantPVEnergyTomorrow;
-            var  recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+            var  recoveryMax = Min(EndFor(recoverySlot), pvEnd ?? farFuture);
 
             if (recoveryMax > recoverySlot)
             {
@@ -913,7 +917,7 @@ namespace NetDeamon.apps.PVControl
             {
               // Safe for the full remaining window from `start` through sunrise, so a shorter
               // session (stopping once the EV's own energy need is met) is safe too.
-              var end = Min(start.Value.AddMinutes(durationMinutes), nextSunrise.Value);
+              var end = Min(EndFor(start.Value), nextSunrise.Value);
 
               if (MeetsMinWindow(start.Value, end))
               {
@@ -1002,7 +1006,7 @@ namespace NetDeamon.apps.PVControl
               {
                 bool recoveryIsToday = recoverySlot.Date == now.Date;
                 var pvEnd = recoveryIsToday ? baseResult.LastRelevantPVEnergyToday : baseResult.LastRelevantPVEnergyTomorrow;
-                var recoveryMax = Min(recoverySlot.AddMinutes(durationMinutes), pvEnd ?? farFuture);
+                var recoveryMax = Min(EndFor(recoverySlot), pvEnd ?? farFuture);
 
                 if (recoveryMax > recoverySlot)
                 {
@@ -1072,12 +1076,13 @@ namespace NetDeamon.apps.PVControl
           SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Load;
         SimulationResult RunSuppliedSimFrom(DateTime start, DateTime end) =>
           SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Sim;
-        var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSuppliedSimFrom, baseResult,
+        var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, energyNeededWh, chargeRateW, RunSuppliedSimFrom, baseResult,
           readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
           preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now);
         if (planned is not { } p) return;
+        load.PriceScan = p.Scan ?? "n/a";
 
-        var end = p.End ?? SessionPlanner.SessionEnd(p.Start, durationMinutes, now);
+        var end = p.End ?? EndFor(p.Start);
         if (!MeetsMinWindow(p.Start, end)) return;
 
         string why = p.Choice switch

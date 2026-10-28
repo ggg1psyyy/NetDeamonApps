@@ -31,7 +31,14 @@ public class ExtraLoad
     (int)Energy.Wh(PowerW, TimeRange.Overlap(slotStart, slotStart + TimeRange.Slot, StartTime, EndTime));
 
   /// <summary>Energy of the whole session, Wh.</summary>
-  public double EnergyWh => Energy.Wh(PowerW, EndTime - StartTime);
+  public double EnergyWh => EnergyFromWh(null);
+
+  /// <summary>Energy the session still delivers from a time on: a session that began in the running slot only
+  /// from now (the simulation counts the rest of that slot only).</summary>
+  /// <param name="now">Current time; null = the whole session.</param>
+  /// <returns>Wh ≥ 0.</returns>
+  public double EnergyFromWh(DateTime? now) =>
+    Energy.Wh(PowerW, EndTime - (now is { } n && n > StartTime ? (n < EndTime ? n : EndTime) : StartTime));
 
   /// <summary>Whether the load runs at a time.</summary>
   /// <param name="t">Time to test.</param>

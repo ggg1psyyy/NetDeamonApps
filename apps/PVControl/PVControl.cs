@@ -1005,7 +1005,7 @@ namespace NetDeamon.apps.PVControl
         // Derived from the actual planned window(s), not TargetLevel — FindLoadWindow's search
         // is often capped short of the full target (PV window, price, SoC gates), so echoing
         // TargetLevel would overstate the real outcome in exactly the cases this is meant to show.
-        float plannedWh = (float)allSessions.Sum(e => e.EnergyWh);
+        float plannedWh = (float)allSessions.Sum(e => e.EnergyFromWh(DateTime.Now)); // still to come: a running session from now
         float? chargeEndPredictedSoc = allSessions.Count > 0 && load.EnergyPerLevelKwh > 0
           ? load.CurrentLevel + plannedWh / 1000f / load.EnergyPerLevelKwh
           : null;
@@ -1027,6 +1027,7 @@ namespace NetDeamon.apps.PVControl
           learned_power_w = load.LearnedPowerW,
           last_plan = load.LastPlan?.Time.ToISO8601() ?? "n/a",
           last_plan_reason = load.LastPlanReason,
+          price_scan = load.PriceScan,
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           zz_charge_timeline = chargeTimeline,
         };

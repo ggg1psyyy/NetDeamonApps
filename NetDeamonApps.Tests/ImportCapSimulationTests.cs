@@ -86,7 +86,7 @@ public class ImportCapSimulationTests : TestBase
     Assert.True(sim.ExceedsImportCapVs(baseline));
 
     SimulationResult Run(DateTime s, DateTime e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)]));
-    var planned = SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddHours(10), 60, Run, baseline);
+    var planned = SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddHours(10), (int)Math.Ceiling(1930 * 60 / 60.0), 1930, Run, baseline);
     Assert.True(planned is null || planned.Value.Start >= Day.AddHours(22), $"planned {planned?.Start:HH:mm}"); // only once the house is back at 400 W
   }
 

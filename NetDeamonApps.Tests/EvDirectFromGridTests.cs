@@ -62,7 +62,7 @@ public class EvDirectFromGridTests : TestBase
     var baseline = EnergySimulator.Simulate(input);
     SimulationResult Run(DateTime s, DateTime e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)]));
 
-    var p = Assert.NotNull(SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(2), 68, Run, baseline,
+    var p = Assert.NotNull(SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(2), (int)Math.Ceiling(1930 * 68 / 60.0), 1930, Run, baseline,
       preferredStart: preferMorning ? Midnight.AddHours(6) : null, minWindowMinutes: 15));
 
     // The only quarters at or under 35 ct before PV: 00:00–01:00 (01:00 is 37 ct) — the session is cut there.

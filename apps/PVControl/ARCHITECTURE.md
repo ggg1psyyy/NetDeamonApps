@@ -403,11 +403,20 @@ be stopped by the next cycle after its 15-min min-on: ten starts between 21:30 a
 was still reached at 05:00). The supply choice flipped too (03:53–05:00 grid_only/normal every
 ~10 min, the EV partly from the battery a 03:15 night charge had filled): a session running directly
 from the grid now stays so (`ChooseSupply(keepFromGrid)`).
-Candidates are compared at equal energy: a session starting in the running slot lasts its duration
-from now (`SessionPlanner.SessionEnd`). The simulation counts only the rest of the running slot, so
-"start 21:15, end 22:45" at 21:28 charged ~77 of 90 min — 0.4 kWh less than every later start — and
-won the scan as the cheapest at the evening's highest price (live 2026-10-28: 0.455 €/kWh against
-0.376–0.384 at night).
+**Sessions are windows coupled to their energy.** A window (start, end) is the decision — it's the only
+way to find a start and an end against limits that are times (cheap window, ready-by, PV, sunrise).
+Its length comes from one function, `SessionPlanner.EndForEnergy(start, energy, power, now)`: the end
+of a session that delivers the energy still needed, counted from now in the running slot. Before, each
+place computed "start + duration" on its own, and every cut delivered less energy unnoticed:
+- the running slot: the simulation counts only its rest, so "start 21:15, end 22:45" at 21:28 charged
+  ~77 of 90 min — 0.4 kWh less than every later start — and won the PriorityPlus scan as the cheapest at
+  the evening's highest price (live 2026-10-28: 0.455 €/kWh against 0.376–0.384 at night);
+- `FindMaxSessionEnd` rounded the end down to a whole quarter from its start (up to 14 min lost, also
+  in Priority/Optimal) — it now returns an energy's exact end;
+- follow-up sessions took the remainder from the windows' full lengths — now from the energy they still
+  deliver (`ExtraLoad.EnergyFromWh(now)`), so splitting across windows doesn't lose energy in between.
+Where the end is a limit (cheap window, deadline, PV), the window ends there and the rest goes to
+follow-ups. `price_scan` on the load's `charge_now` shows the scan's candidates with their extra cost.
 
 **Planned follow-up sessions** (`SessionPlanner.PlanFollowUpSessions`, PriorityPlus only): after the
 climb, if the current/next session doesn't reach the target level, the same price scan plans the

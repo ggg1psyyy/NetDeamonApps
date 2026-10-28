@@ -11,7 +11,9 @@ namespace NetDeamonApps.Tests;
 /// 0.35 limit: the scan started the EV "now" at 0.455 €/kWh although 23:00–03:00 cost 0.376–0.384.
 /// The running slot 21:15 was 13 min in the past; the simulation counts only its rest, so "start 21:15,
 /// end 22:45" charged ~77 min, 0.4 kWh less than every later candidate, and came out cheapest.
-/// A session in the running slot now lasts its duration from now (<see cref="SessionPlanner.SessionEnd"/>).
+/// Sessions are coupled to the energy: a window's end comes from the energy it delivers, counted from now
+/// in the running slot (<see cref="SessionPlanner.EndForEnergy"/>); follow-ups get the rest that's really
+/// still missing; the end search returns an energy's exact end, not the last whole quarter.
 /// </summary>
 public class RunningSlotSessionTests
 {
@@ -55,20 +57,63 @@ public class RunningSlotSessionTests
     SimulationResult Run(DateTime s, DateTime e) => SessionPlanner.ChooseSupply(l => input.SimulateWith(l), ev.Between(s, e), baseline).Sim;
     var slot = Now.RoundToNearestQuarterHour();
 
-    var p = SessionPlanner.FindBestPriceAwareStart(slot, D.AddDays(2), 90, Run, baseline, D.AddDays(1).AddHours(6).AddMinutes(30),
+    var p = SessionPlanner.FindBestPriceAwareStart(slot, D.AddDays(2), 2907, 1938, Run, baseline, D.AddDays(1).AddHours(6).AddMinutes(30),
       preferredStart: D.AddHours(23), now: Now);
 
     Assert.NotNull(p);
     Assert.NotEqual(slot, p.Value.Start);
     Assert.InRange(p.Value.Start, D.AddHours(23), D.AddDays(1).AddHours(3).AddMinutes(30));
+    // The scan's line for the sensor (price_scan): what was compared and why.
+    Assert.StartsWith("earliest 21:15 ", p.Value.Scan);
+    Assert.Contains("last plan 23:00 ", p.Value.Scan);
+    Assert.EndsWith("none under the price limit", p.Value.Scan);
   }
 
   [Fact]
-  public void SessionEnd_RunningSlotFromNow_LaterStartsFromTheirStart()
+  public void EndForEnergy_RunningSlotFromNow_LaterStartsFromTheirStart()
+  {
+    // 2907 Wh at 1938 W = 90 min.
+    var slot = Now.RoundToNearestQuarterHour();
+    Assert.Equal(Now.AddMinutes(90), SessionPlanner.EndForEnergy(slot, 2907, 1938, Now));
+    Assert.Equal(D.AddHours(23).AddMinutes(90), SessionPlanner.EndForEnergy(D.AddHours(23), 2907, 1938, Now));
+    Assert.Equal(slot.AddMinutes(90), SessionPlanner.EndForEnergy(slot, 2907, 1938, null));
+    Assert.Equal(Now.AddMinutes(15), SessionPlanner.EndAfter(slot, 15, Now));
+  }
+
+  [Fact]
+  public void ExtraLoad_EnergyFromNow_OnlyWhatIsStillToCome()
   {
     var slot = Now.RoundToNearestQuarterHour();
-    Assert.Equal(Now.AddMinutes(90), SessionPlanner.SessionEnd(slot, 90, Now));
-    Assert.Equal(D.AddHours(23).AddMinutes(90), SessionPlanner.SessionEnd(D.AddHours(23), 90, Now));
-    Assert.Equal(slot.AddMinutes(90), SessionPlanner.SessionEnd(slot, 90, null));
+    var running = new ExtraLoad { PowerW = 1938, StartTime = slot, EndTime = Now.AddMinutes(90) };
+    Assert.Equal(2907, running.EnergyFromWh(Now), 0);                     // 90 min from now
+    Assert.Equal(1938 * (90 + 13) / 60.0, running.EnergyWh, 0);           // the whole window includes the 13 past minutes
+    Assert.Equal(0, running.EnergyFromWh(Now.AddHours(3)));
+  }
+
+  [Fact]
+  public void FollowUps_AfterASessionInTheRunningSlot_CoverTheRestFromNow()
+  {
+    // Need 90 min (2907 Wh); the current window "21:15–22:15" delivers only 47 min from 21:28 (1518 Wh),
+    // not 60 — the follow-ups must bring the other 1389 Wh (they used to bring 969).
+    var input = Input();
+    var slot = Now.RoundToNearestQuarterHour();
+    var first = new ExtraLoad { Name = "EV", Priority = 10, PowerW = 1938, StartTime = slot, EndTime = slot.AddMinutes(60), FromGrid = true };
+    var followUps = SessionPlanner.PlanFollowUpSessions(input, [first], 2907, D.AddDays(2), deadline: D.AddDays(1).AddHours(6).AddMinutes(30));
+    Assert.InRange(followUps.Sum(e => e.EnergyWh), 1389 - 40, 1389 + 40);
+  }
+
+  [Fact]
+  public void FindMaxSessionEnd_EnergyEndOffTheQuarter_ReturnedExactly()
+  {
+    // An energy's end isn't on a quarter: the full session used to be cut to the last whole quarter.
+    var slot = Now.RoundToNearestQuarterHour();
+    var maxEnd = Now.AddMinutes(90);                                       // 22:58
+    var input = Input();
+    var baseline = EnergySimulator.Simulate(input);
+    var ev = new ExtraLoad { Name = "EV", Priority = 10, PowerW = 1938 };
+    Assert.Equal(maxEnd, SessionPlanner.FindMaxSessionEnd(slot, maxEnd, e => input.SimulateWith(ev.Between(slot, e)), _ => true));
+    // Failing at the full end: the last whole quarter before it.
+    Assert.Equal(slot.AddMinutes(90), SessionPlanner.FindMaxSessionEnd(slot, maxEnd, e => input.SimulateWith(ev.Between(slot, e)),
+      sim => sim.Slots.Where(s => s.Time >= slot.AddMinutes(90)).Sum(s => s.ExtraLoadWh) == 0));
   }
 }

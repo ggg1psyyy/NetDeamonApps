@@ -56,7 +56,7 @@ public class CheapWindowShorterThanSessionTests : TestBase
     var baseline = EnergySimulator.Simulate(input);
     SimulationResult Run(DateTime s, DateTime e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)]));
 
-    var planned = SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(1), SessionMinutes, Run, baseline, minWindowMinutes: 30);
+    var planned = SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(1), (int)Math.Ceiling(EvW * SessionMinutes / 60.0), EvW, Run, baseline, minWindowMinutes: 30);
 
     var p = Assert.NotNull(planned);
     Assert.Equal(StartChoice.Partial, p.Choice);
@@ -73,7 +73,7 @@ public class CheapWindowShorterThanSessionTests : TestBase
     var baseline = EnergySimulator.Simulate(input);
     SimulationResult Run(DateTime s, DateTime e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)]));
 
-    Assert.Null(SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(1), SessionMinutes, Run, baseline, minWindowMinutes: 150));
+    Assert.Null(SessionPlanner.FindBestPriceAwareStart(input.StartTime, Day.AddDays(1), (int)Math.Ceiling(EvW * SessionMinutes / 60.0), EvW, Run, baseline, minWindowMinutes: 150));
   }
 
   [Fact]
