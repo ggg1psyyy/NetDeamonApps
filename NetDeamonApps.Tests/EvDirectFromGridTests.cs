@@ -97,6 +97,18 @@ public class EvDirectFromGridTests : TestBase
   }
 
   [Fact]
+  public void ChooseSupply_RunningFromTheGrid_StaysSo()
+  {
+    // The same session that alone would use the battery: once it runs from the grid it keeps that
+    // supply (live 2026-10-28 03:53–05:00 it flipped every ~10 min).
+    var input = WithSoc(Input(sunny: true), 100);
+    var baseline = EnergySimulator.Simulate(input);
+    var (load, _) = SessionPlanner.ChooseSupply(l => input.SimulateWith(l), Ev(Midnight.AddHours(5), Midnight.AddHours(5).AddMinutes(30)), baseline,
+      keepFromGrid: true);
+    Assert.True(load.FromGrid);
+  }
+
+  [Fact]
   public void ChooseSupply_GridNeeded_RunsDirectlyFromTheGrid()
   {
     var input = Input();

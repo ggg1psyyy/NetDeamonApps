@@ -154,12 +154,13 @@ public class SessionPlannerTests : TestBase
   static readonly DateTime EveningFrom = new(2026, 10, 18, 18, 0, 0);
   const int TwoHours = 120;
 
-  static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice, DateTime? preferred = null)
+  static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice, DateTime? preferred = null,
+    float minSaving = SessionPlanner.DefaultMinSavingFraction)
   {
     var input = Input(12, price, maxPrice);
     var baseline = EnergySimulator.Simulate(input);
     return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), TwoHours,
-      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, preferredStart: preferred);
+      (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, minSaving, preferredStart: preferred);
   }
 
   // Sticky plan: live inputs move every cycle, so a planned start's saving hovers around the
@@ -229,6 +230,42 @@ public class SessionPlannerTests : TestBase
 
     Assert.NotNull(p);
     Assert.True(p.Value.Start.AddMinutes(TwoHours) <= deadline, $"Start {p.Value.Start:HH:mm} finishes after the deadline.");
+  }
+
+  // Live 2026-10-27/28, ready by 06:30, every night price (0.355–0.40) over the 0.35 limit: the
+  // ready-by branch took the cheapest start alone — it flipped with forecast noise between 23:00 and
+  // 01:45, and whenever "now" won it started the EV, which the next cycle stopped after its 15-min
+  // min-on: ten starts in one night. Now the same choice rules as under the limit apply.
+  static float NearlyFlat(DateTime t) => t >= CheapFrom && t < CheapTo ? 0.356f : 0.358f;
+  static readonly DateTime ReadyBy = new(2026, 10, 19, 6, 30, 0);
+
+  [Fact]
+  public void Deadline_OverThreshold_RunningSessionKeepsRunning()
+  {
+    // Running (wasActive → no later start is worth stopping for), though midnight is slightly cheaper.
+    var p = Best(NearlyFlat, ReadyBy, maxPrice: 0.10f, minSaving: float.PositiveInfinity);
+
+    Assert.NotNull(p);
+    Assert.Equal((EveningFrom, StartChoice.DeadlineEarliest), (p.Value.Start, p.Value.Choice));
+  }
+
+  [Fact]
+  public void Deadline_OverThreshold_PlannedStartStays()
+  {
+    // Last cycle planned 01:00; another start a hair cheaper doesn't move it.
+    var p = Best(t => t == CheapFrom.AddHours(2) ? 0.3555f : NearlyFlat(t), ReadyBy, maxPrice: 0.10f, preferred: CheapFrom.AddHours(1));
+
+    Assert.NotNull(p);
+    Assert.Equal((CheapFrom.AddHours(1), StartChoice.DeadlineCheapest), (p.Value.Start, p.Value.Choice));
+  }
+
+  [Fact]
+  public void Deadline_OverThreshold_LaterStartBarelyCheaper_StartsEarliest()
+  {
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.3578f : 0.358f, ReadyBy, maxPrice: 0.10f);
+
+    Assert.NotNull(p);
+    Assert.Equal((EveningFrom, StartChoice.DeadlineEarliest), (p.Value.Start, p.Value.Choice));
   }
 
   [Fact]

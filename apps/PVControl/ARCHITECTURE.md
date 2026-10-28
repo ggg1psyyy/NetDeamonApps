@@ -385,9 +385,17 @@ during the day's cheapest grid window. Charging just 08:00–10:00 adds import o
 **Ready-by deadline** (`time.pv_control_<load>_ready_by` + `switch.pv_control_<load>_enforce_ready_by`;
 MQTT time entities need HA ≥ 2026.5; PriorityPlus only; off unless the switch is on):
 only starts that finish by the next occurrence of that time are considered, and the deadline
-beats the price threshold — if none passes, the cheapest start that still finishes in time is
-taken (`DeadlineCheapest`), and if even now is too late, it starts now (`DeadlineNow`). A change
-bypasses the min-on latch like the other settings in `SessionStartSettings`.
+beats the price threshold — if none passes, the same choice (`SessionPlanner.Choose`) is made among
+all starts that still finish in time (`DeadlineCheapest` for a later one, else `DeadlineEarliest`),
+and if even now is too late, it starts now (`DeadlineNow`). A change bypasses the min-on latch like
+the other settings in `SessionStartSettings`. The ready-by branch used to take the cheapest start
+alone, ignoring both the running session (never stopped for a later start) and the sticky plan:
+2026-10-27/28, ready by 06:30, all night prices 0.355–0.40 over the 0.35 limit — the cheapest start
+flipped with forecast noise between 23:00 and 01:45, and whenever "now" won the EV started, only to
+be stopped by the next cycle after its 15-min min-on: ten starts between 21:30 and 03:34 (the target
+was still reached at 05:00). The supply choice flipped too (03:53–05:00 grid_only/normal every
+~10 min, the EV partly from the battery a 03:15 night charge had filled): a session running directly
+from the grid now stays so (`ChooseSupply(keepFromGrid)`).
 
 **Planned follow-up sessions** (`SessionPlanner.PlanFollowUpSessions`, PriorityPlus only): after the
 climb, if the current/next session doesn't reach the target level, the same price scan plans the

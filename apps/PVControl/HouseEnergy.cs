@@ -1066,10 +1066,12 @@ namespace NetDeamon.apps.PVControl
         // later start from last cycle stays preferred (see FindBestPriceAwareStart).
         // A session that needs no extra grid may use the house battery (like Priority); once it imports,
         // it takes that energy directly from the grid, not via the battery (wear, round-trip losses).
+        // A running session supplied directly from the grid stays so (no flip-flop with the battery).
+        bool keepFromGrid = wasActive && previousLoads.FirstOrDefault()?.FromGrid == true;
         ExtraLoad Supplied(DateTime start, DateTime end) =>
-          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult).Load;
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Load;
         SimulationResult RunSuppliedSimFrom(DateTime start, DateTime end) =>
-          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult).Sim;
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Sim;
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, durationMinutes, RunSuppliedSimFrom, baseResult,
           readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
           preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes);
@@ -1082,6 +1084,7 @@ namespace NetDeamon.apps.PVControl
         {
           StartChoice.Cheaper          => $"cheapest window, {p.SavingPercent:F0}% cheaper than the earliest",
           StartChoice.DeadlineCheapest => $"ready by {readyBy:HH:mm} — cheapest start that finishes in time, above price threshold",
+          StartChoice.DeadlineEarliest => $"ready by {readyBy:HH:mm} — above price threshold, no later start clearly cheaper",
           StartChoice.DeadlineNow      => $"ready by {readyBy:HH:mm} — can't finish in time, charging now",
           StartChoice.Partial          => $"cheap window only until {end:HH:mm}, rest later",
           _                            => "earliest cheap grid-assisted window",

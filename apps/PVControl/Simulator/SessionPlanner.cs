@@ -11,8 +11,10 @@ public enum StartChoice
   Earliest,
   /// <summary>A later start that passes the price check and is cheaper by at least the minimum saving.</summary>
   Cheaper,
-  /// <summary>No start passes the price check before the deadline — cheapest start that still finishes in time.</summary>
+  /// <summary>No start passes the price check before the deadline — a later start that still finishes in time and is cheaper by at least the minimum saving.</summary>
   DeadlineCheapest,
+  /// <summary>No start passes the price check before the deadline — the earliest (no later start saves enough, or the session already runs).</summary>
+  DeadlineEarliest,
   /// <summary>Even starting now can't finish by the deadline — start now.</summary>
   DeadlineNow,
   /// <summary>No full session passes the price check — earliest shortened one that does (the cheap window is shorter than the session).</summary>
@@ -72,12 +74,14 @@ public static class SessionPlanner
     var lastFullStart = simEnd.AddMinutes(-durationMinutes - (deadline is null ? ConsequenceMarginHours * 60 : 0));
     if (lastStart > lastFullStart) lastStart = lastFullStart < minStart ? minStart : lastFullStart;
 
-    (DateTime Start, float Cost)? earliest = null, cheapest = null, cheapestAny = null, preferred = null;
+    (DateTime Start, float Cost)? earliest = null, cheapest = null, preferred = null, earliestAny = null, cheapestAny = null, preferredAny = null;
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
     {
       var sim = runSim(candidate, candidate.AddMinutes(durationMinutes));
       float cost = sim.NetGridCostVs(baseline);
+      earliestAny ??= (candidate, cost);
       if (cheapestAny is null || cost < cheapestAny.Value.Cost) cheapestAny = (candidate, cost);
+      if (candidate == preferredStart) preferredAny = (candidate, cost);
       if (!PassesPriceCheck(sim, baseline)) continue;
 
       earliest ??= (candidate, cost);
@@ -86,18 +90,17 @@ public static class SessionPlanner
     }
 
     if (earliest is { } e && cheapest is { } c)
-    {
-      if (preferred is { } p && p.Start != e.Start && e.Cost > 0 && p.Cost < e.Cost
-          && c.Cost > p.Cost - minSavingFraction * e.Cost)
-        return new PlannedStart(p.Start, StartChoice.Cheaper, (e.Cost - p.Cost) / e.Cost * 100);
-
-      float saving = e.Cost - c.Cost;
-      return e.Cost > 0 && saving >= minSavingFraction * e.Cost
-        ? new PlannedStart(c.Start, StartChoice.Cheaper, saving / e.Cost * 100)
+      return Choose(e, c, preferred, minSavingFraction) is { Later: true } later
+        ? new PlannedStart(later.Start, StartChoice.Cheaper, later.SavingPercent)
         : new PlannedStart(e.Start, StartChoice.Earliest);
-    }
-    if (deadline is not null && cheapestAny is { } a)
-      return new PlannedStart(a.Start, StartChoice.DeadlineCheapest);
+    // Nothing under the price limit, a deadline: the same choice among all starts that finish in time —
+    // a running session isn't stopped for a later start, last cycle's plan stays unless clearly beaten
+    // (live 2026-10-27/28: the cheapest start alone flipped with forecast noise between 23:00 and 01:45
+    // and stopped the running EV after every 15-min min-on, ten times in one night).
+    if (deadline is not null && earliestAny is { } ea && cheapestAny is { } ca)
+      return Choose(ea, ca, preferredAny, minSavingFraction) is { Later: true } dl
+        ? new PlannedStart(dl.Start, StartChoice.DeadlineCheapest, dl.SavingPercent)
+        : new PlannedStart(ea.Start, StartChoice.DeadlineEarliest);
 
     int minMinutes = Math.Max(TimeRange.SlotMinutes, minWindowMinutes);
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
@@ -110,6 +113,29 @@ public static class SessionPlanner
         return new PlannedStart(from, StartChoice.Partial, End: partialEnd);
     }
     return null;
+  }
+
+  /// <summary>
+  /// The start choice of a scan: the earliest unless a later start saves at least
+  /// <paramref name="minSavingFraction"/> of its cost; last cycle's plan (<paramref name="preferred"/>)
+  /// stays while it's cheaper than the earliest and nothing beats it by that much.
+  /// </summary>
+  /// <param name="earliest">Earliest start and its cost.</param>
+  /// <param name="cheapest">Cheapest start and its cost.</param>
+  /// <param name="preferred">Last cycle's planned start and its cost; null = none.</param>
+  /// <param name="minSavingFraction">Saving a later start needs (∞: never later — a running session).</param>
+  /// <returns>The start, whether it's later than the earliest, and its saving in %.</returns>
+  private static (DateTime Start, bool Later, float SavingPercent) Choose(
+    (DateTime Start, float Cost) earliest, (DateTime Start, float Cost) cheapest, (DateTime Start, float Cost)? preferred, float minSavingFraction)
+  {
+    var e = earliest;
+    if (preferred is { } p && p.Start != e.Start && e.Cost > 0 && p.Cost < e.Cost
+        && cheapest.Cost > p.Cost - minSavingFraction * e.Cost)
+      return (p.Start, true, (e.Cost - p.Cost) / e.Cost * 100);
+    float saving = e.Cost - cheapest.Cost;
+    return e.Cost > 0 && saving >= minSavingFraction * e.Cost
+      ? (cheapest.Start, true, saving / e.Cost * 100)
+      : (e.Start, false, 0);
   }
 
   /// <summary>PriorityPlus price check: the load needs no new grid, or only at/under the price limit — and never over the import limit.</summary>
@@ -158,9 +184,17 @@ public static class SessionPlanner
   /// <param name="simulate">Simulates with the session added.</param>
   /// <param name="session">The session (its <see cref="ExtraLoad.FromGrid"/> is ignored).</param>
   /// <param name="baseline">Simulation without it.</param>
+  /// <param name="keepFromGrid">The session runs directly from the grid already: it stays so (live 2026-10-28
+  /// 03:53–05:00 the choice flipped every ~10 min and the EV drew the battery a night charge had just filled).</param>
   /// <returns>The session as supplied and its simulation.</returns>
-  public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline)
+  public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline,
+    bool keepFromGrid = false)
   {
+    if (keepFromGrid)
+    {
+      var kept = session.WithFromGrid(true);
+      return (kept, simulate(kept));
+    }
     var viaBattery = session.WithFromGrid(false);
     var sim = simulate(viaBattery);
     if (!sim.HasNewGridVs(baseline)) return (viaBattery, sim);
