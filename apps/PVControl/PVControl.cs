@@ -689,14 +689,33 @@ namespace NetDeamon.apps.PVControl
     {
       try
       {
-        if (_importMonthPeakEntity is not null && _importMonthPeakEntity.TryGetStateValue(out float kw)
+        // kW as stored: the base-unit conversion turned 2.82 kW into 2820, which the plausibility check
+        // rejected — every restart started the month over (live 2026-10-27/28: 9.60 kW shown as 0.00).
+        if (_importMonthPeakEntity is not null && _importMonthPeakEntity.TryGetStateValue(out float kw, numericalGetBaseValue: false)
             && _importMonthPeakEntity.TryGetJsonAttribute("quarter_start", out System.Text.Json.JsonElement start)
             && start.GetString() is { } text)
           _monthPeak.Restore(new ImportCap.QuarterResult(Extensions.FromISO8601(text), kw));
       }
       catch (Exception ex)
       {
-        PVCC_Logger.LogWarning(ex, "Import cap: month peak not restored");
+        PVCC_Logger.LogWarning(ex, "Import cap: month peak not restored from its sensor");
+      }
+      // Second source: the DataLogger's highest 15-min import of the month (survives a lost sensor value).
+      try
+      {
+        var monthStart = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+        using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={PVCC_Config.DBFullLocation};Mode=ReadOnly");
+        con.Open();
+        using var cmd = con.CreateCommand();
+        cmd.CommandText = "SELECT timestamp, maxquarterimport FROM hourly WHERE maxquarterimport IS NOT NULL AND timestamp >= $from ORDER BY maxquarterimport DESC LIMIT 1";
+        cmd.Parameters.AddWithValue("$from", monthStart.ToISO8601());
+        using var r = cmd.ExecuteReader();
+        if (r.Read())
+          _monthPeak.Restore(ImportCap.MonthPeakTracker.FromHourlyRow(Extensions.FromISO8601(r.GetString(0)), r.GetDouble(1)));
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "Import cap: month peak not restored from the DataLogger");
       }
     }
 

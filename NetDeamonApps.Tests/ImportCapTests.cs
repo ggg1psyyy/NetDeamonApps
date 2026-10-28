@@ -115,6 +115,24 @@ public class ImportCapTests
     Assert.Equal(800, q.ImportedWh!.Value, 0);
   }
 
+  // A closed period (DataLogger hour): the wM-Bus receiver lost its antenna 2026-10-28 — online, but a
+  // receiver without telegrams keeps its last value; it must not log 0 kW while the inverter counts.
+  [Theory]
+  [InlineData(1.20, 1.2, 0)]     // both count: the first (billing meter) is used
+  [InlineData(0.00, 0.0, 0)]     // no import at all: the first is fine
+  [InlineData(0.00, 1.1, 1)]     // frozen while the inverter counts: the fallback
+  [InlineData(0.85, 1.1, 1)]     // froze mid-hour: 0.25 kWh missing — the fallback
+  [InlineData(1.00, 1.1, 0)]     // the inverter's 0.1-kWh steps: within the tolerance
+  public void FirstWorking_FrozenSourceLosesToTheNextThatCounted(double meter, double inverter, int expected) =>
+    Assert.Equal(expected, PriorityCounter.FirstWorking([meter, inverter]));
+
+  [Fact]
+  public void FirstWorking_NoReadings_NextSourceOrNone()
+  {
+    Assert.Equal(1, PriorityCounter.FirstWorking([null, 0.5]));
+    Assert.Equal(-1, PriorityCounter.FirstWorking([null, null]));
+  }
+
   // ── MonthPeakTracker ─────────────────────────────────────────────────────────────────
 
   [Fact]
@@ -126,6 +144,21 @@ public class ImportCapTests
     Assert.Equal(9.5, m.PeakIn(T0)!.Value.AvgKw);
     Assert.Null(m.PeakIn(new DateTime(2026, 11, 1, 0, 5, 0)));
     Assert.True(m.Observe(new QuarterResult(new DateTime(2026, 11, 1, 0, 0, 0), 2.0)));
+  }
+
+  // Live 2026-10-27/28: the sensor restore read kW as W (2.82 → 2820) and was rejected, so every
+  // restart started the month over; the real peak was 9.60 kW. Two sources now, the higher one wins.
+  [Fact]
+  public void MonthPeak_RestoreFromTwoSources_HigherOfTheMonthWins()
+  {
+    var m = new MonthPeakTracker();
+    m.Restore(new QuarterResult(new DateTime(2026, 10, 28, 9, 15, 0), 0.0));                               // the sensor after the bug
+    m.Restore(MonthPeakTracker.FromHourlyRow(new DateTime(2026, 10, 26, 0, 59, 59), 9.602));               // the DataLogger
+    Assert.Equal((new DateTime(2026, 10, 26, 0, 0, 0), 9.602), (m.Peak!.Value.Start, m.Peak.Value.AvgKw));
+    m.Restore(new QuarterResult(new DateTime(2026, 10, 27, 0, 0, 0), 4.95));                               // lower: ignored
+    Assert.Equal(9.602, m.Peak!.Value.AvgKw);
+    m.Restore(new QuarterResult(new DateTime(2026, 9, 30, 20, 0, 0), 12.0));                               // an older month: ignored
+    Assert.Equal(9.602, m.Peak!.Value.AvgKw);
   }
 
   [Fact]

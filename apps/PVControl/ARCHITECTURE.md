@@ -763,6 +763,15 @@ so far, not on power: only the quarter's mean counts, so a short spike can be ba
 Nothing reacts at once (EV automation 1 min, inverter write, ramps): one reaction time instead
 of per-device rules. A counter that doesn't change is valid (no import), so a source only fails
 when unavailable or frozen while a later one counts (NetDaemon has no `last_reported`).
+The month's peak is restored at start from its sensor and from the DataLogger (`maxquarterimport`
+of the month, the higher one): the sensor alone was read in the base unit (2.82 kW → 2820), failed the
+plausibility check and every restart started the month over — 2026-10-28 it showed 0.00 kW while the
+real peak was 9.60 kW (26 Oct 00:00–01:00, close to the cap).
+A wM-Bus receiver that loses reception stays online and keeps its last value (2026-10-28: antenna
+broken, telegrams down from every 5 s to every 10–20 s, gaps up to 200 s — still counting). Live, the
+inverter's counter takes over once it counted 0.2 kWh more (`PriorityCounter.Failed`, health
+"degraded"); the DataLogger's `maxquarterimport` took the first source with any reading and would have
+logged 0 kW for a frozen meter — it now uses the same rule per period (`PriorityCounter.FirstWorking`).
 
 **DataLogger periods are UTC instants** (`DataLogger.DuePeriods`). At the end of summer time
 (2026-10-25) the logger stepped in local clock time: 01:59:59+02:00 + 1 h is the naive 02:59:59,

@@ -120,7 +120,7 @@ The import is counted from `TotalImportEnergyEntities` in list order. The first 
 | `sensor.pv_control_mode` (command attributes) | The mode is also the inverter command; attributes `battery_power_w` (+ charge, − discharge: hardware maximum × `BatteryNominalVoltageV`, lower only while the import cap limits below what the path charges), `bulk` (grid charge at full power, see below), `charge_energy_wh`, `charge_target_soc`, `charge_start`, `charge_until` (the running grid charge in the plan, else the next one: energy into the battery, the SoC it reaches, its slots), `vpp_charge_limit_w` (what a VPP charge reaches at the current SoC), `seq` (version, grows with every change), `issued` (when `seq` last changed), `import_cap_reason`, `cap_kw`, `allowed_kw` (mean allowed for the rest of the quarter), `extra_loads_paused`, `headroom_w` (room for a new load), `voltage_v` (the nominal voltage used) |
 | `sensor.pv_control_vpp_charge_limit` | Battery charge power a remote-controlled (VPP) grid charge reaches at the current SoC (W); attributes `at_0_pct_w`, `slope_w_per_pct`, `learned`, `at_50_pct_w`, `buckets` (the learned readings, restored after a restart) |
 | `sensor.pv_control_import_quarter` | The running quarter's mean import if the current power continues (kW); attributes `quarter_start`, `imported_kwh`, `complete` (tracked from its start), `counter` (the counter in use) |
-| `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start` |
+| `sensor.pv_control_import_month_peak` | The month's highest 15-min import so far (kW); attribute `quarter_start`. After a restart restored from this sensor and the DataLogger's `maxquarterimport` (the higher one) |
 
 | Setting | Meaning |
 |---|---|
@@ -316,7 +316,7 @@ One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per loc
 | `roomsetpoint` | `RoomClimateEntities` (setpoint) | mean room setpoint |
 | `heatenergyheating`, `heatenergywarmwater` | `HeatEnergyHeatingEntity`, `HeatEnergyWarmwaterEntity` | heat output (Wh) per mode, counter increase |
 | `heatpumpelecheating`, `heatpumpelecwarmwater` | `ElecEnergyHeatingEntity`, `ElecEnergyWarmwaterEntity` | heat pump electricity (Wh) under the same conditions — COP per mode = heat / electricity |
-| `maxquarterimport` | `ImportTotalEntities` (first with readings) | highest 15-min mean grid import of the hour/day, kW |
+| `maxquarterimport` | `ImportTotalEntities` (the first that worked in the period: a source a later one counted ≥ 0.2 kWh more than was frozen) | highest 15-min mean grid import of the hour/day, kW |
 | `pvcontrolmode`, `pvmodechanges` | `PVControlModeEntity` | PVControl mode held longest; number of mode changes |
 | `feedinminutes`, `forcechargeminutes` | `PVControlModeEntity` | minutes in `feedin_priority`; in `force_charge` / `force_charge_grid_only` |
 | `chargedisabledminutes` | `BatteryChargingEnabledEntity` | minutes with battery charging off |

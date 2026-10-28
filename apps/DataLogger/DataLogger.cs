@@ -491,24 +491,27 @@ namespace PVControl
     /// <returns>kW; null without a counter or readings.</returns>
     private async Task<double?> GetMaxQuarterImportAsync(DateTime from, DateTime to)
     {
+      // All sources, then the first that worked over the period: a frozen receiver (online, no
+      // telegrams) keeps its last value and would log 0 kW — the same rule as PVControl's live counter.
+      var sources = new List<List<(DateTime, double)>?>();
       foreach (var entity in _config.ImportTotalEntities)
       {
         try
         {
           var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, endDateTime: to);
-          if (!history.Item1) continue;
-          var readings = history.Item2
+          sources.Add(!history.Item1 ? null : history.Item2
             .Where(s => double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
-            .Select(s => (s.LastChanged.ToUniversalTime(), double.Parse(s.State!, CultureInfo.InvariantCulture))).ToList();
-          if (MaxQuarterKw(readings, from, to.AddSeconds(1)) is { } kw)
-            return Math.Round(kw, 3);
+            .Select(s => (s.LastChanged.ToUniversalTime(), double.Parse(s.State!, CultureInfo.InvariantCulture))).ToList());
         }
         catch (Exception ex)
         {
           _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
+          sources.Add(null);
         }
       }
-      return null;
+      int used = NetDeamon.apps.PVControl.ImportCap.PriorityCounter.FirstWorking(sources
+        .Select(r => r is { Count: > 0 } ? (double?)CounterIncrease(r.Select(x => (float)x.Item2).ToList()) : null).ToList());
+      return used >= 0 && MaxQuarterKw(sources[used]!, from, to.AddSeconds(1)) is { } kw ? Math.Round(kw, 3) : null;
     }
 
     /// <summary>Highest mean import of the 15-min blocks of a period from a kWh counter (resets and glitches as in <see cref="CounterIncrease"/>).</summary>

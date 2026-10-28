@@ -8,12 +8,22 @@ public sealed class MonthPeakTracker
   /// <summary>The month's peak; null before the first finished quarter of the month.</summary>
   public QuarterResult? Peak { get; private set; }
 
-  /// <summary>Restores the peak after a restart (ignored if it is from another month than the next observation, or impossible).</summary>
+  /// <summary>Restores the peak after a restart from one of several sources (the sensor, the DataLogger):
+  /// the higher one of the same month wins; ignored if impossible.</summary>
   /// <param name="peak">Stored peak.</param>
   public void Restore(QuarterResult peak)
   {
-    if (Plausible(peak)) Peak = peak;
+    if (!Plausible(peak)) return;
+    if (Peak is { } p && SameMonth(p.Start, peak.Start) && p.AvgKw >= peak.AvgKw) return;
+    if (Peak is { } q && q.Start > peak.Start && !SameMonth(q.Start, peak.Start)) return;   // a later month's peak stays
+    Peak = peak;
   }
+
+  /// <summary>A DataLogger hourly row's highest 15-min import as a peak (the row's timestamp is its hour's last second;
+  /// the quarter within the hour isn't stored, so the hour's start stands for it).</summary>
+  /// <param name="hourEnd">The row's timestamp.</param>
+  /// <param name="kw">Its <c>maxquarterimport</c>, kW.</param>
+  public static QuarterResult FromHourlyRow(DateTime hourEnd, double kw) => new(hourEnd.AddSeconds(1).AddHours(-1), kw);
 
   /// <summary>Takes a finished quarter.</summary>
   /// <param name="quarter">The quarter.</param>

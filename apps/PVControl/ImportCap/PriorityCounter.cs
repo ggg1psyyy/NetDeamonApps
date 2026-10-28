@@ -51,6 +51,26 @@ public sealed class PriorityCounter(int sources)
     return false;
   }
 
+  /// <summary>
+  /// The source to use for a closed period from each source's increase in it: the first with an increase,
+  /// unless a later source counted at least <see cref="FrozenKwh"/> more — then it was (partly) frozen,
+  /// e.g. a wM-Bus receiver online but without telegrams keeps its last value.
+  /// </summary>
+  /// <param name="increases">kWh per source in priority order; null = no readings.</param>
+  /// <returns>Index; -1 if none has readings.</returns>
+  public static int FirstWorking(IReadOnlyList<double?> increases)
+  {
+    for (int i = 0; i < increases.Count; i++)
+    {
+      if (increases[i] is not { } mine) continue;
+      bool frozen = false;
+      for (int j = i + 1; j < increases.Count; j++)
+        if (increases[j] is { } later && later - mine >= FrozenKwh) frozen = true;
+      if (!frozen) return i;
+    }
+    return -1;
+  }
+
   /// <summary>Index of the source in use: the first that doesn't fail; -1 if all fail.</summary>
   public int ActiveIndex => Enumerable.Range(0, _values.Length).FirstOrDefault(i => !Failed(i), -1);
 
