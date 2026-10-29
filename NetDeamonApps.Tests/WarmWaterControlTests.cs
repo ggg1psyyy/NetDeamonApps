@@ -216,4 +216,18 @@ public class WarmWaterControlTests : TestBase
     Assert.All(windows, w => Assert.Equal(43, w.MinTemp));
     Assert.Equal(new DateTime(2026, 10, 20, 21, 0, 0), windows[1].End);
   }
+
+  // ── Refit schedule (WarmWaterController.RefitDue; the refit itself reads HA history) ──
+
+  [Fact]
+  public void RefitDue_DailyAfterASuccess_HourlyRetryAfterAFailure()
+  {
+    var t = new DateTime(2026, 10, 29, 10, 0, 0);
+    Assert.True(WarmWaterController.RefitDue(null, null, t));                          // first start
+    Assert.False(WarmWaterController.RefitDue(t, t, t.AddHours(23)));                  // fitted: not before a day
+    Assert.True(WarmWaterController.RefitDue(t, t, t.AddDays(1)));
+    Assert.False(WarmWaterController.RefitDue(null, t, t.AddMinutes(30)));             // failed: not every cycle…
+    Assert.True(WarmWaterController.RefitDue(null, t, t.AddHours(1)));                 // …but again after an hour, not a day
+    Assert.True(WarmWaterController.RefitDue(t.AddDays(-2), t, t.AddHours(1)));        // an old fit, the last try failed
+  }
 }

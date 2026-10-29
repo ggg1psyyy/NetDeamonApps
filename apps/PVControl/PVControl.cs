@@ -126,156 +126,149 @@ namespace NetDeamon.apps.PVControl
       }
       _house = new HouseEnergy();
       await _house.SeedSoCHistoryAsync(cancellationToken);
-      if (await RegisterControlSensors(false))
+      await RegisterControlSensors(false);
+      #region Load settings from HA if available
+
+      _house.Costs.SumExportEarningsEntity = _sumExportEarningsBruttoEntity;
+      _house.Costs.SumImportCostBruttoEntity = _sumImportCostBruttoEntity;
+      _house.Costs.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
+      _house.Costs.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
+      _house.Costs.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
+      _house.Costs.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
+
+      if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
+        _house.Prices.ForceChargeMaxPrice = maxPrice;
+      if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
+        _house.ForceChargeTargetSoC = targetSoC;
+      if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
+        _house.EnableCheapForceCharge = forceCharge;
+      if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
+        _house.OverrideMode = mode;
+      if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
+        _house.Battery.PreferredMinBatterySoC = prefSoC;
+      if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
+        _house.Battery.EnforcePreferredSoC = enforcePrefSoC;
+      if (_enableOpportunisticExport.TryGetStateValue(out bool enableOpp))
+        _house.OpportunisticDischarge = enableOpp;
+
+      #endregion
+      #region Cost Logging DB
+      // only enable if DB location is set
+      if (!string.IsNullOrWhiteSpace(PVCC_Config.EnergyCostDBLocation))
       {
-        #region Load settings from HA if available
-
-        _house.Costs.SumExportEarningsEntity = _sumExportEarningsBruttoEntity;
-        _house.Costs.SumImportCostBruttoEntity = _sumImportCostBruttoEntity;
-        _house.Costs.SumImportCostEnergyOnlyEntity = _sumImportCostEnergyOnlyEntity;
-        _house.Costs.SumImportCostNetworkOnlyEntity = _sumImportCostNetworkOnlyEntity;
-        _house.Costs.SumImportExportNetCostEntity = _sumImportExportNetCostEntity;
-        _house.Costs.BatteryAvgCostEntity = _batteryAvgCostPerKwhEntity;
-
-        if (_forceChargeMaxPriceEntity.TryGetStateValue(out float maxPrice))
-          _house.Prices.ForceChargeMaxPrice = maxPrice;
-        if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
-          _house.ForceChargeTargetSoC = targetSoC;
-        if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
-          _house.EnableCheapForceCharge = forceCharge;
-        if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
-          _house.OverrideMode = mode;
-        if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
-          _house.Battery.PreferredMinBatterySoC = prefSoC;
-        if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
-          _house.Battery.EnforcePreferredSoC = enforcePrefSoC;
-        if (_enableOpportunisticExport.TryGetStateValue(out bool enableOpp))
-          _house.OpportunisticDischarge = enableOpp;
-
-        #endregion
-        #region Cost Logging DB
-        // only enable if DB location is set
-        if (!string.IsNullOrWhiteSpace(PVCC_Config.EnergyCostDBLocation))
+        _energyLogDBConnectionString += PVCC_Config.EnergyCostDBFullLocation;
+        PVCC_Logger.LogInformation("Energy Log DB Location: {loc} - Energy logging enabled", PVCC_Config.EnergyCostDBFullLocation);
+        await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
         {
-          _energyLogDBConnectionString += PVCC_Config.EnergyCostDBFullLocation;
-          PVCC_Logger.LogInformation("Energy Log DB Location: {loc} - Energy logging enabled", PVCC_Config.EnergyCostDBFullLocation);
-          await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
+          db.CreateTable<Costs>(tableOptions: TableOptions.CheckExistence);
+          _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault()!;
+          if (_lastCostsEntry is null)
           {
-            db.CreateTable<Costs>(tableOptions: TableOptions.CheckExistence);
-            _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault()!;
-            if (_lastCostsEntry is null)
+            _lastCostsEntry = new Costs
             {
-              _lastCostsEntry = new Costs
-              {
-                Timestamp = DateTime.Now,
-                GridExport = 0,
-                GridImport = 0,
-                GridExportTotal = PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float export) ? export : 0.0f,
-                GridImportTotal = (float)((ReadImportCounters().FirstOrDefault(v => v is not null) ?? 0) * 1000), // the cost log is in Wh
-                BasePrice = 0,
-                ExportPriceProvider = 0,
-                ExportPriceTotal = 0,
-                ImportPriceProvider = 0,
-                ImportPriceTotal = 0,
-              };
-              db.Insert(_lastCostsEntry);
-              PVCC_Logger.LogInformation("No existing entries found in DB, creating new entry with timestamp {ts}", _lastCostsEntry.Timestamp);
-            }
-            else
-            {
-              PVCC_Logger.LogInformation("Last timestamp found: {ts}, continuing from there", _lastCostsEntry.Timestamp);
-            }
+              Timestamp = DateTime.Now,
+              GridExport = 0,
+              GridImport = 0,
+              GridExportTotal = PVCC_Config.TotalExportEnergyEntity.TryGetStateValue(out float export) ? export : 0.0f,
+              GridImportTotal = (float)((ReadImportCounters().FirstOrDefault(v => v is not null) ?? 0) * 1000), // the cost log is in Wh
+              BasePrice = 0,
+              ExportPriceProvider = 0,
+              ExportPriceTotal = 0,
+              ImportPriceProvider = 0,
+              ImportPriceTotal = 0,
+            };
+            db.Insert(_lastCostsEntry);
+            PVCC_Logger.LogInformation("No existing entries found in DB, creating new entry with timestamp {ts}", _lastCostsEntry.Timestamp);
           }
-          _logEnergy = true;
+          else
+          {
+            PVCC_Logger.LogInformation("Last timestamp found: {ts}, continuing from there", _lastCostsEntry.Timestamp);
+          }
         }
-        #endregion
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
-        (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
+        _logEnergy = true;
+      }
+      #endregion
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
+      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
 
-        PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
-        foreach (var load in _house.SchedulableLoads)
+      PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
+      foreach (var load in _house.SchedulableLoads)
+      {
+        if (load.ModeEntity is not null)
         {
-          if (load.ModeEntity is not null)
-          {
-            PVCC_Logger.LogInformation("Subscribing to mode commands for {load} ({id})", load.Config.Name, load.ModeEntity.EntityId);
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ModeEntity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.ModeEntity, state));
-          }
-          else
-          {
-            PVCC_Logger.LogInformation("Load {load}: ModeEntity is null (static mode from config)", load.Config.Name);
-          }
+          PVCC_Logger.LogInformation("Subscribing to mode commands for {load} ({id})", load.Config.Name, load.ModeEntity.EntityId);
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ModeEntity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.ModeEntity, state));
+        }
+        else
+        {
+          PVCC_Logger.LogInformation("Load {load}: ModeEntity is null (static mode from config)", load.Config.Name);
+        }
 
-          if (load.TargetLevelEntity is not null)
-          {
-            PVCC_Logger.LogInformation("Subscribing to target level commands for {load} ({id})", load.Config.Name, load.TargetLevelEntity.EntityId);
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.TargetLevelEntity.EntityId)
-                .ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.TargetLevelEntity, state));
-          }
-          else
-          {
-            PVCC_Logger.LogInformation("Load {load}: TargetLevelEntity is null (static target from config)", load.Config.Name);
-          }
+        if (load.TargetLevelEntity is not null)
+        {
+          PVCC_Logger.LogInformation("Subscribing to target level commands for {load} ({id})", load.Config.Name, load.TargetLevelEntity.EntityId);
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.TargetLevelEntity.EntityId)
+              .ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.TargetLevelEntity, state));
+        }
+        else
+        {
+          PVCC_Logger.LogInformation("Load {load}: TargetLevelEntity is null (static target from config)", load.Config.Name);
+        }
 
-          if (load.ReadyByEntity is not null)
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ReadyByEntity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.ReadyByEntity, state));
-          if (load.EnforceReadyByEntity is not null)
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnforceReadyByEntity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.EnforceReadyByEntity, state));
-          if (load.EnergyPerLevelEntity is not null)
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnergyPerLevelEntity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.EnergyPerLevelEntity, state));
-          if (load.ChargePowerEntity is not null)
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ChargePowerEntity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(load.ChargePowerEntity, state));
+        if (load.ReadyByEntity is not null)
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ReadyByEntity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.ReadyByEntity, state));
+        if (load.EnforceReadyByEntity is not null)
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnforceReadyByEntity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.EnforceReadyByEntity, state));
+        if (load.EnergyPerLevelEntity is not null)
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnergyPerLevelEntity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.EnergyPerLevelEntity, state));
+        if (load.ChargePowerEntity is not null)
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ChargePowerEntity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(load.ChargePowerEntity, state));
 
-          // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
-          // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
-          // subscription pattern as other external sensors — recompute immediately on toggle
-          // instead of waiting for the next 15 s cron tick.
-          if (load.Config.AvailabilityEntity is not null)
+        // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
+        // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
+        // subscription pattern as other external sensors — recompute immediately on toggle
+        // instead of waiting for the next 15 s cron tick.
+        if (load.Config.AvailabilityEntity is not null)
+        {
+          PVCC_Logger.LogInformation("Subscribing to availability changes for {load} ({id})", load.Config.Name, load.Config.AvailabilityEntity.EntityId);
+          load.Config.AvailabilityEntity.StateChanges().SubscribeAsync(async _ =>
           {
-            PVCC_Logger.LogInformation("Subscribing to availability changes for {load} ({id})", load.Config.Name, load.Config.AvailabilityEntity.EntityId);
-            load.Config.AvailabilityEntity.StateChanges().SubscribeAsync(async _ =>
-            {
-              load.RequestReplan("availability changed");
-              load.ClearOffLatch();
+            load.RequestReplan("availability changed");
+            load.ClearOffLatch();
 #if !DEBUG
-              await ScheduledOperations();
+            await ScheduledOperations();
 #endif
-            });
-          }
+          });
         }
+      }
 
-        if (_house.WarmWater is { } warmWater)
-        {
-          foreach (var entity in warmWater.CommandEntities)
-            (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(entity.EntityId).ConfigureAwait(false))
-              .SubscribeAsync(async state => await UserStateChanged(entity, state));
-          await warmWater.RefitAsync(cancellationToken);
-        }
+      if (_house.WarmWater is { } warmWater)
+      {
+        foreach (var entity in warmWater.CommandEntities)
+          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(entity.EntityId).ConfigureAwait(false))
+            .SubscribeAsync(async state => await UserStateChanged(entity, state));
+        await warmWater.RefitAsync(cancellationToken);
+      }
 
 #if !DEBUG
-        PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
+      PVCC_Scheduler.ScheduleCron("*/15 * * * * *", async () => await ScheduledOperations(), true);
 #endif
 
 #if DEBUG
-        var x = _house.ProposedState;
-        _house.UpdatePredictions();
+      var x = _house.ProposedState;
+      _house.UpdatePredictions();
 #endif
-
-      }
-      else
-      {
-        PVCC_Logger.LogError("Error registering sensors");
-      }
     }
     /// <summary>Applies a change of a PVControl control entity (mode, SoC limits, load settings, …) and requests a replan.</summary>
     /// <param name="entity">The changed entity; null = ignored.</param>
@@ -1440,10 +1433,19 @@ namespace NetDeamon.apps.PVControl
     }
     /// <summary>Registers PVControl's HA entities (sensors, selects, numbers, switches) via MQTT and reads their current values.</summary>
     /// <param name="reset">Re-register all entities (drops their configuration in HA).</param>
-    /// <returns>Always true.</returns>
-    private async Task<bool> RegisterControlSensors(bool reset=false)
+    private async Task RegisterControlSensors(bool reset = false)
     {
-      //reset = true;
+      await RegisterStatusSensorsAsync(reset);
+      await RegisterControlsAsync(reset);
+      await RegisterPriceSensorsAsync(reset);
+      await RegisterBatteryAndPredictionSensorsAsync(reset);
+      await RegisterLoadEntitiesAsync(reset);
+    }
+
+    /// <summary>Version, health, price publication, import cap, VPP curve and load forecast sensors.</summary>
+    /// <param name="reset">Re-register (drops their configuration in HA).</param>
+    private async Task RegisterStatusSensorsAsync(bool reset)
+    {
       // Deployed build: republished on every start so the device's "Firmware" follows it too.
       var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
       await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Current);
@@ -1470,7 +1472,12 @@ namespace NetDeamon.apps.PVControl
           addConfig: new { unit_of_measurement = "kWh" }, reRegister: reset);
         RestoreNights();
       }
+    }
 
+    /// <summary>The user's controls (mode override, switches, numbers), the mode sensor (the inverter command, restored) and its two switches.</summary>
+    /// <param name="reset">Re-register (drops their configuration in HA).</param>
+    private async Task RegisterControlsAsync(bool reset)
+    {
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.automatic.ToString(),
@@ -1540,8 +1547,12 @@ namespace NetDeamon.apps.PVControl
       _exportAllowedEntity = await RegisterSensor("binary_sensor.pv_control_export_allowed", "Export Allowed", "power", "mdi:transmission-tower-export",
         defaultValue: "ON",
         reRegister: reset);
+    }
 
-
+    /// <summary>Price and cost sensors.</summary>
+    /// <param name="reset">Re-register (drops their configuration in HA).</param>
+    private async Task RegisterPriceSensorsAsync(bool reset)
+    {
       _currentImportPriceBruttoEntity = await RegisterSensor("sensor.pv_control_current_import_price_brutto", "Current energy import price (brutto)", "MONETARY", "mdi:currency-eur",
         addConfig: new
         {
@@ -1632,7 +1643,12 @@ namespace NetDeamon.apps.PVControl
         },
         defaultValue: "0",
         reRegister: reset);
+    }
 
+    /// <summary>Battery status, need-to-charge and prediction sensors.</summary>
+    /// <param name="reset">Re-register (drops their configuration in HA).</param>
+    private async Task RegisterBatteryAndPredictionSensorsAsync(bool reset)
+    {
       _battery_StatusEntity = await RegisterSensor("sensor.pv_control_battery_status", "Battery Status", "ENUM", "mdi:battery-charging",
         addConfig: new { options = Enum.GetNames<BatteryStatuses>() },
         defaultValue: BatteryStatuses.unknown.ToString(),
@@ -1753,7 +1769,12 @@ namespace NetDeamon.apps.PVControl
         },
         defaultValue: "0",
         reRegister: reset);
+    }
 
+    /// <summary>Each schedulable load's entities (mode, target, ready-by, charge_now, totals, learned values) and the warm-water controller's.</summary>
+    /// <param name="reset">Re-register (drops their configuration in HA).</param>
+    private async Task RegisterLoadEntitiesAsync(bool reset)
+    {
       // Auto-create HA entities for each schedulable load.
       foreach (var load in _house.SchedulableLoads)
       {
@@ -1862,8 +1883,6 @@ namespace NetDeamon.apps.PVControl
 
       if (_house.WarmWater is not null)
         await _house.WarmWater.RegisterEntitiesAsync(reset);
-
-      return true;
     }
   }
 }

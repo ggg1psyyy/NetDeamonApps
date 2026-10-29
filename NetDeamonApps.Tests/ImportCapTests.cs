@@ -92,7 +92,31 @@ public class ImportCapTests
     Assert.Equal(600, q.ImportedWh!.Value, 0); // from 100.4, the last reading before the quarter
     var done = q.Update(T0.AddMinutes(30).AddSeconds(5), [102.9]);
     Assert.Equal(T0.AddMinutes(15), done!.Value.Start);
-    Assert.Equal((102.9 - 100.4) * 4, done.Value.AvgKw, 3); // from the reading before the quarter began
+    // From the reading before the quarter began (14:50) to the first after it (30:05): 915 s, scaled to the 900 s the meter bills.
+    Assert.Equal((102.9 - 100.4) * 4 * 900 / 915, done.Value.AvgKw, 3);
+  }
+
+  [Fact]
+  public void Quarter_LiveIncludesTheExtraSeconds_FinishedIsScaledTo15Minutes()
+  {
+    // The live guard counts from 01:59:50 (the last cycle before the quarter): a safe overestimate. The finished
+    // quarter is 9.72 kW counted over 915 s → 9.56 kW over the 900 s the meter bills (the month peak, the warning).
+    var q = new QuarterImport(1);
+    q.Update(T0.AddSeconds(-10), [1000.000]);
+    q.Update(T0.AddSeconds(5), [1000.040]);
+    Assert.Equal(40, q.ImportedWh!.Value, 0);
+    var done = q.Update(T0.AddMinutes(15).AddSeconds(5), [1002.430]);
+    Assert.Equal(2.43 * 4 * 900 / 915, done!.Value.AvgKw, 3);
+  }
+
+  [Fact]
+  public void Quarter_NoCounterReadingAtItsStart_IsIncomplete()
+  {
+    var q = new QuarterImport(1);
+    q.Update(T0.AddSeconds(-10), [null]);  // the counter unavailable right before the quarter
+    q.Update(T0.AddSeconds(5), [1000.0]);
+    Assert.False(q.Complete);
+    Assert.Null(q.ImportedWh);
   }
 
   [Fact]
@@ -131,7 +155,7 @@ public class ImportCapTests
     var done = q.Update(utc.AddMinutes(20).AddSeconds(5), [101.0]);
     Assert.NotNull(done);
     Assert.Equal(new DateTime(y, m, d, localHour, localMinute, 0), done.Value.Start);
-    Assert.Equal((101.0 - 100.2) * 4, done.Value.AvgKw, 3);
+    Assert.Equal((101.0 - 100.2) * 4 * 900 / 915, done.Value.AvgKw, 3);
     Assert.Equal(5, q.ElapsedSeconds(utc.AddMinutes(20).AddSeconds(5)), 0);
   }
 
@@ -164,6 +188,8 @@ public class ImportCapTests
     Assert.Equal(9.5, m.PeakIn(T0)!.Value.AvgKw);
     Assert.Null(m.PeakIn(new DateTime(2026, 11, 1, 0, 5, 0)));
     Assert.True(m.Observe(new QuarterResult(new DateTime(2026, 11, 1, 0, 0, 0), 2.0)));
+    Assert.False(m.Observe(new QuarterResult(T0, 9.9)));   // an older month's quarter doesn't replace November's peak
+    Assert.Equal(2.0, m.PeakIn(new DateTime(2026, 11, 1, 0, 5, 0))!.Value.AvgKw);
   }
 
   // Live 2026-10-27/28: the sensor restore read kW as W (2.82 → 2820) and was rejected, so every

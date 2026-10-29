@@ -33,6 +33,7 @@ public sealed class MonthPeakTracker
     if (!Plausible(quarter)) return false;
     if (Peak is { } p && SameMonth(p.Start, quarter.Start) && p.AvgKw >= quarter.AvgKw)
       return false;
+    if (Peak is { } q && q.Start > quarter.Start && !SameMonth(q.Start, quarter.Start)) return false;   // a later month's peak stays (as in Restore)
     Peak = quarter;
     return true;
   }

@@ -108,19 +108,44 @@ public static class EnergySimulator
   /// <param name="socPercent">SoC at the start, %.</param>
   /// <param name="targetSocPercent">Target SoC of the charge, %.</param>
   /// <returns>True: bulk; false: VPP (or no VPP limit known).</returns>
+  /// <remarks>
+  /// If VPP doesn't get the energy in, bulk only where it delivers more over the block: both paths as the import
+  /// cap leaves them per quarter (house and planned loads), VPP falling with the SoC. A bulk charge follows the cap
+  /// with a lower current (since 2026-10-29); where that leaves it no more than VPP manages, it would charge no
+  /// faster and only cost the Manual Mode and current EEPROM writes (e.g. EV + heat pump leaving ~4.4 kW at 25 %).
+  /// </remarks>
   public static bool ChargesBulk(SimulationInput input, DateTime slotTime, int socPercent, int targetSocPercent)
   {
     if (input.VppChargePowerW is null) return false;
     int neededWh = input.SocToWh(Math.Max(0, Math.Min(targetSocPercent, 100) - socPercent));
     var blockEnd = SamePriceBlockEnd(input, slotTime);
-    int vppWh = 0, soc = socPercent;
-    for (var t = slotTime; vppWh < neededWh && t < blockEnd; t = t.AddMinutes(SlotMinutes))
+    int vppWh = BlockChargeWh(input, slotTime, blockEnd, socPercent, neededWh, bulk: false);
+    return vppWh < neededWh && BlockChargeWh(input, slotTime, blockEnd, socPercent, neededWh, bulk: true) > vppWh;
+  }
+
+  /// <summary>Energy a grid charge puts into the battery on one path from a slot until the end of its price block or the
+  /// energy needed: per quarter the path's limit at the SoC then (<see cref="SimulationInput.ChargeLimitWh"/>), at most the
+  /// grid energy the import cap leaves (<see cref="SimulationInput.GridChargeWhPerSlot"/>) plus the PV surplus.</summary>
+  /// <param name="input">Simulation input (prices, loads, VPP curve, cap).</param>
+  /// <param name="slotTime">First slot.</param>
+  /// <param name="blockEnd">End of the price block.</param>
+  /// <param name="socPercent">SoC at the start, %.</param>
+  /// <param name="neededWh">Energy needed, Wh (stops there).</param>
+  /// <param name="bulk">The full-power path.</param>
+  /// <returns>Wh.</returns>
+  private static int BlockChargeWh(SimulationInput input, DateTime slotTime, DateTime blockEnd, int socPercent, int neededWh, bool bulk)
+  {
+    int wh = 0, soc = socPercent;
+    for (var t = slotTime; wh < neededWh && t < blockEnd; t = t.AddMinutes(SlotMinutes))
     {
-      int wh = input.ChargeLimitWh(bulk: false, soc, input.SlotFraction(t));
-      vppWh += wh;
-      soc = Math.Min(100, soc + input.WhToSoc(wh));
+      double fraction = input.SlotFraction(t);
+      var (pv, load, extra) = input.SlotEnergyWh(t);
+      int pathWh = input.ChargeLimitWh(bulk, soc, fraction);
+      int slotWh = Math.Min(pathWh, input.GridChargeWhPerSlot(pv, load + extra, fraction, pathWh) + Math.Max(0, pv - load - extra));
+      wh += slotWh;
+      soc = Math.Min(100, soc + input.WhToSoc(slotWh));
     }
-    return vppWh < neededWh;
+    return wh;
   }
 
   /// <summary>

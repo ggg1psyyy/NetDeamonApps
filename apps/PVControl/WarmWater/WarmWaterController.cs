@@ -177,12 +177,28 @@ public sealed class WarmWaterController
   /// <summary>The heat pump entities the control needs were readable in the last cycle (health sensor).</summary>
   public bool HeatPumpAvailable { get; private set; } = true;
 
-  /// <summary>Refits the model once a day and carries out this cycle's control decision (<see cref="WarmWaterControl.Decide"/>).</summary>
+  /// <summary>How often the tank model is learned again.</summary>
+  public static readonly TimeSpan RefitInterval = TimeSpan.FromDays(1);
+  /// <summary>Wait after a failed refit (HA history unavailable) before the next try.</summary>
+  public static readonly TimeSpan RefitRetry = TimeSpan.FromHours(1);
+
+  /// <summary>Whether the tank model is due to be learned again: a day after the last successful fit, at most once an hour.</summary>
+  /// <param name="lastFit">Last successful fit; null = none yet.</param>
+  /// <param name="lastAttempt">Last try; null = none yet.</param>
+  /// <param name="now">Current time.</param>
+  public static bool RefitDue(DateTime? lastFit, DateTime? lastAttempt, DateTime now) =>
+    (lastFit is null || now - lastFit.Value >= RefitInterval) && (lastAttempt is null || now - lastAttempt.Value >= RefitRetry);
+
+  private DateTime? _lastFitAttempt;
+  private Task? _refit;
+
+  /// <summary>Starts the daily refit in the background and carries out this cycle's control decision (<see cref="WarmWaterControl.Decide"/>).</summary>
   /// <param name="now">Current time.</param>
   public async Task ActAsync(DateTime now)
   {
-    if (LastFit is null || now - LastFit.Value >= TimeSpan.FromDays(1))
-      await RefitAsync(CancellationToken.None);
+    // The refit reads ~10 days of HA history (20–40 requests): off the 15-s cycle, one at a time.
+    if (_refit is not { IsCompleted: false } && RefitDue(LastFit, _lastFitAttempt, now))
+      _refit = Task.Run(() => RefitAsync(CancellationToken.None));
 
     if (Temperature is not { } temp
         || OnOff(Config.OneTimeSwitchEntity) is not { } switchOn
@@ -245,7 +261,7 @@ public sealed class WarmWaterController
   /// <param name="ct">Cancels the history requests.</param>
   public async Task RefitAsync(CancellationToken ct)
   {
-    LastFit = DateTime.Now;
+    _lastFitAttempt = DateTime.Now;
     try
     {
       var end = DateTime.Now;
@@ -278,6 +294,7 @@ public sealed class WarmWaterController
         runs.Add(new HeatingRun(a, b, StepFunction.ValueAt(temps, a), StepFunction.ValueAt(temps, b), power));
       }
       Model = TankModel.Fit(temps, runs, TankModel.Default);
+      LastFit = DateTime.Now;   // only a successful fit: a failed one is tried again after RefitRetry, not a day later
       PVCC_Logger.LogInformation("{name}: tank model from {temps} readings and {runs} runs: {model}", Config.Name, temps.Count, runs.Count, Model);
       RequestReplan("tank model updated");
     }

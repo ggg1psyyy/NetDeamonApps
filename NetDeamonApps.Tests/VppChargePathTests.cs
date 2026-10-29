@@ -69,7 +69,7 @@ public class VppChargePathTests
   static readonly DateTime Night = new(2026, 10, 28, 0, 0, 0);
 
   /// <summary>Night prices: hourly (four equal quarters per hour) or quarter-hourly (each quarter its own price).</summary>
-  static SimulationInput Input(bool hourly, DateTime start, int soc, bool vpp = true)
+  static SimulationInput Input(bool hourly, DateTime start, int soc, bool vpp = true, int capW = 0, int loadWh = 110)
   {
     var prices = new List<PriceTableEntry>();
     for (var t = Night.AddDays(-1); t < Night.AddDays(2); t = t.AddMinutes(15))
@@ -81,7 +81,7 @@ public class VppChargePathTests
     var pv = new Dictionary<DateTime, int>();
     for (var t = Night.AddDays(-1); t < Night.AddDays(3); t = t.AddMinutes(15))
     {
-      load[t] = 110;
+      load[t] = loadWh;
       pv[t] = t.Hour is >= 10 and < 15 ? 600 : 0;
     }
     return new SimulationInput
@@ -96,6 +96,7 @@ public class VppChargePathTests
       ForceChargeMaxPrice = 0.35f, ForceChargeTargetSocPercent = 95,
       CurrentMode = new InverterState(InverterModes.normal),
       VppChargePowerW = vpp ? Measured.MaxW : null,
+      MaxGridImportW = capW,
     };
   }
 
@@ -119,6 +120,23 @@ public class VppChargePathTests
   public void ChargesBulk_LateInTheHour_FewerEqualQuartersLeft()
   {
     Assert.True(EnergySimulator.ChargesBulk(Input(hourly: true, Night.AddMinutes(45), 40), Night.AddMinutes(45), 40, 55));
+  }
+
+  [Fact]
+  public void ChargesBulk_CapLeavesBulkNoMoreThanVpp_Vpp()
+  {
+    // One cheap quarter, 25 % → 55 %: VPP (~4.9 kW at 25 %) can't, full bulk could. With the house drawing 5.4 kW
+    // (EV + heat pump) the cap leaves ~4.4 kW: bulk would charge no faster than VPP — only the EEPROM writes.
+    Assert.True(EnergySimulator.ChargesBulk(Input(hourly: false, Night, 25, loadWh: 1350), Night, 25, 55));
+    Assert.False(EnergySimulator.ChargesBulk(Input(hourly: false, Night, 25, capW: 9800, loadWh: 1350), Night, 25, 55));
+  }
+
+  [Fact]
+  public void ChargesBulk_VppFallsBelowTheCapsRoom_OverTheHour_Bulk()
+  {
+    // An hour at one price, 40 % → 80 % (4.6 kWh): VPP falls from ~4.3 kW with the SoC and gets ~4.1 kWh in; the cap
+    // leaves bulk 5.8 kW (house 4 kW) every quarter, 5.8 kWh — more than VPP, so bulk at the cap's current.
+    Assert.True(EnergySimulator.ChargesBulk(Input(hourly: true, Night, 40, capW: 9800, loadWh: 1000), Night, 40, 80));
   }
 
   [Fact]

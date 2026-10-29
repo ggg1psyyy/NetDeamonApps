@@ -405,21 +405,22 @@ namespace PVControl
         float? priceEnergyImport = GetFloatTaskResult(averageTasks, _config.PriceEnergyImportEntity);
         float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity)
           ?? (_config.PriceEnergyExportFixed ? _config.PriceEnergyExportFixedValue : null);
-        int? pvYield = (int?)(GetFloatTaskResult(averageTasks, _config.PVYieldEntity) * 1000);
-        int? houseEnergyUsed = (int?)(GetFloatTaskResult(averageTasks, _config.HouseEnergyEntity));
-        int? energyImport = (int?)(GetFloatTaskResult(averageTasks, _config.ImportEnergyEntity) * 1000);
-        int? energyExport = (int?)(GetFloatTaskResult(averageTasks, _config.ExportEnergyEntity) * 1000);
+        int? pvYield = Wh(GetFloatTaskResult(averageTasks, _config.PVYieldEntity));
+        // sensor.house_energy_consumption_day reports Wh already (the other counters kWh); the load prediction reads Wh.
+        int? houseEnergyUsed = GetFloatTaskResult(averageTasks, _config.HouseEnergyEntity) is { } houseWh ? (int)Math.Round(houseWh) : null;
+        int? energyImport = Wh(GetFloatTaskResult(averageTasks, _config.ImportEnergyEntity));
+        int? energyExport = Wh(GetFloatTaskResult(averageTasks, _config.ExportEnergyEntity));
         int? carSoC = (int?)(GetFloatTaskResult(averageTasks, _config.CarSoCEntity));
-        int? batteryCharge = (int?)(GetFloatTaskResult(averageTasks, _config.BatteryChargeEntity) * 1000);
-        int? batteryDischarge = (int?)(GetFloatTaskResult(averageTasks, _config.BatteryDischargeEntity) * 1000);
-        int? carCharge = (int?)(GetFloatTaskResult(averageTasks, _config.CarChargeEntity) * 1000);
-        int? carDischarge = (int?)(GetFloatTaskResult(averageTasks, _config.CarDischargeEntity) * 1000);
-        int? heatpumpEnergy = (int?)(GetFloatTaskResult(averageTasks, _config.HeatPumpEnergyEntity) * 1000);
-        int? warmwaterEnergy = (int?)(GetFloatTaskResult(averageTasks, _config.WarmwaterEnergyEntity) * 1000);
-        int? heatHeating = (int?)(GetFloatTaskResult(averageTasks, _config.HeatEnergyHeatingEntity) * 1000);
-        int? heatWarmwater = (int?)(GetFloatTaskResult(averageTasks, _config.HeatEnergyWarmwaterEntity) * 1000);
-        int? elecHeating = (int?)(GetFloatTaskResult(averageTasks, _config.ElecEnergyHeatingEntity) * 1000);
-        int? elecWarmwater = (int?)(GetFloatTaskResult(averageTasks, _config.ElecEnergyWarmwaterEntity) * 1000);
+        int? batteryCharge = Wh(GetFloatTaskResult(averageTasks, _config.BatteryChargeEntity));
+        int? batteryDischarge = Wh(GetFloatTaskResult(averageTasks, _config.BatteryDischargeEntity));
+        int? carCharge = Wh(GetFloatTaskResult(averageTasks, _config.CarChargeEntity));
+        int? carDischarge = Wh(GetFloatTaskResult(averageTasks, _config.CarDischargeEntity));
+        int? heatpumpEnergy = Wh(GetFloatTaskResult(averageTasks, _config.HeatPumpEnergyEntity));
+        int? warmwaterEnergy = Wh(GetFloatTaskResult(averageTasks, _config.WarmwaterEnergyEntity));
+        int? heatHeating = Wh(GetFloatTaskResult(averageTasks, _config.HeatEnergyHeatingEntity));
+        int? heatWarmwater = Wh(GetFloatTaskResult(averageTasks, _config.HeatEnergyWarmwaterEntity));
+        int? elecHeating = Wh(GetFloatTaskResult(averageTasks, _config.ElecEnergyHeatingEntity));
+        int? elecWarmwater = Wh(GetFloatTaskResult(averageTasks, _config.ElecEnergyWarmwaterEntity));
 
 
         (string Column, object? Value)[] values =
@@ -459,20 +460,8 @@ namespace PVControl
       // telegrams) keeps its last value and would log 0 kW — the same rule as PVControl's live counter.
       var sources = new List<List<(DateTime, double)>?>();
       foreach (var entity in _config.ImportTotalEntities)
-      {
-        try
-        {
-          var history = await _apiManager.GetEntityHistoryAsync(entity, from, _cancelToken, endDateTime: to);
-          sources.Add(!history.Item1 ? null : history.Item2
-            .Where(s => double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
-            .Select(s => (s.LastChanged.ToUniversalTime(), double.Parse(s.State!, CultureInfo.InvariantCulture))).ToList());
-        }
-        catch (Exception ex)
-        {
-          _logger.LogError("Error getting history ({entity}) \n {message}", entity.EntityId, ex.Message);
-          sources.Add(null);
-        }
-      }
+        sources.Add((await GetStateHistoryAsync(entity, from, to))?
+          .Select(s => (Time: Utc(s), Kwh: Number(s.State))).Where(r => r.Kwh is not null).Select(r => (r.Time, r.Kwh!.Value)).ToList());
       int used = NetDeamon.apps.PVControl.ImportCap.PriorityCounter.FirstWorking(sources
         .Select(r => r is { Count: > 0 } ? (double?)Energy.CounterIncrease(r.Select(x => (float)x.Item2).ToList()) : null).ToList());
       return used >= 0 && MaxQuarterKw(sources[used]!, from, to.AddSeconds(1)) is { } kw ? Math.Round(kw, 3) : null;
@@ -510,8 +499,7 @@ namespace PVControl
     private async Task<OperationValues> GetOperationValuesAsync(DateTime from, DateTime to)
     {
       Task<List<SensorData>?> History(Entity? entity, bool attributes = false) => GetStateHistoryAsync(entity, from, to, attributes);
-      static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (Utc(s),
-        double.TryParse(s.State, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList();
+      static List<(DateTime, double?)> Numbers(List<SensorData> h) => h.Select(s => (Utc(s), Number(s.State))).ToList();
       static string? Attribute(SensorData s, string name) =>
         s.Attributes is JsonElement { ValueKind: JsonValueKind.Object } a && a.TryGetProperty(name, out var p)
           ? p.ValueKind == JsonValueKind.String ? p.GetString() : p.ToString()
@@ -539,7 +527,7 @@ namespace PVControl
         roomsHeating = roomHistories.Sum(h => MinutesInState(h.Select(s => (Utc(s), Attribute(s, "hvac_action") ?? "")).ToList(), from, to, a => a == "heating")) / periodMinutes;
         var setpoints = roomHistories
           .Select(h => StepFunction.TimeWeightedAverage(h.Select(s => (Utc(s),
-            double.TryParse(Attribute(s, "temperature"), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : (double?)null)).ToList(), from, to))
+            Number(Attribute(s, "temperature")))).ToList(), from, to))
           .Where(v => v is not null).Select(v => v!.Value).ToList();
         roomSetpoint = setpoints.Count > 0 ? setpoints.Average() : null;
       }
@@ -636,50 +624,54 @@ namespace PVControl
       }
       return null;
     }
-    /// <summary>Aggregation of a period's numeric readings (diff = <see cref="Energy.CounterIncrease"/>).</summary>
-    private enum FloatTask
+    /// <summary>Aggregation of a period's numeric readings (<see cref="PeriodValue"/>).</summary>
+    public enum FloatTask
     {
-      average, sum, min, max, diff, first, last
+      /// <summary>Time-weighted mean (<see cref="StepFunction.TimeWeightedAverage"/>).</summary>
+      average,
+      /// <summary>Counter increase (<see cref="Energy.CounterIncrease"/>).</summary>
+      diff,
     }
-    /// <summary>Aggregates an entity's numeric readings over a period.</summary>
+
+    /// <summary>
+    /// A period's value from an entity's readings: a counter's increase, or the time-weighted mean — every reading
+    /// held until the next. A plain mean of the state changes leaned to a sensor's busy phases (the SoC only changes
+    /// while the battery moves, a price every quarter or every hour); time-weighted since 2026-10-29.
+    /// </summary>
+    /// <param name="readings">(time, value) in time order, null = not numeric; the first may be the state at the period start.</param>
+    /// <param name="op">Aggregation.</param>
+    /// <param name="from">Period start.</param>
+    /// <param name="to">Period end.</param>
+    /// <returns>The value; null without a numeric reading (unknown, not 0 — 0 °C / 0 % would be wrong data).</returns>
+    public static float? PeriodValue(IReadOnlyList<(DateTime Time, double? Value)> readings, FloatTask op, DateTime from, DateTime to)
+    {
+      var numbers = readings.Where(r => r.Value is not null).ToList();
+      if (numbers.Count == 0) return null;
+      return op == FloatTask.diff
+        ? Energy.CounterIncrease(numbers.Select(r => (float)r.Value!.Value).ToList())
+        : (float?)StepFunction.TimeWeightedAverage(readings, from, to);
+    }
+
+    /// <summary>A state as a number; null if it isn't one (unknown, unavailable, text, NaN/∞ — a sensor's dropout value would poison a mean or a counter).</summary>
+    /// <param name="state">The state.</param>
+    public static double? Number(string? state) =>
+      double.TryParse(state, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && double.IsFinite(v) ? v : null;
+
+    /// <summary>A kWh value in whole Wh, rounded (truncating made 101.3 kWh × 1000 = 101299).</summary>
+    /// <param name="kwh">kWh; null = unknown.</param>
+    private static int? Wh(float? kwh) => kwh is { } k ? (int)Math.Round(k * 1000.0) : null;
+
+    /// <summary>Aggregates an entity's numeric readings over a period (<see cref="PeriodValue"/>).</summary>
     /// <param name="entity">Entity.</param>
     /// <param name="op">Aggregation.</param>
     /// <param name="historyStart">Period start.</param>
     /// <param name="historyEnd">Period end.</param>
     /// <returns>(entity id, value); value null without readings or on error.</returns>
-    private async Task <Tuple<string,float?>> GetFloatStateHistory(Entity entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
+    private async Task<Tuple<string, float?>> GetFloatStateHistory(Entity entity, FloatTask op, DateTime historyStart, DateTime historyEnd)
     {
-      try
-      {
-        var history = await _apiManager.GetEntityHistoryAsync(entity, historyStart, _cancelToken, endDateTime: historyEnd);
-        if (!history.Item1)
-        {
-          _logger.LogWarning("History request failed for {entity} ({start} – {end})", entity.EntityId, historyStart.ToISO8601(), historyEnd.ToISO8601());
-          return new Tuple<string, float?>(entity.EntityId, null);
-        }
-        var floatRegex = RegexNumeric();
-        List<float> list = history.Item2.Where(w => floatRegex.IsMatch(w.State)).Select(s => float.Parse(s.State, NumberStyles.Any, CultureInfo.InvariantCulture)).ToList();
-        // No numeric reading in the period: unknown, not 0 (0 °C / 0 % would be wrong data).
-        if (list.Count == 0)
-          return new Tuple<string, float?>(entity.EntityId, null);
-
-        float value = op switch
-        {
-          FloatTask.average => list.Average(),
-          FloatTask.sum     => list.Sum(),
-          FloatTask.min     => list.Min(),
-          FloatTask.max     => list.Max(),
-          FloatTask.diff    => Energy.CounterIncrease(list),
-          FloatTask.first   => list.First(),
-          _                 => list.Last(),
-        };
-        return new Tuple<string, float?>(entity.EntityId, value);
-      }
-      catch (Exception ex)
-      {
-        _logger.LogError("Error getting floatstatehistory ({entity}) \n {message}", entity.EntityId, ex.Message);
-        return new Tuple<string, float?>(entity.EntityId, null);
-      }
+      var history = await GetStateHistoryAsync(entity, historyStart, historyEnd);
+      return new Tuple<string, float?>(entity.EntityId,
+        history is null ? null : PeriodValue(history.Select(s => (Utc(s), Number(s.State))).ToList(), op, historyStart, historyEnd));
     }
     /// <summary>Creates the tables or migrates them to the current schema version.</summary>
     private async Task InitializeDB()
@@ -693,9 +685,9 @@ namespace PVControl
         createTableCommand.CommandText =
           @"
           CREATE TABLE IF NOT EXISTS hourly
-          (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
+          (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTEGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
           CREATE TABLE IF NOT EXISTS daily
-          (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
+          (timestamp TEXT, temperatureoutside REAL, atmopressure REAL, temperatureinside REAL, temperaturewarmwater REAL, cloudcover INTEGER, humidity INTEGER, pvyield INTEGER, importenergy INTEGER, exportenergy INTEGER, houseenergy INTEGER, batterycharge INTEGER, batterydischarge INTEGER, batterysoc INTEGER, carcharge INTEGER, cardischarge INTEGER, heatpumpenergy INTEGER, warmwaterenergy INTEGER, priceenergyimport REAL, priceenergyexport REAL, carsoc INTEGER);
         ";
         _ = await createTableCommand.ExecuteNonQueryAsync();
         await SqliteSchema.SetVersionAsync(con, 4);
@@ -800,8 +792,5 @@ namespace PVControl
       DELETE FROM daily  WHERE rowid NOT IN (SELECT MIN(rowid) FROM daily  GROUP BY timestamp);
       CREATE UNIQUE INDEX IF NOT EXISTS ux_hourly_timestamp ON hourly(timestamp);
       CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_timestamp  ON daily(timestamp);";
-
-    [GeneratedRegex(@"^-?\d+\.?\d*$")]
-    private static partial Regex RegexNumeric();
   }
 }

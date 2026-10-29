@@ -141,4 +141,39 @@ public class DataLoggerOperationTests
     Assert.Contains("heatpumpelecwarmwater", all);
     Assert.Equal(17, all.Length);
   }
+
+  // ── v1 columns: the period's value (temperatures, SoC, prices time-weighted since 2026-10-29) ──
+
+  static readonly DateTime Hour = new(2026, 10, 29, 1, 0, 0, DateTimeKind.Utc);
+
+  [Fact]
+  public void PeriodValue_Average_IsTimeWeighted_NotTheMeanOfTheChanges()
+  {
+    // SoC 20 % the whole hour except a charge in the last 6 minutes, reported every minute (the busy phase):
+    // the plain mean of the 7 states was 43 %, the hour really sat at ~22 %.
+    var readings = new List<(DateTime, double?)> { (Hour, 20) };
+    for (int m = 54; m < 60; m++) readings.Add((Hour.AddMinutes(m), 20 + (m - 53) * 8));
+    float avg = DataLogger.PeriodValue(readings, DataLogger.FloatTask.average, Hour, Hour.AddHours(1))!.Value;
+    Assert.InRange(avg, 21.5, 23.5);
+  }
+
+  [Fact]
+  public void PeriodValue_Diff_IsTheCounterIncrease_UnknownStatesSkipped() =>
+    Assert.Equal(1.5f, DataLogger.PeriodValue([(Hour, 10.0), (Hour.AddMinutes(20), null), (Hour.AddMinutes(40), 11.5)],
+      DataLogger.FloatTask.diff, Hour, Hour.AddHours(1))!.Value, 3);
+
+  [Fact]
+  public void PeriodValue_NoNumber_IsUnknownNotZero() =>
+    Assert.Null(DataLogger.PeriodValue([(Hour, null)], DataLogger.FloatTask.average, Hour, Hour.AddHours(1)));
+
+  [Theory]
+  [InlineData("21.5", 21.5)]
+  [InlineData("-3", -3.0)]
+  [InlineData("1e-05", 0.00001)]   // the old regex rejected this
+  [InlineData("unavailable", null)]
+  [InlineData("NaN", null)]         // a dropout value: never into a mean or a counter
+  [InlineData("Infinity", null)]
+  [InlineData(null, null)]
+  public void Number_OneParserForEveryColumn(string? state, double? expected) =>
+    Assert.Equal(expected, DataLogger.Number(state));
 }

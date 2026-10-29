@@ -179,6 +179,14 @@ Chosen by backtest (`tools/LoadBacktest`, 376 nights 2025-09 → 2026-10): −15
   after a restart). The actual night total (`WeatherLoadPrediction.NightTotal`) counts real hours:
   the repeated hour at the end of DST twice, the skipped one in March not as missing.
 
+**DataLogger means are time-weighted since 2026-10-29** (`DataLogger.PeriodValue`): temperatures, SoC,
+prices etc. were the plain mean of a period's state changes, so a sensor that reports irregularly leaned
+to its busy phases — a SoC at 20 % for 54 minutes and charging in the last 6 (a reading every minute)
+averaged 43 % instead of ~22 %. Rows before that date are plain means; models that fit on long history
+(`WeatherLoadPrediction`, 400 days) mix both. Energies are counter increases either way (unchanged),
+now rounded to Wh instead of truncated. One state parser for every column (`DataLogger.Number`: NaN/∞
+rejected like the old regex did).
+
 ### PV running-average correction (`NetEnergyPrediction.WithRunningAvgCorrection`)
 
 Applied to the PV forecast both when computing `Prediction_NetEnergy` and when building
@@ -516,6 +524,11 @@ lower ruleset's "no" that a higher one overrides in the same cycle doesn't end t
 
 ## Warm water (`WarmWater/`)
 
+The tank model is learned once a day from ~10 days of HA history (20–40 history requests). It
+runs in the background (`WarmWaterController.ActAsync` starts it, `RefitDue`), not inside the 15-s
+cycle; a failed fetch is retried after an hour — before the review 2026-10-28 the fit was awaited in
+the cycle and its time set before the fetch, so a failure kept the old model for a whole day.
+
 The warm-water tank isn't a schedulable load: its level doesn't stay where it's left — it loses
 heat all the time, faster the warmer it is. So the question isn't "reach a target by a time" but
 "be warm enough in every comfort window at the lowest cost". The heat pump's own automatic is
@@ -790,6 +803,12 @@ quarters (`SimulationResult.GridChargeRoomW`, planned EV sessions included, less
 load runs above its forecast; without it that night's plan room was 30.3 A and the charge would have
 started at 30 A and been cut anyway) — around two current writes per charge (set, restore) instead of
 a charge rate far too low.
+The plan's path choice knows the cap too (`EnergySimulator.ChargesBulk` → `BlockChargeWh`): when
+VPP doesn't get the energy in, bulk only if it delivers more over the price block, both paths as the
+cap leaves them per quarter and VPP falling with the SoC. With EV + heat pump the cap can leave bulk
+~4.4 kW at 25 % SoC, less than VPP's ~4.9 — bulk would only cost the EEPROM writes. Compared by
+energy over the block, not power at the start: in a one-hour charge VPP can fall below what the cap
+leaves bulk, and then bulk is still right.
 `force_charge_grid_only` stays VPP: it only happens at negative prices with lots of PV, where
 ~5 kW from the grid with PV off beats 7.5 kW with PV running. Manual Mode has no run time, so the
 reconciler switches it back to Self Use itself after 5 min without PVControl.
@@ -850,6 +869,10 @@ The month's peak is restored at start from its sensor and from the DataLogger (`
 of the month, the higher one): the sensor alone was read in the base unit (2.82 kW → 2820), failed the
 plausibility check and every restart started the month over — 2026-10-28 it showed 0.00 kW while the
 real peak was 9.60 kW (26 Oct 00:00–01:00, close to the cap).
+A finished quarter is scaled to exactly 15 min (`QuarterImport`): it is counted from the last 15-s
+cycle before its start to the first after its end, 0–30 s more, so up to 3 % high (9.72 instead of
+9.56 kW) — and after a restart that overestimate won against the DataLogger's exact value. The live
+guard keeps the unscaled count: a safe margin. (Review 2026-10-28/29.)
 A wM-Bus receiver that loses reception stays online and keeps its last value (2026-10-28: antenna
 broken, telegrams down from every 5 s to every 10–20 s, gaps up to 200 s — still counting). Live, the
 inverter's counter takes over once it counted 0.2 kWh more (`PriorityCounter.Failed`, health

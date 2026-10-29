@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace NetDeamon.apps.PVControl.ImportCap;
 
@@ -21,6 +22,7 @@ public sealed class QuarterImport(int sources)
 
   readonly PriorityCounter _counter = new(sources);
   double?[]? _start;
+  DateTime _startTime;
   double?[]? _previous;
   DateTime? _previousTime;
   DateTime? _quarter;
@@ -44,12 +46,21 @@ public sealed class QuarterImport(int sources)
     QuarterResult? finished = null;
     if (_quarter != quarter)
     {
-      // The finished quarter ends with this update's readings (a few seconds of the new one count to it).
+      // The finished quarter ends with this update's readings: its energy spans from the last update before it
+      // to the first after it (up to ~30 s more than the 15 min at 15-s cycles, counted twice with the neighbours).
+      // The live guard keeps that overestimate as a margin (ImportedWh); the finished quarter — the month's peak,
+      // the over-cap warning — is scaled to exactly 15 min, what the meter bills.
       if (_quarter is { } old && _start is not null && old == quarter - TimeRange.Slot
           && _counter.IncreaseSince(_start) is { } kwh)
-        finished = new QuarterResult(old.ToLocalTime(), Energy.SlotW(kwh));
-      // Starts from the last update before the quarter — not after a restart or a gap.
-      _start = _previousTime is { } t && quarter - t <= MaxStartGap ? _previous : null;
+      {
+        double spanned = (ToUtc(now) - _startTime).TotalSeconds;
+        double toQuarter = spanned > TimeRange.Slot.TotalSeconds ? TimeRange.Slot.TotalSeconds / spanned : 1;
+        finished = new QuarterResult(old.ToLocalTime(), Energy.SlotW(kwh * toQuarter));
+      }
+      // Starts from the last update before the quarter — not after a restart or a gap, nor without any reading then.
+      bool fromStart = _previousTime is { } t && quarter - t <= MaxStartGap && _previous is { } p && p.Any(v => v is not null);
+      _start = fromStart ? _previous : null;
+      _startTime = fromStart ? _previousTime!.Value : default;
       _quarter = quarter;
     }
     _previous = _counter.Snapshot();
