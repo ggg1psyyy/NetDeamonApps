@@ -99,17 +99,17 @@ public class InverterCommandTests
     Assert.Equal(40, charge.TargetSocPercent);   // 30 % + 1152 Wh of 11.52 kWh
   }
 
-  // The plan chooses the path when a charge starts (EnergySimulator.ChargesBulk); live a forced
-  // charge is always bulk, a throttled one never (the remote-controlled path follows the cap).
+  // The plan chooses the path when a charge starts (EnergySimulator.ChargesBulk); live a forced charge is
+  // always bulk. The import cap doesn't change the path (live 2026-10-29 02:15–02:42: a 0.1-A cut switched
+  // bulk → VPP, 7.5 → 4.9 kW, which cleared the cut — 32 work-mode changes); a bulk charge follows it with its current.
   [Theory]
-  [InlineData(InverterModes.force_charge, true, false, false, true)]
-  [InlineData(InverterModes.force_charge, false, false, false, false)]
-  [InlineData(InverterModes.force_charge, false, true, false, true)]           // user override
-  [InlineData(InverterModes.force_charge, true, true, true, false)]            // import cap throttles
-  [InlineData(InverterModes.force_charge_grid_only, true, false, false, false)] // negative price: always VPP
-  [InlineData(InverterModes.normal, true, true, false, false)]
-  public void BulkFor_PlanForcedThrottled(InverterModes mode, bool planBulk, bool forced, bool throttled, bool expected) =>
-    Assert.Equal(expected, InverterCommand.BulkFor(mode, planBulk, forced, throttled));
+  [InlineData(InverterModes.force_charge, true, false, true)]
+  [InlineData(InverterModes.force_charge, false, false, false)]
+  [InlineData(InverterModes.force_charge, false, true, true)]            // user override
+  [InlineData(InverterModes.force_charge_grid_only, true, false, false)] // negative price: always VPP
+  [InlineData(InverterModes.normal, true, true, false)]
+  public void BulkFor_PlanOrForced(InverterModes mode, bool planBulk, bool forced, bool expected) =>
+    Assert.Equal(expected, InverterCommand.BulkFor(mode, planBulk, forced));
 
   [Fact]
   public void HoldMinimumRun_StartedChargeRunsAMinute_UserChangesAtOnce()

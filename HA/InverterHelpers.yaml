@@ -36,7 +36,7 @@ template:
         unique_id: pv_control_inverter_in_sync
         # In sync: the applied version is the published one and the inverter is in the state that
         # command maps to (the same mapping as script.pv_control_apply_mode):
-        #   bulk force_charge          → Manual Mode + Force Charge, VPP off (full 30 A)
+        #   bulk force_charge          → Manual Mode + Force Charge, VPP off, the command's charge current
         #   other charges/hold/discharge → base Self Use + VPP mode 8
         #   normal/feedin              → VPP off, base Self Use (Feedin Priority for feedin_priority)
         state: >-
@@ -48,7 +48,8 @@ template:
           {% set base = 'Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode' %}
           {% set vpp_state = states('sensor.solax_modbus_power_control') %}
           {% set use_mode = states('select.solax_charger_use_mode') %}
-          {% set actual_ok = (manual and use_mode == 'Manual Mode' and is_state('select.solax_manual_mode_select', 'Force Charge') and vpp_state == 'Disabled')
+          {% set current_ok = (states('number.solax_battery_charge_max_current') | float(-1) - ([state_attr('sensor.pv_control_mode', 'battery_current_a') | float(30), state_attr('sensor.pv_control_mode', 'max_current_a') | float(30)] | min) | int) | abs < 0.5 %}
+          {% set actual_ok = (manual and use_mode == 'Manual Mode' and is_state('select.solax_manual_mode_select', 'Force Charge') and vpp_state == 'Disabled' and current_ok)
                           or (vpp and use_mode != 'Manual Mode' and vpp_state == 'Individual Setting - Duration Mode')
                           or (not manual and not vpp and use_mode == base and vpp_state == 'Disabled') %}
           {{ seq == states('input_number.pv_control_applied_seq') | int(-2) and actual_ok }}

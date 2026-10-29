@@ -145,6 +145,28 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
                           && Energy.SlotW(s.GridImportWh) > _input.MaxGridImportW * _input.SlotFraction(s.Time) + 1);
   }
 
+  /// <summary>
+  /// Battery power the import cap leaves a grid charge in the plan between two times: the lowest of the
+  /// slots' cap less the house's own grid draw (load and planned extra loads less PV) — what a charge
+  /// can run at from its start without having to be lowered when a planned load (the EV) comes on.
+  /// </summary>
+  /// <param name="from">Start (the running slot counts from here).</param>
+  /// <param name="to">End.</param>
+  /// <returns>W; null without a cap or slots in the range.</returns>
+  public int? GridChargeRoomW(DateTime from, DateTime to)
+  {
+    if (_input.MaxGridImportW <= 0) return null;
+    int? room = null;
+    foreach (var s in Slots.Where(s => s.Time.AddMinutes(TimeRange.SlotMinutes) > from && s.Time < to))
+    {
+      double fraction = _input.SlotFraction(s.Time);
+      if (fraction <= 0) continue;
+      int drawW = (int)Math.Round(Energy.SlotW(Math.Max(0, s.LoadWh + s.ExtraLoadWh - s.PVWh) / fraction));
+      room = Math.Min(room ?? int.MaxValue, _input.MaxGridImportW - drawW);
+    }
+    return room;
+  }
+
   /// <summary>Whether the load causes extra grid import.</summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>True if any slot imports more than in the baseline.</returns>

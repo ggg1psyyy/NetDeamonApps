@@ -776,8 +776,20 @@ firmware's VPP limit, not the integration. A night charge of half the battery at
 longer and reaches into dearer quarters, so a charge planned at ≥ 50 % of the battery (the
 contiguous `force_charge` slots from its start) takes the Manual path: two EEPROM writes per session
 (work mode + manual mode), not one per mode or current change. The choice is made at the start
-and kept for the session, so a shrinking remainder doesn't switch paths mid-charge; it drops to
-VPP while the import cap throttles (Manual has no power setting, only the EEPROM current).
+and kept for the session, so a shrinking remainder doesn't switch paths mid-charge — nor does the
+import cap: a throttled bulk charge runs at a lower battery charge current (EEPROM, set before
+Manual Mode starts). Until 2026-10-29 a throttled charge dropped to VPP: at 02:15 the night charge
+(bulk 7.52 kW + EV 1.92 kW + house = 9.72 kW, 80 W under the cap) got a 29.9-A limit, VPP then
+charged only ~4.9 kW, the import fell to ~7 kW, the guard lifted the limit, bulk returned — 32 path
+changes until 02:42 (each a work-mode EEPROM write, and a 3.5-kW battery discharge blip at every
+switch to VPP). Now the limit moves in whole amps, is lowered at once (the cap is the cap) but
+raised only with twice the headroom (`ImportCapGuard.NextLimit`: the load near the cap is mostly the
+EV, which keeps running), and a charge the plan runs starts at the lowest room over its remaining
+quarters (`SimulationResult.GridChargeRoomW`, planned EV sessions included, less 500 W:
+`ImportCapGuard.PlanRoomA` — the "30 A" setting drew 7.52 kW, not the nominal 7.35, and the live house
+load runs above its forecast; without it that night's plan room was 30.3 A and the charge would have
+started at 30 A and been cut anyway) — around two current writes per charge (set, restore) instead of
+a charge rate far too low.
 `force_charge_grid_only` stays VPP: it only happens at negative prices with lots of PV, where
 ~5 kW from the grid with PV off beats 7.5 kW with PV running. Manual Mode has no run time, so the
 reconciler switches it back to Self Use itself after 5 min without PVControl.

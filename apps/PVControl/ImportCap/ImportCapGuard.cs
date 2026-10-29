@@ -28,7 +28,10 @@ public readonly record struct GuardInput(
 /// <param name="AllowedW">Mean import allowed for the rest of the quarter after the reaction time, W.</param>
 /// <param name="ProjectedKw">The quarter's mean import if the current power continues, kW.</param>
 /// <param name="Reason">Explanation for the sensor.</param>
-public readonly record struct GuardDecision(double ChargeLimitA, bool PauseExtraLoads, int HeadroomW, int AllowedW, double ProjectedKw, string Reason);
+/// <param name="RoomA">Battery charge current the cap leaves, A — not clamped to the hardware maximum, so a raise can
+/// see how much headroom there is (<see cref="ImportCapGuard.NextLimit"/>).</param>
+public readonly record struct GuardDecision(double ChargeLimitA, bool PauseExtraLoads, int HeadroomW, int AllowedW, double ProjectedKw, string Reason,
+  double RoomA = double.MaxValue);
 
 /// <summary>
 /// Keeps the mean grid import of every 15-min block under the cap: throttles the battery's grid
@@ -74,41 +77,58 @@ public static class ImportCapGuard
     int baseW = g.HouseLoadW - g.ExtraLoadsW - g.PvW;
     int extraW = g.ExtraLoadsOn && !g.ExtraLoadsPaused ? Math.Max(g.ExtraLoadsW, g.ExtraLoadsNominalW) : g.ExtraLoadsW;
     double batteryW = allowedW - baseW - extraW;
-    // Battery power → charge current, 0.1 A steps rounded down, within the hardware limit.
-    double AmpsFor(double w) => Math.Clamp(Math.Floor(w / Math.Max(1, g.VoltageV) * 10) / 10, 0, g.MaxChargeA);
-    double limitA = AmpsFor(batteryW);
+    // Battery power → charge current, 0.1 A steps rounded down; the room unclamped, the limit within the hardware maximum.
+    double RoomFor(double w) => Math.Max(0, Math.Floor(w / Math.Max(1, g.VoltageV) * 10) / 10);
+    double roomA = RoomFor(batteryW);
 
     bool pause = g.ExtraLoadsOn && (g.ExtraLoadsPaused
       ? allowedW - baseW < g.ExtraLoadsNominalW + ResumeMarginW   // resumes only with room to spare
       : batteryW < 0);                                            // battery at 0 A and still over
-    if (pause) limitA = AmpsFor(allowedW - baseW);
+    if (pause) roomA = RoomFor(allowedW - baseW);
+    double limitA = Math.Min(roomA, g.MaxChargeA);
 
     int headroom = (int)(Math.Min(allowedW, g.CapW) - baseW - (pause ? 0 : extraW));
     string reason = pause ? $"extra loads paused: {allowedW / 1000:F1} kW allowed, house {baseW / 1000.0:F1} kW"
       : limitA < g.MaxChargeA ? $"charge limited to {limitA:F1} A: {allowedW / 1000:F1} kW allowed for the rest of the quarter"
       : "no limit needed";
     if (g.ImportedWh is not null && !plausible) reason += $" (counter implausible: {g.ImportedWh / 1000:F1} kWh, estimated)";
-    return new GuardDecision(limitA, pause, headroom, (int)allowedW, Math.Round(projectedKw, 2), reason);
+    return new GuardDecision(limitA, pause, headroom, (int)allowedW, Math.Round(projectedKw, 2), reason, roomA);
   }
 
-  /// <summary>Smallest raise of the published limit, A (a lower limit follows in whole amps).</summary>
+  /// <summary>
+  /// Charge current the plan's room leaves a grid charge from its start (<see cref="Simulator.SimulationResult.GridChargeRoomW"/>),
+  /// less <see cref="ResumeMarginW"/>: the plan is optimistic — the "30 A" setting drew 7.52 kW, not 30 × 245 V = 7.35 kW,
+  /// and the live house load runs above its hourly-average forecast. Without it the 2026-10-29 night charge
+  /// (9800 − house 450 − EV 1930 W = 30.3 A) would have started at 30 A and still been cut a moment later.
+  /// </summary>
+  /// <param name="roomW">Battery power the plan's cap leaves, W.</param>
+  /// <param name="voltageV">Battery voltage, V.</param>
+  /// <returns>A, ≥ 0.</returns>
+  public static double PlanRoomA(int roomW, int voltageV) => Math.Max(0, roomW - ResumeMarginW) / (double)Math.Max(1, voltageV);
+
+  /// <summary>Smallest raise of the published limit below the maximum, A (a lower limit follows in whole amps).</summary>
   public const double RaiseStepA = 2;
 
   /// <summary>
-  /// The limit to publish, in whole amps: each change is an EEPROM write on the inverter (the Solax
-  /// charge current register), so it moves only by a step worth it — lower by whole amps at once,
-  /// higher only by <see cref="RaiseStepA"/> or back to the maximum. No grid charging: the maximum
-  /// (the battery then only charges from PV surplus, which never imports).
+  /// The charge current to publish, in whole amps: each change is an EEPROM write on the inverter (the
+  /// SolaX charge current register a bulk charge runs at), so it is lowered at once, by whole amps, as far
+  /// as the room needs — the cap is the cap — but raised only with twice the headroom: from L to R only
+  /// while the room is at least R + (R − L), at least by <see cref="RaiseStepA"/> or straight to the maximum.
+  /// A load that brought the import near the cap (the EV) usually keeps running, and a raise into the same
+  /// edge was lowered again a moment later. No grid charging: the maximum (the battery then only charges
+  /// from PV surplus, which never imports).
   /// </summary>
   /// <param name="previousA">Limit published last, A; null = none yet.</param>
-  /// <param name="decidedA">Limit of this decision, A.</param>
+  /// <param name="roomA">Charge current the cap leaves (<see cref="GuardDecision.RoomA"/>, or the plan's room if lower), A.</param>
   /// <param name="maxA">Hardware maximum, A.</param>
   /// <param name="gridCharging">The battery charges from the grid (force_charge, force_charge_grid_only).</param>
   /// <returns>The limit, A.</returns>
-  public static double NextLimit(double? previousA, double decidedA, double maxA, bool gridCharging)
+  public static double NextLimit(double? previousA, double roomA, double maxA, bool gridCharging)
   {
-    double wanted = gridCharging && decidedA < maxA ? Math.Floor(decidedA) : maxA;
-    if (previousA is not { } p || wanted >= maxA || wanted <= p - 1 || wanted >= p + RaiseStepA) return wanted;
-    return p;
+    if (!gridCharging) return maxA;
+    double level = Math.Clamp(Math.Floor(roomA), 0, maxA);
+    if (previousA is not { } p || level < p) return level;
+    double raise = Math.Min(maxA, Math.Floor((roomA + p) / 2));    // the highest R with room ≥ R + (R − p)
+    return raise >= maxA || raise >= p + RaiseStepA ? raise : p;
   }
 }

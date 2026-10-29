@@ -1,5 +1,5 @@
 # PV Control - Inverter Sync: keeps the inverter in sensor.pv_control_mode.
-#   desired  – the command (mode, battery_power_w, bulk, seq); PV Control is the only decider
+#   desired  – the command (mode, battery_power_w, bulk, battery_current_a, seq); PV Control is the only decider
 #   applied  – input_number.pv_control_applied_seq (script.pv_control_apply_mode)
 #   actual   – binary_sensor.pv_control_inverter_in_sync (the one definition of the expected state)
 # Applies when PV Control published a new version, when the inverter left the commanded state, and
@@ -24,6 +24,7 @@ triggers:
       - sensor.solax_modbus_power_control
       - select.solax_charger_use_mode
       - select.solax_manual_mode_select
+      - number.solax_battery_charge_max_current
     for:
       seconds: 20
     id: INVERTER
@@ -42,6 +43,7 @@ variables:
   seq: "{{ state_attr('sensor.pv_control_mode', 'seq') | int(0) }}"
   power_w: "{{ state_attr('sensor.pv_control_mode', 'battery_power_w') | int(0) }}"
   bulk: "{{ state_attr('sensor.pv_control_mode', 'bulk') == true }}"
+  current_a: "{{ state_attr('sensor.pv_control_mode', 'battery_current_a') | float(30) }}"
   applied_seq: "{{ states('input_number.pv_control_applied_seq') | int(-1) }}"
   vpp: "{{ not (mode == 'force_charge' and bulk) and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
   applied_age_s: >-
@@ -87,6 +89,7 @@ actions:
               mode: "{{ mode }}"
               power_w: "{{ power_w }}"
               bulk: "{{ bulk }}"
+              current_a: "{{ current_a }}"
               seq: "{{ seq }}"
       - conditions:
           - condition: template
@@ -121,6 +124,7 @@ actions:
                   mode: "{{ mode }}"
                   power_w: "{{ power_w }}"
                   bulk: "{{ bulk }}"
+                  current_a: "{{ current_a }}"
                   seq: "{{ seq }}"
       - conditions:
           - condition: template
@@ -131,4 +135,5 @@ actions:
               mode: "{{ mode }}"
               power_w: "{{ power_w }}"
               bulk: "{{ bulk }}"
+              current_a: "{{ current_a }}"
               seq: "{{ seq }}"

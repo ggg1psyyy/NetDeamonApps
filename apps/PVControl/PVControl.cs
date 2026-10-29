@@ -590,28 +590,37 @@ namespace NetDeamon.apps.PVControl
     /// that grows with every change, and the planned charge (energy, target SoC, end). HA applies it
     /// (script.pv_control_apply_mode) and a reconciler keeps the inverter in it. The power is the hardware
     /// maximum, or the import cap's limit while it throttles below what the path charges, at the measured
-    /// battery voltage — taken when the command changes, not with every voltage step.
+    /// battery voltage — taken when the command changes, not with every voltage step. A bulk charge carries
+    /// the limit as its charge current (HA writes it before Manual Mode starts); its room comes from the
+    /// live guard and, for the charge the plan runs, from the plan's lowest room over the rest of the charge
+    /// (<see cref="Simulator.SimulationResult.GridChargeRoomW"/>: a planned EV session included), so it starts
+    /// at a current that fits instead of being lowered when the EV comes on.
     /// </summary>
     /// <param name="state">Mode published this cycle (its <see cref="InverterState.Bulk"/> as planned).</param>
     /// <param name="now">Current time.</param>
     /// <param name="charge">The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>); null = none.</param>
     /// <returns>The command (also kept in <see cref="_inverterCommand"/>, with its charge limit and throttling).</returns>
-    private InverterCommand UpdateInverterCommand(InverterState state, DateTime now)
+    private InverterCommand UpdateInverterCommand(InverterState state, DateTime now, PlannedCharge? charge)
     {
       var mode = state.Mode;
       double maxA = PVCC_Config.MaxBatteryChargePower;
       int voltage = PVCC_Config.BatteryVoltageV;
       bool gridCharging = mode is InverterModes.force_charge or InverterModes.force_charge_grid_only;
-      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, _importCap.ChargeLimitA, maxA, gridCharging);
+      double? planRoomA = gridCharging && charge is { } c && c.Start <= now && _house.SimulationState?.GridChargeRoomW(now, c.End) is { } roomW
+        ? ImportCap.ImportCapGuard.PlanRoomA(roomW, voltage)
+        : null;
+      double roomA = Math.Min(_importCap.RoomA, planRoomA ?? double.MaxValue);
+      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, roomA, maxA, gridCharging);
       if (limitA != _chargeLimitA && gridCharging)
-        PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F0} A ({Reason})", _chargeLimitA?.ToString("F0") ?? "-", limitA, _importCap.Reason);
+        PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F0} A (room {Room:F1} A{Plan}; {Reason})", _chargeLimitA?.ToString("F0") ?? "-", limitA,
+          roomA, planRoomA is { } p ? $", plan {p:F1} A" : "", _importCap.Reason);
       _chargeLimitA = limitA;
       // The cap only counts below what the path charges anyway: VPP by the SoC curve, bulk at the maximum.
       bool forced = _house.OverrideMode == InverterModes.force_charge;
+      bool bulk = InverterCommand.BulkFor(mode, state.Bulk, forced);
       int vppW = _house.VppCurve.MaxW(_house.Battery.BatterySoc);
-      double pathW = InverterCommand.BulkFor(mode, state.Bulk, forced, throttled: false) ? maxA * voltage : Math.Min(maxA * voltage, vppW);
+      double pathW = bulk ? maxA * voltage : Math.Min(maxA * voltage, vppW);
       _chargeThrottled = gridCharging && limitA * voltage < pathW;
-      bool bulk = InverterCommand.BulkFor(mode, state.Bulk, forced, _chargeThrottled);
       var command = InverterCommand.Next(_inverterCommand, mode, _chargeThrottled ? limitA : maxA, bulk, voltage, _restoredCommandSeq);
       if (command != _inverterCommand)
         _inverterCommandIssued = now;
@@ -640,6 +649,7 @@ namespace NetDeamon.apps.PVControl
       ["headroom_w"] = _importCap.HeadroomW,
       ["voltage_v"] = PVCC_Config.BatteryVoltageV,
       ["battery_current_a"] = command.CurrentA,
+      ["max_current_a"] = PVCC_Config.MaxBatteryChargePower,
     };
 
     /// <summary>The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>) — the one lookup
@@ -695,6 +705,12 @@ namespace NetDeamon.apps.PVControl
         _modeEntity.TryGetJsonAttribute("battery_power_w", out var p) && p.TryGetInt32(out int powerW) ? powerW : null,
         _modeEntity.TryGetJsonAttribute("bulk", out var b) && b.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False ? b.GetBoolean() : null,
         value, PVCC_Config.BatteryVoltageV);
+      // The current as published (not re-derived from the power at today's voltage), and as the charge limit of a
+      // running grid charge: the first cycle after a restart mustn't raise a limit the cap had lowered.
+      if (_inverterCommand is { } restored && _modeEntity.TryGetJsonAttribute("battery_current_a", out var a) && a.TryGetDouble(out double currentA))
+        _inverterCommand = restored with { CurrentA = currentA };
+      if (_inverterCommand is { Mode: InverterModes.force_charge or InverterModes.force_charge_grid_only, CurrentA: > 0 } charging)
+        _chargeLimitA = charging.CurrentA;
       _inverterCommandIssued = _modeEntity.TryGetJsonAttribute("issued", out var issued) && issued.ValueKind == System.Text.Json.JsonValueKind.String
         && DateTimeOffset.TryParse(issued.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
         ? at.LocalDateTime : DateTime.Now;
@@ -946,7 +962,7 @@ namespace NetDeamon.apps.PVControl
         _socUnavailableLogged = true;
       }
       _publishedState = new InverterState(InverterModes.normal);
-      var attributes = InverterCommandAttributes(UpdateInverterCommand(_publishedState, now), null);
+      var attributes = InverterCommandAttributes(UpdateInverterCommand(_publishedState, now, null), null);
       attributes["next_charge_window_start"] = "none";
       attributes["next_charge_window_end"] = "none";
       attributes["price"] = "0";
@@ -1013,7 +1029,7 @@ namespace NetDeamon.apps.PVControl
     /// <param name="now">Current time.</param>
     private async Task PublishModeAsync(InverterState inverterState, PlannedCharge? charge, DateTime now)
     {
-      var attr_Mode = InverterCommandAttributes(UpdateInverterCommand(inverterState, now), charge);
+      var attr_Mode = InverterCommandAttributes(UpdateInverterCommand(inverterState, now, charge), charge);
       attr_Mode["next_charge_window_start"] = charge?.Start.ToISO8601() ?? "none";
       attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
       attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);

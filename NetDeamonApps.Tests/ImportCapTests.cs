@@ -278,22 +278,63 @@ public class ImportCapTests
     Assert.Equal(9800 - (2324 - 1922 - 260) - 1930, d.HeadroomW);
   }
 
-  // Every change is an EEPROM write on the inverter: live 2026-10-26 05:37–06:06 ~40 changes in
-  // 0.1-A steps, in normal mode where the limit has no effect at all.
+  // Every change is an EEPROM write on the inverter (live 2026-10-26 05:37–06:06 ~40 changes in 0.1-A
+  // steps). Lowered at once, by whole amps, as far as the room needs; raised only with twice the headroom.
   [Theory]
   [InlineData(null, 12.3, true, 12.0)]   // first value, whole amps
+  [InlineData(null, 41.0, true, 30.0)]   // never above the maximum
   [InlineData(20.0, 12.3, true, 12.0)]   // lower at once
   [InlineData(29.0, 29.4, true, 29.0)]   // same whole amp: kept, no write
   [InlineData(29.0, 28.6, true, 28.0)]   // any need below the published amp lowers it (the cap wins)
   [InlineData(29.0, 27.9, true, 27.0)]   // a whole amp lower
-  [InlineData(12.0, 13.4, true, 12.0)]   // small raise skipped
-  [InlineData(12.0, 14.2, true, 14.0)]   // a step worth a write
-  [InlineData(28.0, 29.9, true, 28.0)]   // near the maximum: no write for 1 A
-  [InlineData(27.0, 30.0, true, 30.0)]   // back to the maximum
+  [InlineData(12.0, 14.2, true, 12.0)]   // 2 A of room: a 1-A raise isn't twice covered
+  [InlineData(12.0, 16.4, true, 14.0)]   // 4.4 A of room: up 2 A
+  [InlineData(29.0, 30.9, true, 29.0)]   // back to the maximum needs room for 31 A (30 + the 1 A raise)
+  [InlineData(29.0, 31.0, true, 30.0)]
+  [InlineData(27.0, 30.0, true, 27.0)]   // just the maximum's room after a 3-A cut: stays
+  [InlineData(27.0, 33.0, true, 30.0)]   // twice the 3 A: back to the maximum
   [InlineData(27.0, 22.0, false, 30.0)]  // not grid charging: maximum, whatever the guard decided
   [InlineData(30.0, 27.4, false, 30.0)]  // and nothing to write
-  public void Guard_NextLimit(double? previous, double decided, bool gridCharging, double expected) =>
-    Assert.Equal(expected, ImportCapGuard.NextLimit(previous, decided, 30, gridCharging));
+  public void Guard_NextLimit(double? previous, double room, bool gridCharging, double expected) =>
+    Assert.Equal(expected, ImportCapGuard.NextLimit(previous, room, 30, gridCharging));
+
+  [Fact]
+  public void Guard_BulkChargeWithTheEvAtTheCap_OneCutThenSteady()
+  {
+    // Live 2026-10-29 02:15: bulk 7.52 kW + EV 1.92 kW + house → 9.72 kW import, 80 W under the cap. The guard
+    // wanted 29.9 A; the room then moved 29.4–30.4 A with the import. One cut to 29 A, kept while the EV runs.
+    double? limit = 30;
+    var limits = new List<double>();
+    foreach (double room in new[] { 29.9, 30.4, 29.4, 30.2, 29.8, 30.4, 30.6, 29.5 })
+    {
+      limit = ImportCapGuard.NextLimit(limit, room, 30, gridCharging: true);
+      limits.Add(limit.Value);
+    }
+    Assert.Equal([29, 29, 29, 29, 29, 29, 29, 29], limits);
+    // The EV stops: 1.9 kW / 245 V ≈ 7.8 A more room → back to the maximum.
+    Assert.Equal(30, ImportCapGuard.NextLimit(limit, 38.2, 30, gridCharging: true));
+  }
+
+  [Fact]
+  public void Guard_PlanRoom_ChargeStartsBelowTheEdge_AndStays()
+  {
+    // The same night from the plan: 9800 − house 450 − EV 1930 = 7420 W. At 245 V that's 30.3 A — the charge
+    // would start at 30 A and be cut a moment later. Less the margin: 28 A from the start, and it holds while
+    // the live room hovers around 29–30 A.
+    double planA = ImportCapGuard.PlanRoomA(7420, 245);
+    Assert.Equal(28, ImportCapGuard.NextLimit(null, Math.Min(30.3, planA), 30, gridCharging: true));
+    Assert.Equal(28, ImportCapGuard.NextLimit(28, Math.Min(30.4, planA), 30, gridCharging: true));
+    Assert.Equal(0, ImportCapGuard.PlanRoomA(300, 245));
+  }
+
+  [Fact]
+  public void Guard_RoomA_NotClampedToTheMaximum()
+  {
+    // 09:30 without the heat pump: the cap leaves more than 30 A — the raise rule needs to see how much.
+    var d = ImportCapGuard.Decide(Live(300, 9513 * 300 / 3600.0, 9513, 2324));
+    Assert.Equal(30, d.ChargeLimitA);
+    Assert.True(d.RoomA > 30, $"room {d.RoomA} A");
+  }
 
   // ── Health ───────────────────────────────────────────────────────────────────────────
 

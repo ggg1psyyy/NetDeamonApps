@@ -90,16 +90,17 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
   /// <summary>
   /// Whether a grid charge runs on the full-power (bulk) path: as the plan chose it
   /// (<see cref="EnergySimulator.ChargesBulk"/>), always for a force_charge the user forces (the plan
-  /// doesn't know about the override), never while the import cap throttles it (a bulk path at full
-  /// power can't follow the cap; the remote-controlled one can).
+  /// doesn't know about the override). The import cap doesn't change the path: a bulk charge follows it
+  /// with its charge current (<see cref="CurrentA"/>) — switching to the remote-controlled path for a cut
+  /// of 0.1 A dropped the charge from 7.5 to 4.9 kW, which cleared the cut, and back (live 2026-10-29
+  /// 02:15–02:42: 32 path changes, each a work-mode EEPROM write).
   /// </summary>
   /// <param name="mode">Mode now.</param>
   /// <param name="planBulk">Bulk in the plan's running slot.</param>
   /// <param name="forced">The user forces force_charge (mode override).</param>
-  /// <param name="throttled">The import cap limits the charge below what the path would charge.</param>
   /// <returns>True: bulk.</returns>
-  public static bool BulkFor(InverterModes mode, bool planBulk, bool forced, bool throttled) =>
-    mode == InverterModes.force_charge && !throttled && (forced || planBulk);
+  public static bool BulkFor(InverterModes mode, bool planBulk, bool forced) =>
+    mode == InverterModes.force_charge && (forced || planBulk);
 
   /// <summary>Shortest run of a grid charge once started.</summary>
   public static readonly TimeSpan MinChargeRun = TimeSpan.FromMinutes(1);

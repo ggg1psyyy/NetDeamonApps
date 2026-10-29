@@ -55,6 +55,17 @@ public class ImportCapSimulationTests : TestBase
     Assert.Equal(expected, Input(capW).GridChargeWhPerSlot(pvWh, loadWh));
 
   [Fact]
+  public void GridChargeRoomW_LowestRoomOverTheCharge_PlannedEvIncluded()
+  {
+    // House 130 Wh/slot (520 W) from 08:00; an EV session 09:00–10:00 (1930 W) inside a charge 08:00–11:00:
+    // the charge starts at the current the EV's hour leaves, not the one it has before the EV comes on.
+    var plan = EnergySimulator.Simulate(Input(9800).WithExtraLoads([Ev(Day.AddHours(9), Day.AddHours(10))]));
+    Assert.InRange(plan.GridChargeRoomW(Day.AddHours(8), Day.AddHours(11))!.Value, 9800 - 520 - 1930, 9800 - 520 - 1930 + 4); // Wh per slot: 482 of 482.5
+    Assert.Equal(9800 - 520, plan.GridChargeRoomW(Day.AddHours(10), Day.AddHours(11)));       // after the EV
+    Assert.Null(EnergySimulator.Simulate(Input(0)).GridChargeRoomW(Day.AddHours(8), Day.AddHours(11))); // no cap
+  }
+
+  [Fact]
   public void ForceChargeWithTheEv_BatteryYields_NoSlotOverTheCap()
   {
     var withoutCap = EnergySimulator.Simulate(Input(0, loadWhSlot: 300).WithExtraLoads([Ev(Day.AddHours(8), Day.AddHours(10))]));
