@@ -1,0 +1,32 @@
+<Project>
+  <!-- Every package version, once for all projects (central package management). The host and all app
+       plugins must be built against the same NetDaemon version: the host provides NetDaemon's types,
+       a plugin built against another version is skipped at load time. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- NetDaemon (match the HA add-on's version) -->
+    <PackageVersion Include="NetDaemon.AppModel" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Client" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Extensions.Logging" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Extensions.Mqtt" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Extensions.Scheduling" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Extensions.Tts" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.HassModel" Version="26.43.1" />
+    <PackageVersion Include="NetDaemon.Runtime" Version="26.43.1" />
+    <!-- Data -->
+    <PackageVersion Include="linq2db.SQLite.MS" Version="5.4.1.9" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <!-- MidiControl -->
+    <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
+    <!-- Tests -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <!-- tools/LoadBacktest -->
+    <PackageVersion Include="Microsoft.ML" Version="3.0.1" />
+    <PackageVersion Include="Microsoft.ML.FastTree" Version="3.0.1" />
+  </ItemGroup>
+</Project>

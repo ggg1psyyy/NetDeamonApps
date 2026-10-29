@@ -1,0 +1,7 @@
+<Project>
+  <!-- Settings every project in the repository shares (host, app plugins, tests, tools). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

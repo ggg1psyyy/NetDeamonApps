@@ -2,9 +2,6 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <LangVersion>default</LangVersion>
-        <Nullable>enable</Nullable>
         <RootNamespace>NetDeamon</RootNamespace>
     </PropertyGroup>
   
@@ -56,17 +53,17 @@
     </Target>
         
     <ItemGroup>
-        <PackageReference Include="linq2db.SQLite.MS" Version="5.4.1.9" />
-        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
-        <PackageReference Include="NetDaemon.AppModel" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Runtime" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.HassModel" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Client" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Extensions.Logging" Version="26.43.1" />
-        <PackageReference Include="NetDaemon.Extensions.Tts" Version="26.43.1" />
-        <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
+        <PackageReference Include="linq2db.SQLite.MS" />
+        <PackageReference Include="Microsoft.Data.Sqlite" />
+        <PackageReference Include="NetDaemon.AppModel" />
+        <PackageReference Include="NetDaemon.Extensions.Mqtt" />
+        <PackageReference Include="NetDaemon.Runtime" />
+        <PackageReference Include="NetDaemon.HassModel" />
+        <PackageReference Include="NetDaemon.Client" />
+        <PackageReference Include="NetDaemon.Extensions.Scheduling" />
+        <PackageReference Include="NetDaemon.Extensions.Logging" />
+        <PackageReference Include="NetDaemon.Extensions.Tts" />
+        <PackageReference Include="SixLabors.ImageSharp.Drawing" />
     </ItemGroup>
         
     <ItemGroup>
