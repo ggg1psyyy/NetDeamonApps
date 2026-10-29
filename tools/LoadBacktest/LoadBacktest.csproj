@@ -11,7 +11,7 @@
   <!-- The production load model (pure, no HA dependency) and the shared calculations it uses,
        backtested as variant "App". -->
   <ItemGroup>
-    <Compile Include="..\..\apps\PVControl\LoadModel\LoadModels.cs" Link="App\LoadModels.cs" />
+    <Compile Include="..\..\src\PVControl\LoadModel\LoadModels.cs" Link="App\LoadModels.cs" />
     <Compile Include="..\..\src\Common\Calculations.cs" Link="App\Calculations.cs" />
   </ItemGroup>
 

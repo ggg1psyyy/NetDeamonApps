@@ -9,6 +9,7 @@
     <ProjectReference Include="..\NetDeamonApps.csproj" />
     <ProjectReference Include="..\src\HeatingTest\HeatingTest.csproj" />
     <ProjectReference Include="..\src\DataLogger\DataLogger.csproj" />
+    <ProjectReference Include="..\src\PVControl\PVControl.csproj" />
   </ItemGroup>
 
   <ItemGroup>

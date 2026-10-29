@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PVControl: solar/battery optimisation with dynamic prices (README.md, ARCHITECTURE.md); reads the
+       DataLogger's DB. A NetDaemon app plugin (../AppPlugin.props). -->
+  <Import Project="..\AppPlugin.props" />
+
+  <ItemGroup>
+    <PackageReference Include="linq2db.SQLite.MS" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+</Project>

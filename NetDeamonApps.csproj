@@ -38,6 +38,7 @@
     <ItemGroup>
         <AppPlugin Include="src\HeatingTest\HeatingTest.csproj" />
         <AppPlugin Include="src\DataLogger\DataLogger.csproj" />
+        <AppPlugin Include="src\PVControl\PVControl.csproj" />
     </ItemGroup>
     <Target Name="PublishAppPlugins" AfterTargets="Publish">
         <MSBuild Projects="@(AppPlugin)" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))apps\plugins\%(AppPlugin.Filename)\" />
