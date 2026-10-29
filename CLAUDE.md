@@ -15,7 +15,8 @@ NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant. F
 ```bash
 dotnet build                          # Debug build
 dotnet build -c Release               # Release build
-dotnet publish src/Host -c Release    # Publish host + plugins; copy src/Host/bin/Release/net10.0/publish to /config/netdaemon6 on HA
+dotnet publish src/Host -c Release    # Publish host + plugins (src/Host/bin/Release/net10.0/publish)
+python deploy/deploy.py apps          # Publish, copy to the add-on, restart, verify (deploy/README.md)
 dotnet test                          # Run all unit tests (from repo root; one project: dotnet test tests/PVControl.Tests)
 ```
 
@@ -126,7 +127,7 @@ Each app consists of:
 
 ## Home Assistant config
 
-The live HA config is mounted locally (path, add-on slug, deploy steps and other machine details: `CLAUDE.local.md`, not committed — identifying details like addresses never go into committed files). **Read-only by default:** writing, deploying or deleting anything there, and restarting HA or add-ons, only with the user's explicit permission for that action. The repo's `HA/` folder holds the PVControl automations (compare them with the live ones before changing them).
+The live HA config is mounted locally (path, add-on slug, deploy steps and other machine details: `CLAUDE.local.md`, not committed — identifying details like addresses never go into committed files). **Read-only by default:** writing, deploying or deleting anything there, and restarting HA or add-ons, only with the user's explicit permission for that action. `src/PVControl/HA/` holds the PVControl automations (`python deploy/deploy.py ha` merges them; dry run without `--write`) (compare them with the live ones before changing them).
 
 ## Follow-ups (remind the user when due)
 

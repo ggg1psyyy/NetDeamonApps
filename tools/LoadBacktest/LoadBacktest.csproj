@@ -8,11 +8,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <!-- The production load model (pure, no HA dependency) and the shared calculations it uses,
-       backtested as variant "App". -->
+  <!-- The production load model (PVControl's LoadModel, pure, no HA dependency) with the shared calculations
+       (Common, through PVControl), backtested as variant "App". -->
   <ItemGroup>
-    <Compile Include="..\..\src\PVControl\LoadModel\LoadModels.cs" Link="App\LoadModels.cs" />
-    <Compile Include="..\..\src\Common\Calculations.cs" Link="App\Calculations.cs" />
+    <ProjectReference Include="..\..\src\PVControl\PVControl.csproj" />
   </ItemGroup>
 
   <ItemGroup>

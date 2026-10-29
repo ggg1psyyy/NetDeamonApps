@@ -72,8 +72,9 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
       resolves a plugin's own native libraries (`ResolvingUnmanagedDll`)
 - [x] Tests split: `tests/<Project>.Tests` (shared `tests/Tests.props`); PVControl.Tests also references DataLogger
       (the DB contract it reads)
-- [ ] 8. `deploy/` (build + layout, HA automations), tools reference projects, launch settings,
-      devcontainer
+- [x] 8. `deploy/` (`deploy.py apps` / `ha`, machine details in the uncommitted `deploy/local.json`; `HA/` moved to
+      `src/PVControl/HA`), LoadBacktest references PVControl, launch settings (`src/Host/Properties`, VS Code),
+      devcontainer restores the solution
 - [ ] 9. READMEs: root = umbrella (what's here, run one project alone, deploy, the plugin contract);
       one per project (purpose, build/run/test alone, config, entities, data contracts — DataLogger's
       `hourly`/`daily` schema that PVControl reads — HA files); CLAUDE.md per project with its tests

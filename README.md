@@ -102,14 +102,14 @@ The house load forecast is the hour-of-day average of the last days (recent days
 | Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works, or none configured |
 | Inverter sync | inverter not in the commanded mode for 2 min | HA reconciler stopped retrying |
 
-Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
+Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](src/PVControl/HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
 
 #### Import cap
 
 The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
 
 1. **Battery grid charging is throttled first:** the charge current of a grid charge in `sensor.pv_control_mode` (`battery_current_a`, `battery_power_w` = current × battery voltage) is what the battery may charge so the quarter's mean stays under the cap, in whole amps. It is lowered at once as far as needed and raised only with twice the headroom (from L to R only while the room covers R + (R − L)). A charge the plan runs starts at the lowest room over its remaining quarters, planned EV sessions and warm water included, so it doesn't have to be lowered when the EV comes on. A bulk charge stays bulk: it follows the limit with its charge current.
-2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
+2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](src/PVControl/HA/CarCharger.yaml) switches the EV on `charge_now`.
 3. **Then warm-water heatings wait** until there is room for the heat pump.
 
 Nothing reacts instantly (automation delays such as the EV's 1 min, inverter and car ramps), so the guard assumes the current power keeps flowing for `ImportCapReactionSeconds` (90 s) after any change. A change late in a quarter only takes effect in the next one. The plan respects the cap too: grid charging only gets what the load leaves under it, so NeedToCharge takes more cheap quarters at lower power, and PriorityPlus never plans a load over the cap.
@@ -139,11 +139,11 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 
 | File | Content |
 |---|---|
-| [`HA/InverterHelpers.yaml`](HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
-| [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
-| [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
-| [`HA/Mode.yaml`](HA/Mode.yaml) | Mode change notifications |
-| [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: maximum (`max_current_a`, 30 A) / 0 A — not during a bulk charge, whose current the apply script sets |
+| [`HA/InverterHelpers.yaml`](src/PVControl/HA/InverterHelpers.yaml) | Package: applied `seq`, applied time, re-apply counter, blocked flag, `binary_sensor.pv_control_inverter_in_sync` |
+| [`HA/ApplyMode.yaml`](src/PVControl/HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
+| [`HA/InverterSync.yaml`](src/PVControl/HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
+| [`HA/Mode.yaml`](src/PVControl/HA/Mode.yaml) | Mode change notifications |
+| [`HA/Battery.yaml`](src/PVControl/HA/Battery.yaml) | Charging on/off: maximum (`max_current_a`, 30 A) / 0 A — not during a bulk charge, whose current the apply script sets |
 
 | PVControl mode | Inverter |
 |---|---|
@@ -167,7 +167,7 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 
 Price sources (`CurrentImportPriceEntities`, ha_epex_spot sensors) are all equal: PVControl uses the one whose price data reaches furthest, so whichever publishes tomorrow first wins (on a tie the earlier one in the list). `ImportPriceResolution` applies to every source — with `Hourly`, a 15-min source gives the same hourly prices as an hourly one. A configured source without any data shows up as `price_source` in the health sensor.
 
-The sources are the integration's **market price** sensors (raw EPEX price; its surcharge and tax stay 0 — PVControl adds markup, network fee and tax itself). The integration polls its sources on its own schedule; [`HA/PriceFetch.yaml`](HA/PriceFetch.yaml) calls `epex_spot.fetch_data` every 5 min from 12:45 until one source reaches the end of tomorrow, so the prices arrive minutes after the auction results instead of in the afternoon.
+The sources are the integration's **market price** sensors (raw EPEX price; its surcharge and tax stay 0 — PVControl adds markup, network fee and tax itself). The integration polls its sources on its own schedule; [`HA/PriceFetch.yaml`](src/PVControl/HA/PriceFetch.yaml) calls `epex_spot.fetch_data` every 5 min from 12:45 until one source reaches the end of tomorrow, so the prices arrive minutes after the auction results instead of in the afternoon.
 
 The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive in the afternoon. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 
@@ -365,7 +365,7 @@ dotnet build -c Release               # Release build
 dotnet publish src/Host -c Release    # Publish the host with every app plugin (apps/plugins/<Name>/)
 ```
 
-Copy `src/Host/bin/Release/net10.0/publish/` to `/config/netdaemon6` on your Home Assistant instance (NetDaemon 6 add-on) or your custom deployment folder.
+Deploy with `python deploy/deploy.py apps` (see [`deploy/README.md`](deploy/README.md)), or copy `src/Host/bin/Release/net10.0/publish/` to `/config/netdaemon6` on your Home Assistant instance (NetDaemon 6 add-on) or your custom deployment folder.
 
 The build gets its version from git: `0.5.<commit count>+<short hash>`, with `.dirty` appended when it was built with uncommitted changes (e.g. `0.5.233+1bdea38`, `0.5.233+1bdea38.dirty`). After a deploy, `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' "Firmware" show it; their history shows every deploy. Building needs `git` on the path, otherwise the version is `1.0.0`.
 

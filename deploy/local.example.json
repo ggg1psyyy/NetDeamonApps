@@ -1,0 +1,11 @@
+{
+  "addon_folder": "<the add-on's folder, e.g. a mounted /config/netdaemon6>",
+  "addon": "<the NetDaemon add-on slug>",
+  "ha_config_folder": "<the mounted HA /config folder>",
+  "grid_power_entity": "sensor.solax_measured_power",
+  "grid_power_import_negative": true,
+  "max_import_w": 2500,
+  "mode_entity": "sensor.pv_control_mode",
+  "version_entities": ["sensor.pv_control_version", "sensor.heating_test_version"],
+  "check_entities": ["sensor.pv_control_health", "binary_sensor.pv_control_inverter_in_sync", "sensor.pv_control_mode"]
+}

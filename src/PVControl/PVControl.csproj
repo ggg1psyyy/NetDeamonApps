@@ -4,6 +4,12 @@
        DataLogger's DB. A NetDaemon app plugin (../AppPlugin.props). -->
   <Import Project="..\AppPlugin.props" />
 
+  <!-- HA/ holds the Home Assistant automations, scripts and package (deploy/deploy.py ha), not app config: never next to
+       the plugin, where NetDaemon would read them as app YAML. -->
+  <ItemGroup>
+    <None Update="HA\**" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="linq2db.SQLite.MS" />
     <PackageReference Include="Microsoft.Data.Sqlite" />

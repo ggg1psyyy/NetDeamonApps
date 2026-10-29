@@ -372,3 +372,6 @@ appsettings.json
 
 # Local machine details for Claude (identifying, never committed)
 CLAUDE.local.md
+
+# deploy/deploy.py: machine details (add-on folder, slug)
+deploy/local.json
