@@ -158,12 +158,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        #if DEBUG
-        var path = Assembly.GetExecutingAssembly().Location;
-        return System.IO.Path.GetDirectoryName(path) + "\\" + DBLocation;
-        #else
-        return DBLocation;
-        #endif
+        return NetDeamon.AppFiles.PathOf(DBLocation, typeof(PVConfig).Assembly);
       }
     }
     public List<Entity> CurrentImportPriceEntities { get; set; } = null!;
@@ -233,12 +228,7 @@ namespace NetDeamon.apps.PVControl
     {
       get
       {
-        #if DEBUG
-        var path = Assembly.GetExecutingAssembly().Location;
-        return System.IO.Path.GetDirectoryName(path) + "\\" + EnergyCostDBLocation;
-        #else
-        return EnergyCostDBLocation;
-        #endif
+        return NetDeamon.AppFiles.PathOf(EnergyCostDBLocation, typeof(PVConfig).Assembly);
       }
     }
     /// <summary>Grid import counters (kWh, never resetting), in priority order: the first is used while it

@@ -1,4 +1,4 @@
-﻿using NetDaemon.Client;
+using NetDaemon.Client;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -18,7 +18,10 @@ namespace PVControl
 {
   public class DataLoggerConfig
   {
-    public String? DBLocation { get; set; }
+    /// <summary>The history DB; relative = in the plugin's folder (<see cref="NetDeamon.AppFiles.PathOf"/>).</summary>
+    public String? DBLocation { get; set; } = DefaultDBLocation;
+    /// <summary>The DB's file name in the plugin's folder (PVControl reads it there).</summary>
+    public const string DefaultDBLocation = "energy_history.db";
     public Entity? TemperatureOutsideEntity { get; set; }
     public Entity? TemperatureInsideEntity { get; set; }
     public Entity? AtmoPressureEntity { get; set; }
@@ -137,8 +140,8 @@ namespace PVControl
       _config = config.Value;
       _scheduler = scheduler;
       if (String.IsNullOrWhiteSpace(_config.DBLocation))
-        _config.DBLocation = "apps/DataLogger/energy_history.db";
-      _connectionString += _config.DBLocation;
+        _config.DBLocation = DataLoggerConfig.DefaultDBLocation;
+      _connectionString += NetDeamon.AppFiles.PathOf(_config.DBLocation, GetType().Assembly);
     }
 
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)

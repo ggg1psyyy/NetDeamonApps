@@ -23,4 +23,17 @@ public class AppFilesTests
   [Fact]
   public void HeatingTest_DefaultDb_IsInItsPluginFolder() =>
     Assert.Equal("heating_test.db", new NetDeamon.apps.HeatingTest.HeatingTestConfig().DBLocation);
+
+  [Fact]
+  public void DataLogger_DefaultDb_IsInItsPluginFolder() =>
+    Assert.Equal("energy_history.db", new PVControl.DataLoggerConfig().DBLocation);
+
+  [Fact]
+  public void PVControl_ReadsTheDataLoggerPluginsDb()
+  {
+    // PVControl (still in the host, which lies in the add-on's folder) finds the DataLogger's DB in its plugin folder.
+    var config = new NetDeamon.apps.PVControl.PVConfig { DBLocation = "apps/plugins/DataLogger/energy_history.db" };
+    var host = Path.GetDirectoryName(typeof(NetDeamon.apps.PVControl.PVConfig).Assembly.Location)!;
+    Assert.Equal(Path.GetFullPath(Path.Combine(host, "apps", "plugins", "DataLogger", PVControl.DataLoggerConfig.DefaultDBLocation)), config.DBFullLocation);
+  }
 }

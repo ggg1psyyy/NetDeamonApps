@@ -71,7 +71,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`SourceSharesTests`** — what a kWh costs by its source (`SourceShares`: PV free, grid, battery) for `sensor.pv_control_battery_avg_cost_per_kwh` and the loads' cost totals, `CostTracker.BlendAverageCost`, `CostTracker.CounterBooking` (the cost log's totals: an unavailable counter keeps the last total), the shared price lookup `PriceList.GetPriceOrMean`
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation, restore after a restart, and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`EntityRegistrationTests`** — when `RegisterSensor` publishes an entity's MQTT discovery config: option lists (selects/enums) on every start so HA follows `InverterModes` etc., the state kept on a republish
-- **`AppFilesTests`** — `AppFiles.PathOf` (`src/Common`): an app's relative DB location lies in its assembly's (plugin) folder, next to its YAML
+- **`AppFilesTests`** — `AppFiles.PathOf` (`src/Common`): an app's relative DB location lies in its assembly's (plugin) folder, next to its YAML; the HeatingTest and DataLogger defaults, PVControl finding the DataLogger's DB
 - **`PluginLoaderTests`** — the host's plugin loader: finding plugin folders, the NetDaemon version gate, `--plugins`
 - **`AppVersionTests`** — build version from git (`Directory.Build.targets` target `GitVersion`, `src/Common/AppVersion.cs`: each app reads its own assembly), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
 

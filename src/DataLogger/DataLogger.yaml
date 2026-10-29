@@ -1,5 +1,5 @@
 PVControl.DataLoggerConfig:
-  DBLocation: "apps/DataLogger/energy_history.db"
+  DBLocation: "energy_history.db"   # relative: in this plugin's folder (next to this YAML); PVControl reads it there
   TemperatureOutsideEntity: sensor.temperature_outside
   TemperatureInsideEntity: sensor.temperatur_wohnen
   AtmoPressureEntity: sensor.pirateweather_pressure

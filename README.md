@@ -299,7 +299,7 @@ YAML (`PVControl.yaml` → `WarmWater`): the heat pump entities (temperature, he
 ---
 
 ### DataLogger
-Logs energy sensor history to a local SQLite database at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
+Logs energy sensor history to a local SQLite database (`apps/plugins/DataLogger/energy_history.db`, in the plugin's folder next to its YAML) at regular intervals. The data is used by PVControl's load prediction and is intended as a training dataset for future ML-based load forecasting.
 
 One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per local day (`daily`, midnight to midnight — 23 or 25 h at the clock change; the repeated hour in October gets two rows, +02:00 and +01:00): weather (outside/inside temperature, pressure, clouds, humidity), energies (house, PV, import/export, battery, EV, heat pump, warm water, as counter increases in Wh — resets and glitches handled), SoCs and prices (time-weighted means: every reading held until the next). Also the heat pump's operation and the house's state:
 
