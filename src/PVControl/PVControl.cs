@@ -158,7 +158,7 @@ namespace NetDeamon.apps.PVControl
       {
         _energyLogDBConnectionString += PVCC_Config.EnergyCostDBFullLocation;
         PVCC_Logger.LogInformation("Energy Log DB Location: {loc} - Energy logging enabled", PVCC_Config.EnergyCostDBFullLocation);
-        await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
+        await using (var db = new EnergyCostDb(SqliteOptions.For(_energyLogDBConnectionString)))
         {
           db.CreateTable<Costs>(tableOptions: TableOptions.CheckExistence);
           _lastCostsEntry = db.CostEntries.OrderByDescending(c => c.Timestamp).FirstOrDefault()!;
@@ -1402,7 +1402,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (_logEnergy && now >= _nextQuarterHour)
       {
-        await using (var db = new EnergyCostDb(new DataOptions().UseSQLite(_energyLogDBConnectionString)))
+        await using (var db = new EnergyCostDb(SqliteOptions.For(_energyLogDBConnectionString)))
         {
           // Import from the counters in priority order (kWh); each counts from its own value at the last
           // booking (after a restart: the stored total belongs to the counter it fits). The cost log is in Wh.

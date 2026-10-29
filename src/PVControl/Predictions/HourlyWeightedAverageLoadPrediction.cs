@@ -47,7 +47,7 @@ namespace NetDeamon.apps.PVControl.Predictions
     /// <summary>All logged hours with house energy, as (timestamp, value after exclusions).</summary>
     private List<(DateTime Timestamp, int Value)> LoadHistory()
     {
-      using var db = new EnergyHistoryDb(new DataOptions().UseSQLite(string.Format("Data Source={0}", _dbLocation)));
+      using var db = new EnergyHistoryDb(SqliteOptions.ForFile(_dbLocation));
       // Subtraction is done in memory so the exclusion list can be dynamic. The hour is NOT
       // filtered in SQL: LinqToDB turns Timestamp.Hour into strftime('%H', …), which SQLite
       // evaluates in UTC — that shifted every forecast hour by the UTC offset (1–2 h).

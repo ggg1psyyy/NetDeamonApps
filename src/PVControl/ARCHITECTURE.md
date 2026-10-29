@@ -960,3 +960,13 @@ For the warm-water tank (`WarmWaterController.RegisterEntitiesAsync`, slug from 
 
 All command entities are handled by `WarmWaterController.HandleCommandAsync` (called from
 `PVControl.UserStateChanged`), which echoes the value and requests a replan.
+
+## SQLite driver for LinqToDB (`Db/SqliteOptions.cs`)
+
+Every LinqToDB connection goes through `SqliteOptions` (`UseSQLiteMicrosoft`), never the plain `UseSQLite`. The
+plain one picks the driver by looking for its assembly next to linq2db.dll and otherwise takes System.Data.SQLite.
+On 2026-10-29 the plugins stopped carrying copies of what the host provides; Microsoft.Data.Sqlite then lay only in
+the host's folder, linq2db (PVControl's own) in the plugin's, and PVControl failed to start ("Cannot load assembly
+System.Data.SQLite", 17:39–17:46, rolled back). A reproduction with the plugin layout showed the plain call failing
+and the explicit one working; `SqliteOptionsTests` pins the explicit choice (in the test output both assemblies lie
+together, so the detection itself can't fail there).

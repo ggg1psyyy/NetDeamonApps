@@ -185,7 +185,7 @@ public sealed class WeatherLoadPrediction : Prediction
   List<LoadHour> LoadHistory(DateTime now)
   {
     var from = now.Date.AddDays(-HistoryDays);
-    using var db = new EnergyHistoryDb(new DataOptions().UseSQLite($"Data Source={_dbLocation}"));
+    using var db = new EnergyHistoryDb(SqliteOptions.ForFile(_dbLocation));
     var rows = db.Hourlies
       .Where(h => h.Houseenergy != null)
       .Select(h => new { h.Timestamp, h.Houseenergy, h.Carcharge, h.Warmwaterenergy, h.Heatpumpenergy, h.Temperatureoutside })
