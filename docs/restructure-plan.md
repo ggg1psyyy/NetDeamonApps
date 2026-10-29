@@ -56,7 +56,7 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
 - [x] 3. `src/Host` + plugin loader (discovery, version gate, dependency resolving) with tests;
       `--plugins <folder>` to run a single plugin; the current apps still load as before
       (done as `PluginLoader.cs` in the current host project; it moves to `src/Host` once all apps are plugins)
-- [ ] 4. Tag `before-plugins`; move HeatingTest → plugin, deploy, verify (version sensor, entities)
+- [x] 4. Tag `before-plugins`; move HeatingTest → plugin (`src/HeatingTest`, `src/AppPlugin.props`; the host publishes plugins into `apps/plugins/<Name>/`), deploy, verify (version sensor, entities)
 - [ ] 5. DataLogger → plugin, deploy, verify (next hourly row)
 - [ ] 6. PVControl → plugin, deploy mid-quarter with low import, verify: `sensor.pv_control_version`,
       health ok, `binary_sensor.pv_control_inverter_in_sync` on, the EV's `charge_now` present,

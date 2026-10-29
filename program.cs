@@ -16,6 +16,12 @@ try
 {
     await Host.CreateDefaultBuilder(args)
         .UseNetDaemonAppSettings()
+        // The YAML configs of plugins run from another folder (--plugins); deployed ones lie under ./apps anyway
+        .ConfigureAppConfiguration((_, config) =>
+        {
+            foreach (var folder in PluginLoader.FoldersFromArgs(args))
+                config.AddYamlAppConfig(folder);
+        })
         .UseNetDaemonDefaultLogging()
         .UseNetDaemonRuntime()
         .UseNetDaemonTextToSpeech()

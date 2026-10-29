@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- HeatingTest: automated step test of the heat pump's heating-curve level (README.md). A NetDaemon app
+       plugin (../AppPlugin.props). -->
+  <Import Project="..\AppPlugin.props" />
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+</Project>

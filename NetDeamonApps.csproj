@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -33,6 +33,14 @@
         <EmbeddedResource Remove="tools\**" />
     </ItemGroup>
 
+    <!-- App plugins (src/<Name>/), published with the host into apps/plugins/<Name>/ (PluginLoader). The host
+         doesn't reference them: they're loaded at run time. -->
+    <ItemGroup>
+        <AppPlugin Include="src\HeatingTest\HeatingTest.csproj" />
+    </ItemGroup>
+    <Target Name="PublishAppPlugins" AfterTargets="Publish">
+        <MSBuild Projects="@(AppPlugin)" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))apps\plugins\%(AppPlugin.Filename)\" />
+    </Target>
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
         <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon6' folder for add-on or your custom folder to deploy." Importance="high" />
     </Target>

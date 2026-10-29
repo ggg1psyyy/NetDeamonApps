@@ -1,0 +1,37 @@
+<Project>
+  <!-- What every NetDaemon app plugin shares: imported by src/<Name>/<Name>.csproj. A plugin's assembly is
+       named like its folder (the host loads apps/plugins/<Name>/<Name>.dll); NetDaemon and Common come from
+       the host at run time, the plugin's own dependencies from its folder. -->
+  <PropertyGroup>
+    <AssemblyName>$(MSBuildProjectName)</AssemblyName>
+    <RootNamespace>NetDeamon</RootNamespace>
+    <!-- Copies the plugin's dependencies to its output and writes its .deps.json (resolved by the host). -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Common\Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetDaemon.AppModel" />
+    <PackageReference Include="NetDaemon.Client" />
+    <PackageReference Include="NetDaemon.Extensions.Mqtt" />
+    <PackageReference Include="NetDaemon.Extensions.Scheduling" />
+    <PackageReference Include="NetDaemon.HassModel" />
+  </ItemGroup>
+
+  <!-- The app's YAML config next to its assembly (deployed under ./apps, where NetDaemon reads app configs). -->
+  <ItemGroup>
+    <None Update="**\*.yaml" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- The usings every NetDaemon app file expects (as the host's apps/GlobalUsings.cs). -->
+  <ItemGroup>
+    <Using Include="System" />
+    <Using Include="System.Reactive.Linq" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="NetDaemon.AppModel" />
+    <Using Include="NetDaemon.HassModel" />
+  </ItemGroup>
+</Project>
