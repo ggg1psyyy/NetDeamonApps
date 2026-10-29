@@ -1,4 +1,4 @@
-﻿using NetDaemon.Client;
+using NetDaemon.Client;
 using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.HassModel.Entities;
 using NetDeamon.apps;
@@ -964,7 +964,7 @@ namespace NetDeamon.apps.PVControl
         summary = status.Issues.Count == 0 ? "All checks ok" : string.Join("; ", status.Issues.Select(i => i.Message)),
         issues = status.Issues.Select(i => new { key = i.Key, level = i.Level.ToString(), message = i.Message, since = i.Since.ToISO8601() }).ToList(),
         last_cycle = now.ToISO8601(),
-        version = AppVersion.Current,
+        version = AppVersion.Of(GetType().Assembly),
       });
       await PVCC_EntityManager.SetStateAsync(_healthEntity.EntityId, status.Level.ToString());
     }
@@ -1476,8 +1476,8 @@ namespace NetDeamon.apps.PVControl
     {
       // Deployed build: republished on every start so the device's "Firmware" follows it too.
       var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
-      await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Current);
-      PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Current);
+      await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly));
+      PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Of(GetType().Assembly));
       _healthEntity = await RegisterSensor("sensor.pv_control_health", "Health", "ENUM", "mdi:heart-pulse",
         addConfig: new { options = Enum.GetNames<HealthLevel>() },
         defaultValue: HealthLevel.ok.ToString(),

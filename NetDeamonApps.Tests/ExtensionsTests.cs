@@ -282,4 +282,21 @@ public class DictionaryTimeSeriesExtensionsTests
     Assert.Equal(500, avg.GetAverage());
     Assert.Equal(1, avg.Count);
   }
+
+  // TryGetStateValue's enum case (InverterModes, LoadSchedulingMode — any enum since the move to Common).
+  [Theory]
+  [InlineData("force_charge", true, InverterModes.force_charge)]
+  [InlineData("grid_only", true, InverterModes.grid_only)]
+  [InlineData("Force_Charge", false, InverterModes.automatic)]   // case-sensitive, as before
+  [InlineData("7", false, InverterModes.automatic)]              // a number isn't a mode name
+  [InlineData("reset", false, InverterModes.automatic)]          // removed mode
+  public void TryParseEnum_ByName(string state, bool ok, InverterModes expected)
+  {
+    Assert.Equal(ok, Extensions.TryParseEnum(state, out InverterModes mode));
+    Assert.Equal(expected, mode);
+  }
+
+  [Fact]
+  public void TryParseEnum_LoadSchedulingMode() =>
+    Assert.True(Extensions.TryParseEnum("PriorityPlus", out LoadSchedulingMode m) && m == LoadSchedulingMode.PriorityPlus);
 }

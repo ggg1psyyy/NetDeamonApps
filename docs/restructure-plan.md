@@ -52,7 +52,7 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
 
 - [x] 1. `Directory.Packages.props` (central package versions, one Microsoft.Data.Sqlite version
       for tools too) and `Directory.Build.props` (TargetFramework, Nullable, LangVersion)
-- [ ] 2. `src/Common` (Calculations, generic Extensions, PriorityCounter, AppVersion, SqliteSchema)
+- [x] 2. `src/Common` (Calculations, generic Extensions, PriorityCounter, AppVersion, SqliteSchema)
 - [ ] 3. `src/Host` + plugin loader (discovery, version gate, dependency resolving) with tests;
       `--plugins <folder>` to run a single plugin; the current apps still load as before
 - [ ] 4. Tag `before-plugins`; move HeatingTest → plugin, deploy, verify (version sensor, entities)

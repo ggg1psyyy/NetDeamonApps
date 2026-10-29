@@ -12,7 +12,7 @@
        backtested as variant "App". -->
   <ItemGroup>
     <Compile Include="..\..\apps\PVControl\LoadModel\LoadModels.cs" Link="App\LoadModels.cs" />
-    <Compile Include="..\..\apps\Calculations.cs" Link="App\Calculations.cs" />
+    <Compile Include="..\..\src\Common\Calculations.cs" Link="App\Calculations.cs" />
   </ItemGroup>
 
   <ItemGroup>

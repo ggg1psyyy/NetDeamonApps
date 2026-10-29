@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Code shared by the NetDaemon host and the app plugins: the basic calculations (Calculations.cs),
+       generic Home Assistant helpers (Extensions.cs), the apps' SQLite schema helper, the build
+       version and the import counters in priority order (PVControl and DataLogger). -->
+  <PropertyGroup>
+    <AssemblyName>NetDeamonApps.Common</AssemblyName>
+    <RootNamespace>NetDeamon</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="NetDaemon.Client" />
+    <PackageReference Include="NetDaemon.HassModel" />
+  </ItemGroup>
+
+</Project>

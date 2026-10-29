@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.HassModel.Entities;
@@ -115,7 +115,7 @@ namespace NetDeamon.apps.PVControl
     public static async Task<Entity> RegisterSensor(string id, string name, string? deviceClass, string icon, object? addConfig = null, string defaultValue = "", bool reRegister = false, bool republish = false)
     {
       var identifiers = new[] { "pv_control" };
-      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = AppVersion.Current };
+      var device = new { identifiers, name = "PV Control", model = "PV Control", manufacturer = "AH", sw_version = AppVersion.Of(typeof(PVControlCommon).Assembly) };
       Entity entity = new(PVCC_HaContext, id);
       bool hasOptions = addConfig?.GetType().GetProperty("options") is not null;
       var (publish, setDefault) = Registration(entity?.State != null, reRegister, republish, hasOptions);

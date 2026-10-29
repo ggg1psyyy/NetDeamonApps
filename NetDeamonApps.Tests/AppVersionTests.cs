@@ -12,5 +12,5 @@ public class AppVersionTests
 {
   [Fact]
   public void Current_IsCommitCountAndHash() =>
-    Assert.Matches(@"^0\.5\.\d+\+[0-9a-f]{7}(\.dirty)?$", AppVersion.Current);
+    Assert.Matches(@"^0\.5\.\d+\+[0-9a-f]{7}(\.dirty)?$", AppVersion.Of(typeof(NetDeamon.apps.PVControl.PVControlCommon).Assembly));
 }

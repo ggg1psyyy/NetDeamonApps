@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetDeamonApps", "NetDeamonA
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetDeamonApps.Tests", "NetDeamonApps.Tests\NetDeamonApps.Tests.csproj", "{370310B1-F00E-47EF-A50E-105E2D1747A7}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "src\Common\Common.csproj", "{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,9 +45,24 @@ Global
 		{370310B1-F00E-47EF-A50E-105E2D1747A7}.Release|x64.Build.0 = Release|Any CPU
 		{370310B1-F00E-47EF-A50E-105E2D1747A7}.Release|x86.ActiveCfg = Release|Any CPU
 		{370310B1-F00E-47EF-A50E-105E2D1747A7}.Release|x86.Build.0 = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|x64.Build.0 = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Debug|x86.Build.0 = Debug|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|x64.ActiveCfg = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|x64.Build.0 = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|x86.ActiveCfg = Release|Any CPU
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{AAA9EBAE-A7BB-48A2-BADC-6014CEE8F91E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {93D544C3-F4DE-4B87-B3F4-2DA36CB09FA4}

@@ -240,7 +240,7 @@ public sealed class HeatingTest : IAsyncInitializable
       if (addConfig is not null)
         foreach (var p in addConfig.GetType().GetProperties())
           dict[p.Name] = p.GetValue(addConfig)!;
-      dict["device"] = new { identifiers = new[] { "heating_test" }, name = "Heating Test", model = "Heating Test", manufacturer = "AH", sw_version = AppVersion.Current };
+      dict["device"] = new { identifiers = new[] { "heating_test" }, name = "Heating Test", model = "Heating Test", manufacturer = "AH", sw_version = AppVersion.Of(GetType().Assembly) };
       dict["icon"] = icon;
       await _mqtt.CreateAsync(id, new EntityCreationOptions { Name = name, DeviceClass = deviceClass }, cfg).ConfigureAwait(false);
       if (isNew)
@@ -261,8 +261,8 @@ public sealed class HeatingTest : IAsyncInitializable
       new { min = 1, max = 16, step = 0.5, mode = "box", unit_of_measurement = "h" },
       _config.DefaultDurationHours.ToString(CultureInfo.InvariantCulture));
     _status = await RegisterAsync("sensor.heating_test_status", "Heating Test - Status", null, "mdi:flask", null, "Idle");
-    var version = await RegisterAsync("sensor.heating_test_version", "Heating Test - Version", null, "mdi:tag-outline", null, AppVersion.Current, republish: true);
-    await _mqtt.SetStateAsync(version.EntityId, AppVersion.Current).ConfigureAwait(false);
+    var version = await RegisterAsync("sensor.heating_test_version", "Heating Test - Version", null, "mdi:tag-outline", null, AppVersion.Of(GetType().Assembly), republish: true);
+    await _mqtt.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly)).ConfigureAwait(false);
   }
 
   async Task CommandAsync(Entity entity, string state)
