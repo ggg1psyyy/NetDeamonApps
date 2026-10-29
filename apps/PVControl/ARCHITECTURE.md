@@ -648,6 +648,12 @@ tank model update, at the latest every `ReplanIntervalMinutes` (15).
 
 ## Price pipeline
 
+**Network price periods have years** (`NetworkPricePeriod.StartYear`/`EndYear`): the WiNAP was configured
+from October 2026, 22–04, after a press article on the draft; the ordinance (SNE-G-V, BGBl. II 299/2026)
+sets 23–05 (§ 7 Abs. 4) and first applies it from 1 Oct 2027 (§ 32 Abs. 4). From 2026-10-01 to 10-29 the
+plan saw 22–04 imports ~1.3 ct/kWh too cheap (and booked them so). A tariff that goes is ended by hand
+with `EndYear`.
+
 ```
 EPEX Spot (HA sensor, ct/kWh net)
   │

@@ -280,13 +280,19 @@ namespace NetDeamon.apps.PVControl
     public int EndMonth { get; set; }
     public int StartHour { get; set; }
     public int EndHour { get; set; }
+    /// <summary>First year the tariff applies, from <see cref="StartMonth"/> of it on; 0 = always (e.g. WiNAP from October 2027).</summary>
+    public int StartYear { get; set; }
+    /// <summary>Last year the tariff applies, up to <see cref="EndMonth"/> of it; 0 = no end (ended by hand when the tariff goes).</summary>
+    public int EndYear { get; set; }
     public float Price { get; set; }
 
     /// <summary>Whether the period is active at a time.</summary>
     /// <param name="t">Time to check.</param>
-    /// <returns>True if its month and hour lie in the period's ranges.</returns>
+    /// <returns>True if it lies between the first and last year's months, and its month and hour lie in the period's ranges.</returns>
     public bool IsActiveAt(DateTime t) =>
-      InRange(t.Month, StartMonth, EndMonth, inclusiveEnd: true)
+      (StartYear <= 0 || t >= new DateTime(StartYear, StartMonth, 1))
+      && (EndYear <= 0 || t < new DateTime(EndYear, EndMonth, 1).AddMonths(1))
+      && InRange(t.Month, StartMonth, EndMonth, inclusiveEnd: true)
       && InRange(t.Hour, StartHour, EndHour, inclusiveEnd: false);
 
     /// <summary>Whether a value lies in a range that wraps around when start &gt; end.</summary>

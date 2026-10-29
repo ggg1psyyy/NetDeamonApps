@@ -66,4 +66,23 @@ public class NetworkPricePeriodTests
   [InlineData(10, 12)]  // October, outside the month range
   public void Snap_IsNotActive_OutsideSummerDayWindow(int month, int hour)
     => Assert.False(Snap.IsActiveAt(new DateTime(2026, month, 1, hour, 0, 0)));
+
+  // ── Years: the WiNAP applies first from 1 Oct 2027 (SNE-G-V § 32 Abs. 4), 23:00–05:00 (§ 7 Abs. 4) ──
+
+  private static NetworkPricePeriod WinapFrom2027 => new()
+  {
+    Name = "WiNAP", StartMonth = 10, EndMonth = 3, StartHour = 23, EndHour = 5, StartYear = 2027, EndYear = 2099, Price = 0.06882f,
+  };
+
+  [Theory]
+  [InlineData(2026, 10, 29, 23, false)]  // configured too early until 2026-10-29: not yet
+  [InlineData(2027, 3, 15, 2, false)]    // the winter before the first season
+  [InlineData(2027, 9, 30, 23, false)]   // the night before it starts
+  [InlineData(2027, 10, 1, 23, true)]    // first night
+  [InlineData(2028, 1, 10, 4, true)]     // the first season runs across the year
+  [InlineData(2028, 1, 10, 5, false)]    // 05:00 exclusive
+  [InlineData(2099, 3, 31, 3, true)]     // last month of the last year
+  [InlineData(2099, 10, 1, 23, false)]   // after EndYear's EndMonth
+  public void Years_BoundTheSeasons(int year, int month, int day, int hour, bool active)
+    => Assert.Equal(active, WinapFrom2027.IsActiveAt(new DateTime(year, month, day, hour, 0, 0)));
 }

@@ -69,7 +69,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 | `binary_sensor.pv_control_battery_charging_enabled` | Whether battery charging is currently enabled |
 | `binary_sensor.pv_control_export_allowed` | Whether PV surplus may currently be exported to the grid (off during negative export price) |
 | `sensor.pv_control_battery_status` | Battery status: `idle`, `charging`, `discharging`, `unknown` |
-| `sensor.pv_control_active_network_price_period` | Current network price override period name (e.g. SNAP in summer, WiNAP in winter), or "Standard" |
+| `sensor.pv_control_active_network_price_period` | Current network price override period name (SNAP Apr–Sep 10–16; WiNAP Oct–Mar 23–05 from October 2027), or "Standard". A period in `ImportPriceNetworkPeriods` applies between `StartMonth` of `StartYear` and `EndMonth` of `EndYear` (0 = no limit) |
 | `sensor.pv_control_version` | Deployed build (see [Build & Deploy](#build--deploy)), also the "Firmware" of the PV Control device |
 | `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
 | `sensor.pv_control_load_forecast` | Coming night's load (22:00–08:00, kWh) by the weather-aware model — see [Load forecast](#load-forecast) |
@@ -398,7 +398,7 @@ dotnet test NetDeamonApps.Tests/
 | `PricePublicationTrackerTests` | When tomorrow's prices first appear (once per day, not after a restart) |
 | `PriceListTests` | Hourly/quarter-hourly price normalization, list comparison (a replan only on a real price change), hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
 | `DailyTargetChargeTests` | Daily target charge: the target by the end of the day's PV, only what PV won't deliver, in the cheapest quarters under the limit |
-| `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) |
+| `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) and their first/last year |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
 | `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
