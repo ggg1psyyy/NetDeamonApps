@@ -46,4 +46,19 @@ public class PricePublicationTrackerTests
     Assert.Equal(PricePublicationTracker.KeepDays, t.Days.Count);
     Assert.Equal(Day.AddDays(19), t.Days[^1].Day);
   }
+
+  [Fact]
+  public void PerSource_EachNotesItsOwnTime()
+  {
+    // One tracker per price source (PVControl): Energy-Charts at 13:10, Awattar only at 14:00.
+    var energyCharts = new PricePublicationTracker();
+    var awattar = new PricePublicationTracker();
+    foreach (var (t, ec, aw) in new[] { (12.75, TodayOnly, TodayOnly), (13.17, WithTomorrow, TodayOnly), (14.0, WithTomorrow, WithTomorrow) })
+    {
+      energyCharts.Observe(Day.AddHours(t), ec);
+      awattar.Observe(Day.AddHours(t), aw);
+    }
+    Assert.Equal(Day.AddHours(13.17), energyCharts.PublishedToday(Day.AddHours(15)));
+    Assert.Equal(Day.AddHours(14), awattar.PublishedToday(Day.AddHours(15)));
+  }
 }

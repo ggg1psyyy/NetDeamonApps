@@ -102,6 +102,27 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
   public static bool BulkFor(InverterModes mode, bool planBulk, bool forced) =>
     mode == InverterModes.force_charge && (forced || planBulk);
 
+  /// <summary>Change of the planned charge's target SoC that's shown at once, % (<see cref="SteadyTarget"/>).</summary>
+  public const int TargetStepPct = 2;
+
+  /// <summary>
+  /// The target SoC to show for the planned charge: the plan recomputes it every 15 s from live values (SoC,
+  /// load average, PV correction, the forecast margin's 2-h steps), so it jittered 56–59 % between cycles
+  /// (live 2026-10-28) while the charge itself has a 2 % band. Shown anew only when it moved by
+  /// <see cref="TargetStepPct"/> or more, or belongs to another charge (the shown one has ended).
+  /// </summary>
+  /// <param name="shown">Target shown so far and the end of its charge; null = none.</param>
+  /// <param name="charge">The plan's charge now; null = none planned.</param>
+  /// <param name="now">Current time.</param>
+  /// <returns>The target to show and its charge's end; null without a planned charge.</returns>
+  public static (int TargetSocPercent, DateTime End)? SteadyTarget((int TargetSocPercent, DateTime End)? shown, PlannedCharge? charge, DateTime now)
+  {
+    if (charge is not { } c) return null;
+    if (shown is { } s && now < s.End && Math.Abs(c.TargetSocPercent - s.TargetSocPercent) < TargetStepPct)
+      return (s.TargetSocPercent, c.End);
+    return (c.TargetSocPercent, c.End);
+  }
+
   /// <summary>Shortest run of a grid charge once started.</summary>
   public static readonly TimeSpan MinChargeRun = TimeSpan.FromMinutes(1);
 

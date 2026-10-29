@@ -92,6 +92,23 @@ public class InverterCommandTests
   }
 
   [Fact]
+  public void SteadyTarget_JitterBelowTheStep_KeepsTheShownValue()
+  {
+    // Live 2026-10-28 night: the 02:00 charge's target moved 56–59 % between 15-s cycles.
+    var now = new DateTime(2026, 10, 28, 22, 0, 0);
+    var end = new DateTime(2026, 10, 29, 3, 0, 0);
+    PlannedCharge Charge(int target, DateTime? until = null) => new(4000, target, end.AddHours(-1), until ?? end);
+    var shown = InverterCommand.SteadyTarget(null, Charge(57), now);
+    var seen = new List<int>();
+    foreach (int t in new[] { 58, 56, 57, 58, 56 })
+      seen.Add((shown = InverterCommand.SteadyTarget(shown, Charge(t), now))!.Value.TargetSocPercent);
+    Assert.Equal([57, 57, 57, 57, 57], seen);
+    Assert.Equal(60, InverterCommand.SteadyTarget(shown, Charge(60), now)!.Value.TargetSocPercent);                 // a real change: at once
+    Assert.Equal(58, InverterCommand.SteadyTarget(shown, Charge(58, end.AddDays(1)), end.AddMinutes(1))!.Value.TargetSocPercent); // the next charge
+    Assert.Null(InverterCommand.SteadyTarget(shown, null, now));
+  }
+
+  [Fact]
   public void NextCharge_EndsWithThePlan_TargetFromItsEnergy()
   {
     var t0 = new DateTime(2026, 10, 27, 23, 45, 0);

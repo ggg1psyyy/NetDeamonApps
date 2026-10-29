@@ -356,4 +356,78 @@ public class SessionPlannerTests : TestBase
     Assert.Equal(new DateTime(2026, 10, 19, 6, 30, 0), NetDeamon.apps.TimeRange.NextOccurrence(new TimeOnly(6, 30), now));
     Assert.Equal(new DateTime(2026, 10, 19, 17, 0, 0), NetDeamon.apps.TimeRange.NextOccurrence(new TimeOnly(17, 0), now));
   }
+
+  // ── Split: two blocks with a pause (SessionPlanner.CheapestTwoBlocks / FindSplit) ──────────
+  // Cheap 23–00, dearer 00–02, cheap again 02–04, all under the price limit: the unbroken scan only compares
+  // starts of one piece, so 3 h from 23:00 ran through the dearer middle.
+
+  static readonly DateTime Night = new(2026, 10, 18, 23, 0, 0);
+  const int ThreeHoursWh = EvW * 3;
+
+  static Func<DateTime, float> Dip(float middle) => t =>
+    t >= Night && t < Night.AddHours(1) || t >= Night.AddHours(3) && t < Night.AddHours(5) ? 0.20f
+    : t >= Night.AddHours(1) && t < Night.AddHours(3) ? middle : 0.33f;
+
+  [Fact]
+  public void CheapestTwoBlocks_SkipsTheDearerMiddle()
+  {
+    var prices = Input(12, Dip(0.30f)).ImportPrices.NormalizeToQuarterHourly();
+    var b = SessionPlanner.CheapestTwoBlocks(prices, Night, Night.AddHours(8), ThreeHoursWh, EvW, minRunMinutes: 15, minOffMinutes: 15);
+    Assert.Equal((Night, Night.AddHours(1), Night.AddHours(3), Night.AddHours(5)), b);
+  }
+
+  [Fact]
+  public void CheapestTwoBlocks_RunningSession_FirstBlockStartsNow_RespectsMinRunAndOff()
+  {
+    var prices = Input(12, Dip(0.30f)).ImportPrices.NormalizeToQuarterHourly();
+    // Running since 22:30 (0.33): the first block has to start now, at least 30 min, then a pause of at least 30 min.
+    var b = SessionPlanner.CheapestTwoBlocks(prices, Night.AddMinutes(-30), Night.AddHours(8), ThreeHoursWh, EvW, 30, 30, startNow: true)!.Value;
+    Assert.Equal(Night.AddMinutes(-30), b.AStart);
+    Assert.True(b.AEnd - b.AStart >= TimeSpan.FromMinutes(30));
+    Assert.True(b.BStart - b.AEnd >= TimeSpan.FromMinutes(30));
+    Assert.Null(SessionPlanner.CheapestTwoBlocks(prices, Night, Night.AddHours(1), ThreeHoursWh, EvW, 15, 15)); // no room for 3 h
+  }
+
+  [Fact]
+  public void CheapestTwoBlocks_RunningFirstBlock_EndsAtTheCheapStretch_NotPushedOnByMinRun()
+  {
+    // Planned 23:00–00:00 + 02:00–04:00 with a 30-min min run; at 23:50 the running slot is 23:45. Forced to 30 min,
+    // the rest of the first block ran to 00:15, then 00:30 … through the whole dearer stretch. What's left of a running
+    // block may be shorter: it ends at 00:00.
+    var prices = Input(12, Dip(0.30f)).ImportPrices.NormalizeToQuarterHourly();
+    var now = Night.AddMinutes(50);
+    int leftWh = ThreeHoursWh - (int)(EvW * 50 / 60.0);
+    var b = SessionPlanner.CheapestTwoBlocks(prices, Night.AddMinutes(45), Night.AddHours(8), leftWh, EvW, 30, 30, startNow: true, now: now)!.Value;
+    Assert.Equal((Night.AddMinutes(45), Night.AddHours(1)), (b.AStart, b.AEnd));
+    Assert.Equal(Night.AddHours(3), b.BStart);
+  }
+
+  static SplitPlan? Split(float middle)
+  {
+    var input = Input(12, Dip(middle));
+    var baseline = EnergySimulator.Simulate(input);
+    SimulationResult Run(IReadOnlyList<ExtraLoad> l) => SessionPlanner.ChooseSupply(x => input.SimulateWith(x), l, baseline).Sim;
+    var unbroken = SessionPlanner.FindBestPriceAwareStart(Night, Night.AddHours(8), ThreeHoursWh, EvW,
+      (a, b) => Run([Ev(a, b)]), baseline)!.Value;
+    Assert.Equal(Night.AddHours(2), unbroken.Start); // the best unbroken: 01:00 — one hour of the middle, then the cheap two
+    return SessionPlanner.FindSplit(input.ImportPrices.NormalizeToQuarterHourly(), Night, Night.AddHours(8), ThreeHoursWh, Ev(Night, Night),
+      15, 15, startNow: false, Run, baseline, unbroken, null);
+  }
+
+  [Fact]
+  public void FindSplit_ClearlyCheaper_TwoBlocks()
+  {
+    // Against the best unbroken session (01:00–04:00: 1 h at 0.30): ~0.19 € (14 %) saved — over both thresholds.
+    var split = Split(0.30f)!.Value;
+    Assert.Equal((Night, Night.AddHours(1)), (split.Sessions[0].StartTime, split.Sessions[0].EndTime));
+    Assert.Equal((Night.AddHours(3), Night.AddHours(5)), (split.Sessions[1].StartTime, split.Sessions[1].EndTime));
+    Assert.InRange(split.SavingEur, 0.15f, 0.25f);
+  }
+
+  [Fact]
+  public void FindSplit_SmallDip_NoExtraOnOff()
+  {
+    // 0.21 in the middle: ~0.02 € — under the 10-ct floor, the session runs in one piece.
+    Assert.Null(Split(0.21f));
+  }
 }

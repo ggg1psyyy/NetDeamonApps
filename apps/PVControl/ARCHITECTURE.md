@@ -438,6 +438,22 @@ under the 35 ct limit (08–10 h, 32 ct). Every full session ran past 10:00 on t
 which the house bought back overnight at 36–38 ct, so nothing passed and the EV stood still
 during the day's cheapest grid window. Charging just 08:00–10:00 adds import only at 32 ct.
 
+**Split session** (`SessionPlanner.FindSplit`, `CheapestTwoBlocks`): `Partial` covers a gap over the
+price limit; under it the scan only compared unbroken sessions, so "cheap 23–00, dearer 00–02, cheap
+02–04" ran through the middle. Next to them, the two blocks with the lowest price sum (at least
+`MinWindowMinutes` each, `MinOffMinutes` between them — the same latches the charger obeys) are
+simulated like any candidate and taken when they save at least 5 % and 10 ct: every block is one more
+on/off of the charger and the car's contactor, so a few cents never cause one (review 2026-10-29). At
+most one pause — the cheap/dear/cheap night is the case; more blocks would cost more switching than
+they save. A running session isn't stopped for a later start (noise), but a pause that was planned
+is kept: once the first block of a two-block plan has ended, the session counts as paused, not
+running. The min-on latch only moves a block that has started to "now".
+A running session's remaining first block may be shorter than `MinWindowMinutes` (forced to it, its end
+was pushed a quarter on every cycle through the dearer stretch); the pause is longer than
+`MinOffMinutes` (the stop is seen a few seconds after the block ends, so a pause of exactly the min-off
+time held the second block back a slot); without a deadline a split ends `ConsequenceMarginHours`
+before the simulation does, like the unbroken scan.
+
 **Ready-by deadline** (`time.pv_control_<load>_ready_by` + `switch.pv_control_<load>_enforce_ready_by`;
 MQTT time entities need HA ≥ 2026.5; PriorityPlus only; off unless the switch is on):
 only starts that finish by the next occurrence of that time are considered, and the deadline
@@ -803,6 +819,9 @@ quarters (`SimulationResult.GridChargeRoomW`, planned EV sessions included, less
 load runs above its forecast; without it that night's plan room was 30.3 A and the charge would have
 started at 30 A and been cut anyway) — around two current writes per charge (set, restore) instead of
 a charge rate far too low.
+`charge_target_soc` is steadied for display (`InverterCommand.SteadyTarget`): the plan recomputes it
+every 15 s from live values and it jittered 56–59 % between cycles (2026-10-28 night), while the
+charge itself has a 2 % band; shown anew on a change of 2 % or more, or for the next charge.
 The plan's path choice knows the cap too (`EnergySimulator.ChargesBulk` → `BlockChargeWh`): when
 VPP doesn't get the energy in, bulk only if it delivers more over the price block, both paths as the
 cap leaves them per quarter and VPP falling with the SoC. With EV + heat pump the cap can leave bulk

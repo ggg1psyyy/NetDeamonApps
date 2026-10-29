@@ -789,8 +789,9 @@ namespace NetDeamon.apps.PVControl
           var elapsedMin = (now - load.SessionStartTime.Value).TotalMinutes;
           if (elapsedMin < load.Config.MinWindowMinutes)
           {
+            // Only a block that has started runs from now; a split's later block keeps its time.
             var latchedLoads = previousLoads
-              .Select(e => e.Between(currentSlot, e.EndTime))
+              .Select(e => e.StartTime <= currentSlot ? e.Between(currentSlot, e.EndTime) : e)
               .ToList();
             SetResult(latchedLoads, true,
               $"Latched ({load.Config.Name}: {elapsedMin:F0}/{load.Config.MinWindowMinutes} min min-on)",
@@ -1115,15 +1116,47 @@ namespace NetDeamon.apps.PVControl
         // it takes that energy directly from the grid, not via the battery (wear, round-trip losses).
         // A running session supplied directly from the grid stays so (no flip-flop with the battery).
         bool keepFromGrid = wasActive && previousLoads.FirstOrDefault()?.FromGrid == true;
+        // A split session (two blocks) whose first block has ended pauses as planned: it isn't "running" for the
+        // rule that keeps a running session going — that rule is for noise, not for the planned pause.
+        bool running = wasActive && !(previousLoads.Count > 1 && previousLoads[0].EndTime <= now);
         ExtraLoad Supplied(DateTime start, DateTime end) =>
           SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Load;
         SimulationResult RunSuppliedSimFrom(DateTime start, DateTime end) =>
           SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Sim;
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, energyNeededWh, chargeRateW, RunSuppliedSimFrom, baseResult,
-          readyBy, wasActive ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
-          preferredStart: wasActive ? null : previousLoads.FirstOrDefault()?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now);
+          readyBy, running ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
+          preferredStart: running ? null : previousLoads.FirstOrDefault(e => e.EndTime > now)?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now);
         if (planned is not { } p) return;
         load.PriceScan = p.Scan ?? "n/a";
+
+        // Two blocks with a pause, where the unbroken session runs through dearer quarters (SessionPlanner.FindSplit).
+        if (p.Choice is StartChoice.Earliest or StartChoice.Cheaper or StartChoice.DeadlineEarliest or StartChoice.DeadlineCheapest
+            && SessionPlanner.FindSplit(baseInput.QuarterHourlyImportPrices, currentSlot, readyBy ?? SplitHorizon(), energyNeededWh, session,
+                 load.Config.MinWindowMinutes, load.Config.MinOffMinutes, startNow: running,
+                 l => SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), l, baseResult, keepFromGrid).Sim, baseResult, p, now) is { } split)
+        {
+          var blocks = SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), split.Sessions, baseResult, keepFromGrid).Loads;
+          var first = blocks[0];
+          bool firstNow = first.StartTime <= currentSlot;
+          load.PriceScan = $"{p.Scan} · split {first.StartTime:HH:mm}–{first.EndTime:HH:mm} + {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} saves {split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} €";
+          string splitWhy = $"split: {first.StartTime:HH:mm}–{first.EndTime:HH:mm}, pause, {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} ({split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} € cheaper than unbroken)";
+          SetResult([.. blocks], firstNow,
+            firstNow
+              ? $"Charging (PriorityPlus {load.Config.Name}: {splitWhy}, {load.CurrentLevel:F0} → {load.TargetLevel:F0}{load.Config.LevelUnit}, bat={_house.Battery.BatterySoc}%)"
+              : wasActive
+                ? $"Paused as planned until ~{first.StartTime:HH:mm} (PriorityPlus {load.Config.Name}: {splitWhy})"
+                : $"Scheduled ~{first.StartTime:HH:mm} (PriorityPlus {load.Config.Name}: {splitWhy})",
+            blocks[1].EndTime);
+          return;
+        }
+
+        // Without a deadline a split may not reach where the unbroken scan doesn't look: sessions must end
+        // ConsequenceMarginHours before the simulation does (their grid consequences stay inside the horizon).
+        DateTime SplitHorizon()
+        {
+          var simEnd = baseResult.Slots[^1].Time.AddMinutes(TimeRange.SlotMinutes).AddHours(-SessionPlanner.ConsequenceMarginHours);
+          return simEnd < priceHorizonEnd ? simEnd : priceHorizonEnd;
+        }
 
         var end = p.End ?? EndFor(p.Start);
         if (!MeetsMinWindow(p.Start, end)) return;

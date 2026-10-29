@@ -28,7 +28,14 @@ public enum StartChoice
 /// <param name="SavingPercent">For <see cref="StartChoice.Cheaper"/>: saving vs the earliest start, in %.</param>
 /// <param name="End">For <see cref="StartChoice.Partial"/>: end of the shortened session; null = full length.</param>
 /// <param name="Scan">The scan's candidates in one line (earliest / cheapest / last plan with their extra cost) — diagnostics.</param>
-public readonly record struct PlannedStart(DateTime Start, StartChoice Choice, float SavingPercent = 0, DateTime? End = null, string? Scan = null);
+/// <param name="Cost">Net grid cost of the chosen session (<see cref="SimulationResult.NetGridCostVs"/>), €; null where not costed (deadline now, partial).</param>
+public readonly record struct PlannedStart(DateTime Start, StartChoice Choice, float SavingPercent = 0, DateTime? End = null, string? Scan = null, float? Cost = null);
+
+/// <summary>A session split into two blocks with a pause between (<see cref="SessionPlanner.FindSplit"/>).</summary>
+/// <param name="Sessions">The two blocks.</param>
+/// <param name="Cost">Net grid cost, €.</param>
+/// <param name="SavingEur">Saving over the unbroken session, €.</param>
+public readonly record struct SplitPlan(IReadOnlyList<ExtraLoad> Sessions, float Cost, float SavingEur);
 
 /// <summary>Price-aware session search for schedulable loads, over EnergySimulator (free of HA).</summary>
 public static class SessionPlanner
@@ -105,16 +112,16 @@ public static class SessionPlanner
 
     if (earliest is { } e && cheapest is { } c)
       return Choose(e, c, preferred, minSavingFraction) is { Later: true } later
-        ? new PlannedStart(later.Start, StartChoice.Cheaper, later.SavingPercent, Scan: scan)
-        : new PlannedStart(e.Start, StartChoice.Earliest, Scan: scan);
+        ? new PlannedStart(later.Start, StartChoice.Cheaper, later.SavingPercent, Scan: scan, Cost: later.Cost)
+        : new PlannedStart(e.Start, StartChoice.Earliest, Scan: scan, Cost: e.Cost);
     // Nothing under the price limit, a deadline: the same choice among all starts that finish in time —
     // a running session isn't stopped for a later start, last cycle's plan stays unless clearly beaten
     // (live 2026-10-27/28: the cheapest start alone flipped with forecast noise between 23:00 and 01:45
     // and stopped the running EV after every 15-min min-on, ten times in one night).
     if (deadline is not null && earliestAny is { } ea && cheapestAny is { } ca)
       return Choose(ea, ca, preferredAny, minSavingFraction) is { Later: true } dl
-        ? new PlannedStart(dl.Start, StartChoice.DeadlineCheapest, dl.SavingPercent, Scan: scan)
-        : new PlannedStart(ea.Start, StartChoice.DeadlineEarliest, Scan: scan);
+        ? new PlannedStart(dl.Start, StartChoice.DeadlineCheapest, dl.SavingPercent, Scan: scan, Cost: dl.Cost)
+        : new PlannedStart(ea.Start, StartChoice.DeadlineEarliest, Scan: scan, Cost: ea.Cost);
 
     int minMinutes = Math.Max(TimeRange.SlotMinutes, minWindowMinutes);
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
@@ -165,18 +172,18 @@ public static class SessionPlanner
   /// <param name="cheapest">Cheapest start and its cost.</param>
   /// <param name="preferred">Last cycle's planned start and its cost; null = none.</param>
   /// <param name="minSavingFraction">Saving a later start needs (∞: never later — a running session).</param>
-  /// <returns>The start, whether it's later than the earliest, and its saving in %.</returns>
-  private static (DateTime Start, bool Later, float SavingPercent) Choose(
+  /// <returns>The start, whether it's later than the earliest, its saving in % and its cost.</returns>
+  private static (DateTime Start, bool Later, float SavingPercent, float Cost) Choose(
     (DateTime Start, float Cost) earliest, (DateTime Start, float Cost) cheapest, (DateTime Start, float Cost)? preferred, float minSavingFraction)
   {
     var e = earliest;
     if (preferred is { } p && p.Start != e.Start && e.Cost > 0 && p.Cost < e.Cost
         && cheapest.Cost > p.Cost - minSavingFraction * e.Cost)
-      return (p.Start, true, (e.Cost - p.Cost) / e.Cost * 100);
+      return (p.Start, true, (e.Cost - p.Cost) / e.Cost * 100, p.Cost);
     float saving = e.Cost - cheapest.Cost;
     return e.Cost > 0 && saving >= minSavingFraction * e.Cost
-      ? (cheapest.Start, true, saving / e.Cost * 100)
-      : (e.Start, false, 0);
+      ? (cheapest.Start, true, saving / e.Cost * 100, cheapest.Cost)
+      : (e.Start, false, 0, e.Cost);
   }
 
   /// <summary>PriorityPlus price check: the load needs no new grid, or only at/under the price limit — and never over the import limit.</summary>
@@ -233,16 +240,133 @@ public static class SessionPlanner
   public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline,
     bool keepFromGrid = false)
   {
+    var (loads, sim) = ChooseSupply(l => simulate(l[0]), [session], baseline, keepFromGrid);
+    return (loads[0], sim);
+  }
+
+  /// <summary>The supply choice for a session in several blocks (<see cref="FindSplit"/>): all blocks from PV and the
+  /// battery if that needs no extra grid, otherwise all directly from the grid; a running grid session stays so.</summary>
+  /// <param name="simulate">Simulates with the sessions added.</param>
+  /// <param name="sessions">The blocks.</param>
+  /// <param name="baseline">Simulation without them.</param>
+  /// <param name="keepFromGrid">The session runs directly from the grid already.</param>
+  /// <returns>The blocks as supplied and their simulation.</returns>
+  public static (IReadOnlyList<ExtraLoad> Loads, SimulationResult Sim) ChooseSupply(Func<IReadOnlyList<ExtraLoad>, SimulationResult> simulate,
+    IReadOnlyList<ExtraLoad> sessions, SimulationResult baseline, bool keepFromGrid = false)
+  {
+    List<ExtraLoad> As(bool fromGrid) => sessions.Select(e => e.WithFromGrid(fromGrid)).ToList();
     if (keepFromGrid)
     {
-      var kept = session.WithFromGrid(true);
+      var kept = As(true);
       return (kept, simulate(kept));
     }
-    var viaBattery = session.WithFromGrid(false);
+    var viaBattery = As(false);
     var sim = simulate(viaBattery);
     if (!sim.HasNewGridVs(baseline)) return (viaBattery, sim);
-    var direct = session.WithFromGrid(true);
+    var direct = As(true);
     return (direct, simulate(direct));
+  }
+
+  /// <summary>Saving a split needs over the unbroken session, as a fraction of its cost (every block is one more on/off of the charger).</summary>
+  public const float SplitMinSavingFraction = 0.05f;
+  /// <summary>…and at least this much, € (a few cents never cause an extra on/off).</summary>
+  public const float SplitMinSavingEur = 0.10f;
+
+  /// <summary>
+  /// The two blocks with the lowest price sum that deliver an energy between two times: a first block of at least
+  /// <paramref name="minRunMinutes"/>, a pause of at least <paramref name="minOffMinutes"/>, the rest — the "cheap, dear,
+  /// cheap" night the unbroken scan can't see. Each quarter is weighted by the energy the load draws in it (the running
+  /// slot only from now). Ties go to the earlier blocks.
+  /// </summary>
+  /// <param name="quarterPrices">Quarter-hourly import prices.</param>
+  /// <param name="minStart">Earliest start (a slot).</param>
+  /// <param name="lastEnd">Latest end (a deadline, or the end of the published prices).</param>
+  /// <param name="energyWh">Energy to deliver, Wh.</param>
+  /// <param name="powerW">The load's power, W.</param>
+  /// <param name="minRunMinutes">Shortest block.</param>
+  /// <param name="minOffMinutes">Shortest pause (the pause is longer: more than the min-off latch).</param>
+  /// <param name="startNow">The first block must start at <paramref name="minStart"/> (a running session isn't stopped for a later start); it may then be shorter than <paramref name="minRunMinutes"/>.</param>
+  /// <param name="now">Current time (the running slot delivers from now); null = from its start.</param>
+  /// <returns>The blocks; null if none fit.</returns>
+  public static (DateTime AStart, DateTime AEnd, DateTime BStart, DateTime BEnd)? CheapestTwoBlocks(PriceList quarterPrices, DateTime minStart, DateTime lastEnd,
+    int energyWh, int powerW, int minRunMinutes, int minOffMinutes, bool startNow = false, DateTime? now = null)
+  {
+    if (powerW <= 0 || energyWh <= 0) return null;
+    var quarters = new List<(DateTime Start, double Wh, double Price)>();
+    for (var q = minStart; q.AddMinutes(TimeRange.SlotMinutes) <= lastEnd; q = q.AddMinutes(TimeRange.SlotMinutes))
+    {
+      if (!quarterPrices.TryGetPrice(q, out float price)) break;
+      quarters.Add((q, Energy.Wh(powerW, q.AddMinutes(TimeRange.SlotMinutes) - ChargeFrom(q, now)), price));
+    }
+    int n = quarters.Count;
+    int runQ = Math.Max(1, (minRunMinutes + TimeRange.SlotMinutes - 1) / TimeRange.SlotMinutes);
+    // A running session's first block may be what's left of it (its min-on is the latch's job); a fresh
+    // one runs at least minRun — else a remainder forced to minRun pushed the block's end on every cycle.
+    int firstRunQ = startNow ? 1 : runQ;
+    // The pause strictly longer than the min-off latch: the stop is seen a few seconds after the block ends,
+    // and a pause of exactly MinOff held the second block back a slot.
+    int offQ = minOffMinutes / TimeRange.SlotMinutes + 1;
+    double quarterWh = Energy.Wh(powerW, TimeRange.Slot);
+    // Prefix sums: energy and energy × price of the first k quarters.
+    var wh = new double[n + 1];
+    var cost = new double[n + 1];
+    for (int k = 0; k < n; k++) { wh[k + 1] = wh[k] + quarters[k].Wh; cost[k + 1] = cost[k] + quarters[k].Wh * quarters[k].Price; }
+
+    (int I, int K, int J, int M, double Cost)? best = null;
+    for (int i = 0; i < n && !(startNow && i > 0); i++)
+      for (int k = firstRunQ; i + k < n; k++)
+      {
+        double rest = energyWh - (wh[i + k] - wh[i]);
+        if (rest <= 0) break;                                          // the first block alone covers it: unbroken
+        int m = (int)Math.Ceiling(rest / quarterWh);
+        if (m < runQ) continue;
+        double lastWh = rest - (m - 1) * quarterWh;
+        for (int j = i + k + offQ; j + m <= n; j++)
+        {
+          double c = cost[i + k] - cost[i] + (cost[j + m - 1] - cost[j]) + lastWh * quarters[j + m - 1].Price;
+          if (best is null || c < best.Value.Cost - 1e-9) best = (i, k, j, m, c);
+        }
+      }
+    if (best is not { } b) return null;
+    double restWh = energyWh - (wh[b.I + b.K] - wh[b.I]);
+    var bStart = quarters[b.J].Start;
+    return (quarters[b.I].Start, quarters[b.I + b.K].Start, bStart, bStart.AddHours(restWh / powerW));
+  }
+
+  /// <summary>
+  /// A split of a PriorityPlus session (<see cref="CheapestTwoBlocks"/>) if it beats the unbroken choice by
+  /// <see cref="SplitMinSavingFraction"/> and <see cref="SplitMinSavingEur"/>, simulated like any candidate (net grid cost
+  /// incl. battery effects, never over the import cap, under the price limit where the unbroken session was).
+  /// </summary>
+  /// <param name="quarterPrices">Quarter-hourly import prices.</param>
+  /// <param name="minStart">Earliest start (a slot).</param>
+  /// <param name="lastEnd">Latest end.</param>
+  /// <param name="energyWh">Energy to deliver, Wh.</param>
+  /// <param name="template">The load as a session template.</param>
+  /// <param name="minRunMinutes">Shortest block.</param>
+  /// <param name="minOffMinutes">Shortest pause.</param>
+  /// <param name="startNow">The first block must start now (the session runs).</param>
+  /// <param name="runSim">Simulates the blocks (supply chosen by the multi-session ChooseSupply).</param>
+  /// <param name="baseline">Simulation without the load.</param>
+  /// <param name="unbroken">The unbroken choice (<see cref="FindBestPriceAwareStart"/>) with its cost.</param>
+  /// <param name="now">Current time.</param>
+  /// <returns>The split; null if none beats the unbroken session clearly.</returns>
+  public static SplitPlan? FindSplit(PriceList quarterPrices, DateTime minStart, DateTime lastEnd, int energyWh, ExtraLoad template,
+    int minRunMinutes, int minOffMinutes, bool startNow, Func<IReadOnlyList<ExtraLoad>, SimulationResult> runSim, SimulationResult baseline,
+    PlannedStart unbroken, DateTime? now)
+  {
+    if (unbroken.Cost is not { } unbrokenCost
+        || CheapestTwoBlocks(quarterPrices, minStart, lastEnd, energyWh, template.PowerW, minRunMinutes, minOffMinutes, startNow, now) is not { } b)
+      return null;
+    ExtraLoad[] sessions = [template.Between(b.AStart, b.AEnd), template.Between(b.BStart, b.BEnd)];
+    var sim = runSim(sessions);
+    bool underLimit = unbroken.Choice is StartChoice.Earliest or StartChoice.Cheaper;
+    if (underLimit ? !PassesPriceCheck(sim, baseline) : sim.ExceedsImportCapVs(baseline)) return null;
+    float cost = sim.NetGridCostVs(baseline);
+    float saving = unbrokenCost - cost;
+    return saving >= SplitMinSavingEur && saving >= SplitMinSavingFraction * Math.Abs(unbrokenCost)
+      ? new SplitPlan(sessions, cost, saving)
+      : null;
   }
 
   /// <summary>Preview of the sessions after the current one until the energy is covered (same price scan, each judged against a baseline with all earlier sessions).</summary>

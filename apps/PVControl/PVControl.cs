@@ -424,6 +424,10 @@ namespace NetDeamon.apps.PVControl
     #region Price publication
     private Entity? _pricePublicationEntity;
     private readonly PricePublicationTracker _pricePublication = new();
+    /// <summary>The same per price source (entity id): which provider delivers tomorrow first — HA's recorder doesn't keep their price lists.</summary>
+    private readonly Dictionary<string, PricePublicationTracker> _sourcePublication = new();
+    private PricePublicationTracker SourceTracker(string entityId) =>
+      _sourcePublication.TryGetValue(entityId, out var t) ? t : _sourcePublication[entityId] = new();
     private DateTime _pricePublicationPublished;
 
     /// <summary>Restores the recorded price publication times from the sensor's "days" attribute after a restart.</summary>
@@ -437,6 +441,12 @@ namespace NetDeamon.apps.PVControl
         _pricePublication.Restore(days.EnumerateArray().Select(d => new PricePublication(
           DateTime.Parse(d.GetProperty("day").GetString()!, CultureInfo.InvariantCulture),
           DateTime.Parse(d.GetProperty("published_at").GetString()!, CultureInfo.InvariantCulture))));
+        foreach (var d in days.EnumerateArray())
+          if (d.TryGetProperty("sources", out var sources) && sources.ValueKind == System.Text.Json.JsonValueKind.Object)
+            foreach (var source in sources.EnumerateObject())
+              SourceTracker(source.Name).Restore([new PricePublication(
+                DateTime.Parse(d.GetProperty("day").GetString()!, CultureInfo.InvariantCulture),
+                DateTime.Parse(source.Value.GetString()!, CultureInfo.InvariantCulture))]);
       }
       catch (Exception ex)
       {
@@ -453,6 +463,12 @@ namespace NetDeamon.apps.PVControl
       bool changed = _pricePublication.Observe(now, until);
       if (changed)
         PVCC_Logger.LogInformation("Tomorrow's prices published (in PVControl's price list at {Time:HH:mm:ss})", now);
+      foreach (var source in PVCC_Config.CurrentImportPriceEntities)
+        if (SourceTracker(source.EntityId).Observe(now, PriceManager.DataEnd(source)))
+        {
+          changed = true;
+          PVCC_Logger.LogInformation("Tomorrow's prices from {Source} at {Time:HH:mm:ss}", source.EntityId, now);
+        }
       if (!changed && now - _pricePublicationPublished < TimeSpan.FromMinutes(5))
         return;
       _pricePublicationPublished = now;
@@ -462,7 +478,15 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_pricePublicationEntity.EntityId, new
       {
         prices_until = until?.ToISO8601(),
-        days = _pricePublication.Days.Select(d => new { day = d.Day.ToString("yyyy-MM-dd"), published_at = d.PublishedAt.ToISO8601() }).ToList(),
+        days = _pricePublication.Days.Select(d => new
+        {
+          day = d.Day.ToString("yyyy-MM-dd"),
+          published_at = d.PublishedAt.ToISO8601(),
+          // When each source first covered tomorrow (only sources seen without it that day).
+          sources = _sourcePublication
+            .Where(s => s.Value.Days.Any(x => x.Day == d.Day))
+            .ToDictionary(s => s.Key, s => s.Value.Days.First(x => x.Day == d.Day).PublishedAt.ToISO8601()),
+        }).ToList(),
       });
     }
     #endregion
@@ -562,6 +586,8 @@ namespace NetDeamon.apps.PVControl
     private int _restoredCommandSeq;
     private bool _chargeThrottled;
     private DateTime _inverterCommandIssued;
+    /// <summary>The planned charge's target SoC as shown (<see cref="InverterCommand.SteadyTarget"/>).</summary>
+    private (int TargetSocPercent, DateTime End)? _shownChargeTarget;
     private Entity? _vppCurveEntity;
     private DateTime _vppCurvePublished;
     private DateTime? _inverterOutOfSyncSince;
@@ -1023,6 +1049,8 @@ namespace NetDeamon.apps.PVControl
     private async Task PublishModeAsync(InverterState inverterState, PlannedCharge? charge, DateTime now)
     {
       var attr_Mode = InverterCommandAttributes(UpdateInverterCommand(inverterState, now, charge), charge);
+      _shownChargeTarget = InverterCommand.SteadyTarget(_shownChargeTarget, charge, now);
+      attr_Mode["charge_target_soc"] = _shownChargeTarget?.TargetSocPercent;
       attr_Mode["next_charge_window_start"] = charge?.Start.ToISO8601() ?? "none";
       attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
       attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);
