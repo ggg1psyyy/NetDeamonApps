@@ -75,6 +75,6 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
 - [x] 8. `deploy/` (`deploy.py apps` / `ha`, machine details in the uncommitted `deploy/local.json`; `HA/` moved to
       `src/PVControl/HA`), LoadBacktest references PVControl, launch settings (`src/Host/Properties`, VS Code),
       devcontainer restores the solution
-- [ ] 9. READMEs: root = umbrella (what's here, run one project alone, deploy, the plugin contract);
+- [x] 9. READMEs: root = umbrella (what's here, run one project alone, deploy, the plugin contract);
       one per project (purpose, build/run/test alone, config, entities, data contracts — DataLogger's
       `hourly`/`daily` schema that PVControl reads — HA files); CLAUDE.md per project with its tests
