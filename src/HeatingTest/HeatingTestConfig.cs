@@ -8,7 +8,8 @@ public class HeatingTestConfig
 {
   /// <summary>false: the app does nothing at all — no entities, no timer, no log.</summary>
   public bool Enabled { get; set; }
-  public string DBLocation { get; set; } = "apps/HeatingTest/heating_test.db";
+  /// <summary>The SQLite log; relative = in the plugin's folder (<see cref="AppFiles.PathOf"/>).</summary>
+  public string DBLocation { get; set; } = "heating_test.db";
   /// <summary>Seconds between two log samples.</summary>
   public int SampleSeconds { get; set; } = 60;
 

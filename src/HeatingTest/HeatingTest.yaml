@@ -1,7 +1,7 @@
 NetDeamon.apps.HeatingTest.HeatingTestConfig:
   # false: the app does nothing at all (no entities, no timer, no log). Independent of PVControl.
   Enabled: true
-  DBLocation: "apps/HeatingTest/heating_test.db"
+  DBLocation: "heating_test.db"   # relative: in this plugin's folder (next to this YAML)
   SampleSeconds: 60
 
   # The only thing the test changes (restored after every test, also after a restart).

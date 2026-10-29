@@ -340,7 +340,7 @@ A night only starts if the heat pump is in heating mode (`select.warmepumpe_modu
 | `sensor.heating_test_status` | `Idle` / `Armed` / `Test` / `Reference` / `Restoring`; attributes: last decision (e.g. why a night was skipped), running run, original level, next kind, last runs |
 | `sensor.heating_test_version` | Deployed build, also the "Firmware" of the Heating Test device |
 
-**DB** (`apps/HeatingTest/heating_test.db`, times as local ISO-8601 text with offset — open with DB Browser for SQLite, Python, Excel, …):
+**DB** (`apps/plugins/HeatingTest/heating_test.db`, in the plugin's folder next to its YAML; times as local ISO-8601 text with offset — open with DB Browser for SQLite, Python, Excel, …):
 
 | Table | Content |
 |---|---|

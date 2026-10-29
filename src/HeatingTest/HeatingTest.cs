@@ -37,6 +37,7 @@ public sealed class HeatingTest : IAsyncInitializable
   readonly IScheduler _scheduler;
   readonly HeatingTestConfig _config;
   readonly HeatingTestDb _db;
+  readonly string _dbPath;
   readonly SemaphoreSlim _lock = new(1, 1);
 
   Entity _armed = null!, _offset = null!, _startTime = null!, _duration = null!, _status = null!;
@@ -60,7 +61,8 @@ public sealed class HeatingTest : IAsyncInitializable
     _logger = logger;
     _scheduler = scheduler;
     _config = config.Value;
-    _db = new HeatingTestDb(_config.DBLocation);
+    _dbPath = AppFiles.PathOf(_config.DBLocation, GetType().Assembly);
+    _db = new HeatingTestDb(_dbPath);
   }
 
   async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
@@ -87,7 +89,7 @@ public sealed class HeatingTest : IAsyncInitializable
     int seconds = Math.Clamp(_config.SampleSeconds, 10, 600);
     _scheduler.SchedulePeriodic(TimeSpan.FromSeconds(seconds), async () => await CycleAsync());
     await CycleAsync();
-    _logger.LogInformation("Heating test ready: logging every {s} s to {db}", seconds, _config.DBLocation);
+    _logger.LogInformation("Heating test ready: logging every {s} s to {db}", seconds, _dbPath);
   }
 
   // ── Cycle ──────────────────────────────────────────────────────────────────────────────────
@@ -299,7 +301,7 @@ public sealed class HeatingTest : IAsyncInitializable
       original_level = _active?.OriginalLevel ?? _restore?.OriginalLevel,
       level = Number(_config.LevelEntity),
       next_kind = (_lastKind == RunKind.Test ? RunKind.Reference : RunKind.Test).ToString(),
-      db = _config.DBLocation,
+      db = _dbPath,
       recent_runs = recent.Select(x => new
       {
         id = x.Run.Id, kind = x.Run.Kind.ToString(),

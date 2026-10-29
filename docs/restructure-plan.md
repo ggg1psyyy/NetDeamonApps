@@ -41,8 +41,11 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
   (DataLogger's class lives in namespace `PVControl`; that stays too).
 - **AppVersion per plugin** (`AppVersion.Of(assembly)`), the GitVersion target in
   `Directory.Build.targets` for every project.
-- **Paths:** `PVControlCommon` resolves the DB paths from `Assembly.GetExecutingAssembly().Location`;
-  as a plugin that is `apps/plugins/PVControl/` — resolve them from the host's base directory.
+- **DBs live in their plugin's folder**, next to its YAML (`apps/plugins/<Name>/`): a relative DB location
+  resolves against the app's assembly folder (`AppFiles.PathOf`, Common). PVControl reads DataLogger's DB
+  as `../DataLogger/energy_history.db`; its own `PVControlCommon` paths switch to `AppFiles.PathOf`.
+  Deploy of a move: stop the add-on, copy the files and the DB (with any `-wal`/`-shm`) to the new folder,
+  start; once the app is seen writing the new DB, delete the old folder.
 - **Order:** HeatingTest first (independent: proves YAML under `apps/plugins/`, the version sensor
   and MQTT entities without risk to the battery), then DataLogger, PVControl last, then MidiControl.
 - **Move-only commits** (`git mv`) separate from content edits, so `git log --follow` keeps history.
