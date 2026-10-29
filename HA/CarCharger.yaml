@@ -1,0 +1,112 @@
+alias: Car Charger
+description: Switches the carport socket and the car on PVControl's charge_now (also when the import cap pauses
+  it). Waits 1 min before acting (PVControl's ImportCapReactionSeconds covers this delay).
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_ev_charger_charge_now
+    to:
+      - 'on'
+    for:
+      hours: 0
+      minutes: 1
+      seconds: 0
+    id: START_CHARGE
+  - trigger: state
+    entity_id:
+      - binary_sensor.pv_control_ev_charger_charge_now
+    to:
+      - 'off'
+    for:
+      hours: 0
+      minutes: 1
+      seconds: 0
+    id: STOP_CHARGE
+  - trigger: zone
+    entity_id: device_tracker.byd_atto_2_standort
+    zone: zone.home
+    event: enter
+    id: COME_HOME
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - STOP_CHARGE
+          - condition: zone
+            entity_id: device_tracker.byd_atto_2_standort
+            zone: zone.home
+          - condition: numeric_state
+            entity_id: sensor.esp_ct8_carport
+            above: 499
+        sequence:
+          - action: script.turn_on
+            metadata: {}
+            target:
+              entity_id:
+                - script.savely_turn_off_charging
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - STOP_CHARGE
+          - condition: zone
+            entity_id: device_tracker.byd_atto_2_standort
+            zone: zone.home
+          - condition: numeric_state
+            entity_id: sensor.esp_ct8_carport
+            below: 500
+        sequence:
+          - action: switch.turn_off
+            metadata: {}
+            target:
+              entity_id: switch.steckdosen_carport
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - START_CHARGE
+          - condition: zone
+            entity_id: device_tracker.byd_atto_2_standort
+            zone: zone.home
+        sequence:
+          - action: switch.turn_on
+            metadata: {}
+            target:
+              entity_id: switch.steckdosen_carport
+            data: {}
+          - action: button.press
+            metadata: {}
+            target:
+              entity_id: button.byd_atto_2_start_charging
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - STOP_CHARGE
+          - condition: state
+            entity_id: device_tracker.byd_atto_2_standort
+            state:
+              - not_home
+        sequence:
+          - action: switch.turn_off
+            metadata: {}
+            target:
+              entity_id: switch.steckdosen_carport
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - COME_HOME
+          - condition: state
+            entity_id: binary_sensor.pv_control_ev_charger_charge_now
+            state:
+              - 'on'
+        sequence:
+          - action: switch.turn_on
+            metadata: {}
+            target:
+              entity_id: switch.steckdosen_carport
+            data: {}
+mode: single

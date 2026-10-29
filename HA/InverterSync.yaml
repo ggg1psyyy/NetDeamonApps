@@ -1,0 +1,139 @@
+# PV Control - Inverter Sync: keeps the inverter in sensor.pv_control_mode.
+#   desired  – the command (mode, battery_power_w, bulk, battery_current_a, seq); PV Control is the only decider
+#   applied  – input_number.pv_control_applied_seq (script.pv_control_apply_mode)
+#   actual   – binary_sensor.pv_control_inverter_in_sync (the one definition of the expected state)
+# Applies when PV Control published a new version, when the inverter left the commanded state, and
+# refreshes the mode-8 run time before it ends. Not while PV Control is down (its last cycle older
+# than 2 min): then the mode-8 run time lapses and the inverter returns to its base work mode by
+# itself. Manual Mode (bulk charge) has no run time, so after 5 min without PV Control the inverter
+# is put back to Self Use here.
+# More than 5 re-applies of the same version: stop, flag, notify (PV Control health → error).
+alias: PV Control - Inverter Sync
+description: Applies PV Control's inverter command and keeps the inverter in it.
+mode: queued
+max: 3
+triggers:
+  - trigger: state
+    entity_id: sensor.pv_control_mode
+    attribute: seq
+    for:
+      seconds: 5
+    id: COMMAND
+  - trigger: state
+    entity_id:
+      - sensor.solax_modbus_power_control
+      - select.solax_charger_use_mode
+      - select.solax_manual_mode_select
+      - number.solax_battery_charge_max_current
+    for:
+      seconds: 20
+    id: INVERTER
+  - trigger: time_pattern
+    minutes: /1
+    id: TICK
+conditions: []
+variables:
+  cycle_age_s: >-
+    {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
+    {{ (now() - as_datetime(lc)).total_seconds() | int if lc is not none else 999999 }}
+  command_ok: >-
+    {{ cycle_age_s < 120 and states('sensor.pv_control_mode') not in ['unknown', 'unavailable'] }}
+  stale_manual: "{{ cycle_age_s > 300 and is_state('select.solax_charger_use_mode', 'Manual Mode') }}"
+  mode: "{{ states('sensor.pv_control_mode') }}"
+  seq: "{{ state_attr('sensor.pv_control_mode', 'seq') | int(0) }}"
+  power_w: "{{ state_attr('sensor.pv_control_mode', 'battery_power_w') | int(0) }}"
+  bulk: "{{ state_attr('sensor.pv_control_mode', 'bulk') == true }}"
+  current_a: "{{ state_attr('sensor.pv_control_mode', 'battery_current_a') | float(30) }}"
+  applied_seq: "{{ states('input_number.pv_control_applied_seq') | int(-1) }}"
+  vpp: "{{ not (mode == 'force_charge' and bulk) and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
+  applied_age_s: >-
+    {% set at = states('input_datetime.pv_control_applied_at') %}
+    {{ (now() - as_datetime(at) | as_local).total_seconds() | int if at not in ['unknown', 'unavailable', ''] else 999999 }}
+  new_version: "{{ command_ok and seq != applied_seq }}"
+  fell_back: "{{ command_ok and seq == applied_seq and is_state('binary_sensor.pv_control_inverter_in_sync', 'off') }}"
+  # Mode 8 runs 1200 s; refresh after 600 s.
+  refresh_due: "{{ command_ok and seq == applied_seq and vpp and not fell_back and applied_age_s > 600 }}"
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ stale_manual }}"
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: select.solax_charger_use_mode
+            data:
+              option: Self Use Mode
+          - action: ntfy.publish
+            target:
+              entity_id: notify.ha_warnings
+            data:
+              title: PV Control - not running
+              message: >-
+                No PV Control cycle for {{ (cycle_age_s / 60) | round(0) | int }} min while the inverter was in
+                Manual Mode: switched back to Self Use.
+      - conditions:
+          - condition: template
+            value_template: "{{ new_version }}"
+        sequence:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.pv_control_reapply_count
+            data:
+              value: 0
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.pv_control_inverter_sync_blocked
+          - action: script.pv_control_apply_mode
+            data:
+              mode: "{{ mode }}"
+              power_w: "{{ power_w }}"
+              bulk: "{{ bulk }}"
+              current_a: "{{ current_a }}"
+              seq: "{{ seq }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ fell_back }}"
+          - condition: state
+            entity_id: input_boolean.pv_control_inverter_sync_blocked
+            state: "off"
+        sequence:
+          - if:
+              - condition: numeric_state
+                entity_id: input_number.pv_control_reapply_count
+                above: 4
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.pv_control_inverter_sync_blocked
+              - action: ntfy.publish
+                target:
+                  entity_id: notify.ha_warnings
+                data:
+                  title: PV Control - inverter not following
+                  message: >-
+                    Command {{ mode }} ({{ power_w }} W, bulk {{ bulk }}, seq {{ seq }}) re-applied 5 times;
+                    VPP '{{ states('sensor.solax_modbus_power_control') }}', work mode
+                    '{{ states('select.solax_charger_use_mode') }}'. Stopped retrying until PV Control issues a new command.
+            else:
+              - action: input_number.increment
+                target:
+                  entity_id: input_number.pv_control_reapply_count
+              - action: script.pv_control_apply_mode
+                data:
+                  mode: "{{ mode }}"
+                  power_w: "{{ power_w }}"
+                  bulk: "{{ bulk }}"
+                  current_a: "{{ current_a }}"
+                  seq: "{{ seq }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ refresh_due }}"
+        sequence:
+          - action: script.pv_control_apply_mode
+            data:
+              mode: "{{ mode }}"
+              power_w: "{{ power_w }}"
+              bulk: "{{ bulk }}"
+              current_a: "{{ current_a }}"
+              seq: "{{ seq }}"

@@ -1,0 +1,164 @@
+# script.pv_control_apply_mode – the only place that writes the inverter for PV Control's modes.
+#
+# SolaX X3-Hybrid G4 (DSP 1.50 / ARM 1.47):
+#  - VPP mode 8 ("Individual Setting – Duration Mode", registers 0xA0–0xA7) through the integration's
+#    *_direct entities: the numbers are only stored locally, selecting the mode on
+#    select.solax_remote_control_power_control_mode_direct writes the whole block (RAM, no EEPROM).
+#    VPP charges the battery with at most ~5 kW (20–21 A) on this firmware — measured 2026-10-26 in
+#    modes 8 and 4, and in every negative-price charge since spring.
+#  - Bulk grid charges (PV Control's `bulk`) therefore run as Manual Mode + Force Charge at the battery charge
+#    current (number.solax_battery_charge_max_current): 30 A, or the import cap's limit in whole amps — set
+#    before Manual Mode starts, back to the maximum (0 A with charging disabled) once the bulk charge ends.
+#    Work mode and charge current are EEPROM, so they're only written when they change.
+#  - Everything else: base work mode Self Use (Feedin Priority for feedin_priority) and VPP mode 8 or off.
+# Another inverter = another version of this script; PV Control and the reconciler stay the same.
+alias: PV Control - Apply Mode
+description: Applies sensor.pv_control_mode to the inverter (bulk charge = Manual Force Charge, else SolaX VPP mode 8 in RAM) and records the applied seq.
+mode: queued
+max: 5
+fields:
+  mode:
+    description: PV Control mode (normal, force_charge, force_charge_grid_only, grid_only, force_discharge, feedin_priority)
+  power_w:
+    description: Battery power, W (+ charge, − discharge)
+  bulk:
+    description: Bulk grid charge at full power (Manual Force Charge path)
+  current_a:
+    description: Battery charge current of a bulk charge, A (the import cap's limit, else the maximum)
+  seq:
+    description: Version of the command
+  duration_s:
+    description: Run time of a mode-8 command, s (default 1200; the reconciler refreshes it after 600 s)
+sequence:
+  - variables:
+      manual: "{{ mode == 'force_charge' and (bulk | default(false)) | bool }}"
+      vpp: "{{ not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
+      base: "{{ 'Manual Mode' if manual else ('Feedin Priority' if mode == 'feedin_priority' else 'Self Use Mode') }}"
+      # SolaX push power: positive discharges, negative charges. Passed as PVControl commands it
+      # (≤ 30 A × voltage, less while the import cap throttles): the inverter limits VPP itself.
+      # The number takes 100-W steps: rounded towards 0, never above the command.
+      push_w: "{{ -((power_w | int(0) / 100) | int * 100) }}"
+      pv_limit_w: "{{ 0 if mode == 'force_charge_grid_only' else 30000 }}"
+      # Battery charge current: a bulk charge's (whole amps), else what "PV Control - Battery Settings" keeps.
+      max_a: "{{ state_attr('sensor.pv_control_mode', 'max_current_a') | int(30) }}"
+      bulk_a: "{{ [current_a | float(max_a) | int, max_a] | min }}"
+      normal_a: "{{ max_a if is_state('binary_sensor.pv_control_battery_charging_enabled', 'on') else 0 }}"
+      # Run time of one command: the reconciler refreshes it while PV Control runs; if HA or PV Control
+      # stops, the inverter returns to its base work mode by itself within this time.
+      duration_s: "{{ duration_s | default(1200) | int }}"
+  - if:
+      - condition: template
+        value_template: "{{ manual }}"
+    then:
+      # The charge current first (the import cap's limit applies from the first second), VPP off, then
+      # Manual Mode + Force Charge (EEPROM, only what really changes).
+      - if:
+          - condition: template
+            value_template: "{{ (states('number.solax_battery_charge_max_current') | float(-1) - bulk_a) | abs >= 0.5 }}"
+        then:
+          - action: number.set_value
+            target:
+              entity_id: number.solax_battery_charge_max_current
+            data:
+              value: "{{ bulk_a }}"
+      - action: select.select_option
+        target:
+          entity_id: select.solax_remote_control_power_control_mode_direct
+        data:
+          option: Disabled
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('select.solax_manual_mode_select', 'Force Charge') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.solax_manual_mode_select
+            data:
+              option: Force Charge
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('select.solax_charger_use_mode', 'Manual Mode') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.solax_charger_use_mode
+            data:
+              option: Manual Mode
+    else:
+      # Base work mode (EEPROM, only when it changes). VPP doesn't start from Manual Mode (SolaX).
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('select.solax_charger_use_mode', base) }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.solax_charger_use_mode
+            data:
+              option: "{{ base }}"
+          - delay:
+              seconds: 5
+      # After a bulk charge the import cap's current back to the maximum — once Manual Mode is left, so
+      # the full current never runs as a force charge.
+      - if:
+          - condition: template
+            value_template: "{{ (states('number.solax_battery_charge_max_current') | float(-1) - normal_a) | abs >= 0.5 }}"
+        then:
+          - action: number.set_value
+            target:
+              entity_id: number.solax_battery_charge_max_current
+            data:
+              value: "{{ normal_a }}"
+      - if:
+          - condition: template
+            value_template: "{{ vpp }}"
+        then:
+          - action: number.set_value
+            target:
+              entity_id: number.solax_remotecontrol_pv_power_limit_direct
+            data:
+              value: "{{ pv_limit_w }}"
+          - action: number.set_value
+            target:
+              entity_id: number.solax_remotecontrol_push_mode_power_8_9_direct
+            data:
+              value: "{{ push_w }}"
+          - action: number.set_value
+            target:
+              entity_id: number.solax_remotecontrol_duration_8_direct_2
+            data:
+              value: "{{ duration_s }}"
+          # Register 0xA7 depends on the VPP mode (SolaX "VPP function Definition of ESS"): WaitTimeout in
+          # modes 1/2, NextMotion in mode 8, ExecDuration in mode 9 — the integration labels it "timeout"
+          # for 8/9. Mode 8: 0xA0 = 160 = after the run time exit VPP to the base work mode (measured
+          # 2026-10-26: run time 120 s → left VPP after ~120 s).
+          - action: number.set_value
+            target:
+              entity_id: number.solax_remotecontrol_timeout_8_9_direct
+            data:
+              value: 160
+          - action: select.select_option
+            target:
+              entity_id: select.solax_power_control_mode_target_set_type_direct
+            data:
+              option: Set
+          - action: select.select_option
+            target:
+              entity_id: select.solax_remote_control_power_control_mode_direct
+            data:
+              option: Individual Setting - Duration Mode
+        else:
+          - action: select.select_option
+            target:
+              entity_id: select.solax_remote_control_power_control_mode_direct
+            data:
+              option: Disabled
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.pv_control_applied_seq
+    data:
+      value: "{{ seq | int(0) }}"
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.pv_control_applied_at
+    data:
+      timestamp: "{{ now().timestamp() }}"

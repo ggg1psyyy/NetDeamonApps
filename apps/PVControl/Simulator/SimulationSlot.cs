@@ -1,7 +1,9 @@
+using System;
+
 namespace NetDeamon.apps.PVControl.Simulator;
 
 /// <summary>
-/// Immutable snapshot of one 15-minute slot produced by <see cref="PVSimulator.Simulate"/>.
+/// Immutable snapshot of one 15-minute slot produced by <see cref="EnergySimulator.Simulate"/>.
 /// Together the slots form a two-day timeline that shows exactly what the system is expected
 /// to do: which inverter mode will be active, how the battery SoC evolves, and where energy
 /// flows (PV generation, house load, grid import/export, battery charge/discharge).

@@ -1,0 +1,190 @@
+type: custom:plotly-graph
+title: Predicted SoC
+refresh_interval: auto
+
+entities:
+  # ── Base fill: normal/automatic = default blue (covers full SoC area) ────
+  - entity: sensor.pv_control_info_predicted_soc
+    showlegend: false
+    filters:
+      - fn: |-
+          ({ meta, vars }) => {
+            vars.d = meta.data_actual || [];
+            const now = new Date();
+            vars.f = vars.d.filter(s => new Date(s.datetime) >= now);
+            return {
+              xs: vars.f.map(({ datetime }) => new Date(datetime)),
+              ys: vars.f.map(({ soc }) => soc),
+            };
+          }
+    type: scatter
+    mode: lines
+    fill: tozeroy
+    fillcolor: "rgba(50,150,255,0.20)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  # ── Mode fills: overlap on top of base, only where mode is active ─────────
+  - entity: sensor.pv_control_info_predicted_soc
+    name: feedin_priority
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'feedin_priority' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(50,210,80,0.30)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_charge
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_charge' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,100,50,0.35)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_charge_grid_only
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_charge_grid_only' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,150,50,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: grid_only
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'grid_only' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(180,80,220,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  - entity: sensor.pv_control_info_predicted_soc
+    name: force_discharge
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.mode === 'force_discharge' ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(255,200,0,0.32)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  # ── Export-disallowed overlay: orthogonal to mode, drawn last so it tints whatever
+  # mode fill (if any) is active underneath — e.g. force_charge + export disallowed at once.
+  - entity: sensor.pv_control_info_predicted_soc
+    name: export_disallowed
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(s => s.export_allowed === false ? s.soc : null) })"
+    type: scatter
+    mode: lines
+    connectgaps: false
+    fill: tozeroy
+    fillcolor: "rgba(160,160,100,0.28)"
+    line:
+      color: "rgba(0,0,0,0)"
+      width: 0
+      shape: spline
+
+  # ── SoC line on top: solid past ───────────────────────────────────────────
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Predicted SoC
+    filters:
+      - fn: |-
+          ({ vars }) => {
+            const now = new Date();
+            const past = vars.d.filter(s => new Date(s.datetime) <= now);
+            return {
+              xs: past.map(({ datetime }) => new Date(datetime)),
+              ys: past.map(({ soc }) => soc),
+            };
+          }
+    type: scatter
+    mode: lines
+    line:
+      color: lightblue
+      width: 2
+      shape: spline
+
+  # ── SoC line on top: gradient-colored future (red=0% → green=100%, pastel) ─
+  - entity: sensor.pv_control_info_predicted_soc
+    name: Predicted SoC (future)
+    showlegend: false
+    filters:
+      - fn: "({ vars }) => ({ xs: vars.f.map(({ datetime }) => new Date(datetime)), ys: vars.f.map(({ soc }) => soc) })"
+    type: scatter
+    mode: markers
+    marker:
+      color: $fn ({ vars }) => vars.f.map(({ soc }) => soc)
+      colorscale:
+        - [0,    "rgb(230,120,120)"]
+        - [0.5,  "rgb(235,220,120)"]
+        - [1,    "rgb(120,210,130)"]
+      cmin: 0
+      cmax: 100
+      size: 3
+      showscale: false
+
+  # ── Import price (y2) ─────────────────────────────────────────────────────
+  - entity: sensor.pv_control_current_import_price_brutto
+    name: Import Price
+    yaxis: y2
+    filters:
+      - fn: |-
+          ({ meta }) => ({
+            xs: meta.data.map(({ start_time }) => new Date(start_time)),
+            ys: meta.data.map(({ price_per_kwh }) => price_per_kwh),
+          })
+    type: scatter
+    mode: lines
+    line:
+      color: grey
+      width: 1
+
+layout:
+  xaxis:
+    autorange: true
+  yaxis:
+    title: SoC (%)
+    range: [0, 105]
+    autorange: false
+  yaxis2:
+    title: Price (€/kWh)
+    overlaying: "y"
+    side: right
+    range: [0, 0.55]
+    showgrid: false
+    tickformat: ".2f"

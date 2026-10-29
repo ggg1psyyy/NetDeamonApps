@@ -1,29 +1,79 @@
 NetDeamon.apps.PVControl.PVConfig:
   # config entries marked with '***' are required
 
-  # Net Price entity of epex_spot integration (contains hourly list of energy prices in attributes) 
+  # Market Price entities of the epex_spot integration (the raw EPEX price, list in the `data` attribute;
+  # markup, network fee and tax are added below — the integration's surcharge/tax stay 0)
   # *** ha_epex_spot https://github.com/mampfes/ha_epex_spot
-  # since these fail sometimes you can have multiple different sources, order = priority
-  CurrentImportPriceEntities: 
-    - sensor.epex_spot_data_market_price_3
-    - sensor.epex_spot_data_market_price
-    - sensor.epex_spot_data_market_price_2
+  # Several sources (they fail sometimes, and publish tomorrow at different times): all are equal,
+  # the one whose data reaches furthest is used — whichever publishes tomorrow first wins; on a tie
+  # the earlier one in the list. ImportPriceResolution below applies to every source.
+  CurrentImportPriceEntities:
+    - sensor.epex_spot_data_market_price     # Awattar, 60 min
+    - sensor.epex_spot_data_market_price_2   # smartENERGY, 15 min
+    - sensor.epex_spot_data_market_price_4   # Energy-Charts, 15 min
+    - sensor.epex_spot_data_market_price_3   # ENTSO-E Transparency, 15 min
   ImportPriceMultiplier: 1.0
-  ImportPriceAddition: 1.2
-  ImportPriceNetwork: 7.992
+  ImportPriceAddition: 0.012
+  ImportPriceNetwork: 0.07992
+  ImportPriceNetworkPeriods:
+    # SNAP (Sommer-Nieder-Arbeitspreis): 20% discount on network fee, Apr–Sep 10:00–16:00
+    # StartYear/EndYear bound the months: from StartMonth of StartYear to EndMonth of EndYear
+    # (0 or missing = no limit). End a tariff by hand when it goes.
+    - Name: SNAP (Sommer-Nieder-Arbeitspreis)
+      StartMonth: 4
+      EndMonth: 9
+      StartHour: 10
+      EndHour: 16
+      StartYear: 2026
+      EndYear: 2099
+      Price: 0.06882
+    # WiNAP (Winter-Nieder-Arbeitspreis): Oct 1 - Mar 31, 23:00-05:00, first from 1 Oct 2027
+    # (SNE-G-V, BGBl. II 299/2026, § 7 Abs. 4 and § 32 Abs. 4). Its price comes with the
+    # tariff ordinance (SNE-T-V); until then the SNAP rate as a placeholder.
+    # Month/hour ranges both wrap across their boundary (Oct→Mar, 23:00→05:00) — see
+    # NetworkPricePeriod.IsActiveAt in PVControlCommon.cs.
+    - Name: WiNAP (Winter-Nieder-Arbeitspreis)
+      StartMonth: 10
+      EndMonth: 3
+      StartHour: 23
+      EndHour: 5
+      StartYear: 2027
+      EndYear: 2099
+      Price: 0.06882
   ImportPriceTax: 0.2
-  # Net price of exported energy
-  CurrentExportPriceEntity: sensor.epex_spot_data_price
-  ExportPriceIsVariable: true
+  # How the raw price data is interpreted:
+  #   QuarterHourly = use each 15-min price as-is
+  #   Hourly        = average the four 15-min prices within each hour and apply that
+  #                    mean to all four slots (use this if your provider bills the
+  #                    hourly EPEX average rather than the raw 1/4h price)
+  ImportPriceResolution: Hourly
+  # Tomorrow's prices arrive ~13:00; until then the simulation estimates them from the same hour a
+  # day earlier. Risk premium on those estimates: import × 1.05, export × 0.95 — an estimated slot
+  # only wins over a published one when it's clearly better.
+  EstimatedPricePremium: 0.05
+  # How to determine the export (feed-in) price, checked in order:
+  #   1. ExportPriceSameAsImport: true  -> reuse the resolved import netto price (scaled below)
+  #   2. ExportPriceFixed: true         -> use a fixed feed-in tariff (entity takes priority over value)
+  #   3. otherwise                      -> use CurrentExportPriceEntities (own fallback list, like import)
+  ExportPriceSameAsImport: true
+  ExportPriceFixed: false
+  # ExportPriceFixedEntity: sensor.some_fixed_feedin_tariff
+  # ExportPriceFixedValue: 0.05
+  # CurrentExportPriceEntities:
+  #   - sensor.epex_spot_data_price_2
   ExportPriceMultiplier: 0.8
   ExportPriceAddition: 0.0
   ExportPriceNetwork: 0.0
   ExportPriceTax: 0.0
-  # Inverter status/run mode
+  # Same as ImportPriceResolution, but for the export price. Only applies when the export price
+  # is variable (ExportPriceSameAsImport or the independent-entities fallback) — a fixed feed-in
+  # tariff (ExportPriceFixed: true) has no resolution concept.
+  ExportPriceResolution: Hourly
+  # Inverter status/run mode (health: inverter data available)
   InverterStatusEntity: sensor.solax_run_mode
-  InverterStatusNormalString: "Normal Mode"
   # daily energy import
   DailyImportEnergyEntity: sensor.solax_today_s_import_energy
+  BatteryInputEnergyEntity: sensor.solax_battery_input_energy_today
   # daily energy export
   DailyExportEnergyEntity: sensor.solax_today_s_export_energy
   # *** current house load (W)
@@ -51,10 +101,12 @@ NetDeamon.apps.PVControl.PVConfig:
   BatteryCapacityEntity: sensor.solax_bms_battery_capacity
   # Max Capacity of battery (Wh) direct value (if both are used, sensor has priority, but one of these is required)
   # BatteryCapacityValue: 11520
-  # Max Charge currrent of battery (A) from sensor
-  MaxBatteryChargeCurrentEntity: number.solax_battery_charge_max_current
-  # Max Charge currrent of battery (A) direct value (if both are used, sensor has priority)
+  # Max charge current of the battery (A), the hardware maximum. Not the Solax number entity: the
+  # "PV Control - Battery Settings" automation sets that one to the import cap's limit
+  # (sensor.pv_control_battery_charge_current_limit).
   MaxBatteryChargeCurrrentValue: 30
+  # Battery voltage while charging: W per A of the charge current (230 V without it)
+  BatteryVoltageEntity: sensor.solax_battery_voltage_charge
   # Min SoC to keep (%) from sensor
   MinBatterySoCEntity: sensor.solax_battery_actual_min_soc
   # Min SoC to keep (%) direct value (if both are used, sensor has priority)
@@ -62,19 +114,107 @@ NetDeamon.apps.PVControl.PVConfig:
   # Energycost logging
   # DB location
   EnergyCostDBLocation: "apps/PVControl/energy_costs.db"
-  TotalImportEnergyEntity: sensor.solax_grid_import_total
+  # Grid import counters (kWh), in priority order: the first is used while it works (unavailable, or
+  # frozen while a later one keeps counting = failed), the next ones only as fallback.
+  TotalImportEnergyEntities:
+    - sensor.esp_wmbus_0x290340_stromzahler_bezug   # utility meter via wM-Bus (billing meter, 5 s, 10 Wh)
+    - sensor.solax_grid_import_total                # inverter (0.1 kWh)
   TotalExportEnergyEntity: sensor.solax_grid_export_total
-  # HeatpumpManager
-  # current Load (W)
-  HeatPumpLoadEntity: sensor.wp_power_total
-  # current Warwater temperature (�C)
-  WarmwaterTemperatureEntity: sensor.wp_warmwasser_temperatur
-  # automatic Warmwater target temperature (�C)
-  WarmwaterSetPointNormalEntity: number.wp_solltemperatur_warmwasser
-  # manual Warmwater target temperature (�C)
-  WarmwaterSetPointOnceEntity: number.wp_solltemperatur_warmwasser_einmalig
-  WarmwaterStartOnceEntity: switch.wp_einmalige_warmwasser_erzeugung
-  # aproximate Energy used to heat up 1 degree of water (Wh)
-  WarmWaterEnergyNeededPerDegree: 110
-  # aproximate time needed to heat up 1 degree of water (minutes)
-  MinutesPerDegree: 2
+  # Import cap: highest mean grid import of any 15-min block (W). The network power price
+  # (SNE-G-V, from 2027) counts the month's highest quarter-hour; above 10 kW it costs extra.
+  # 0 = off. Battery grid charging is throttled first, then the EV paused, then warm-water heatings held.
+  MaxGridImportW: 9800
+  # How long a requested change takes to show at the meter (automation delays, ramps), s
+  ImportCapReactionSeconds: 90
+  # Remote-controlled (VPP) grid charging is limited by the inverter, falling with the SoC (SolaX G4:
+  # 5.07 kW at 21 %, 3.33 kW at 63 %; Manual Force Charge 7.45 kW). Default line W = At0 + Slope × SoC
+  # until the curve is learned from VPP charges (sensor.pv_control_vpp_charge_limit).
+  VppChargePowerAt0PctW: 5950
+  VppChargePowerSlopeWPerPct: -41
+  # HA's feedback whether the inverter runs sensor.pv_control_mode (HA/InverterHelpers.yaml)
+  InverterSyncEntity: binary_sensor.pv_control_inverter_in_sync
+  # Schedulable extra loads — each entry auto-creates HA entities for mode/target if not set here.
+  # Mode values: Off, Optimal, Priority, PriorityPlus, Emergency
+  # If Mode is omitted: HA select entity auto-created (select.pv_control_<slug>_mode)
+  # If TargetLevel is omitted: HA number entity auto-created (number.pv_control_<slug>_target_level)
+  SchedulableLoads:
+    - Name: "EV Charger"
+      Priority: 10
+      # EnergyPerLevelUnitKwh: kWh per % — 60 kWh battery / 100 % = 0.6
+      EnergyPerLevelUnitKwh: 0.6
+      AvgPowerW: 1800
+      MinActivePowerW: 500
+      LevelUnit: "%"
+      TargetLevelMin: 20
+      TargetLevelMax: 100
+      TargetLevelStep: 5
+      TargetLevelDefault: 80
+      CurrentLevelEntity: sensor.byd_atto_2_ladezustand
+      ActualPowerEntity: sensor.esp_ct8_carport
+      ActualEnergyEntity: sensor.esp_ct8_daily_energy_carport
+      # Reflects whether a chargeable car is at home (HA-side; already accounts for the
+      # other-car-at-home override there) — used only to skip planning a charge window when
+      # nothing is actually here to charge. The physical charger's own "ignore ChargeNow if
+      # not Home" safety gate stays entirely in HA, unaffected by this.
+      AvailabilityEntity: binary_sensor.ev_is_home
+      # Subtract historical car-charging from the base load prediction (avoids double-counting).
+      # Known DB column names: carcharge, warmwaterenergy, heatpumpenergy. Omit if no DB history.
+      HistoryDbColumn: "carcharge"
+      # Minimum window length (minutes) required to start a session.
+      # Prevents start/stop oscillation when the window is marginal (e.g. real draw > AvgPowerW).
+      # Tune alongside AvgPowerW — if real draw matches preset, 0 is fine.
+      MinWindowMinutes: 15
+      # Minimum off-time after a session stops before it may restart (stops are never delayed).
+      MinOffMinutes: 15
+      # Max minutes between two charge-window searches (the expensive part of a cycle). In between
+      # it only replans on triggers: setting changes, new prices/quarter-hour, house battery SoC
+      # or car SoC changes, charger start/stop, house load off its forecast.
+      ReplanIntervalMinutes: 5
+      # Mode and TargetLevel omitted — HA entities auto-created
+
+  # Weather-aware load forecast (base load + heat pump heating by outside temperature).
+  # Mode: Average (off) | Shadow (computed and published in sensor.pv_control_load_forecast,
+  # PVControl keeps using the hour-of-day average) | Model (PVControl uses it; falls back to the
+  # average without weather forecast or history).
+  LoadForecast:
+    Mode: Model
+    # The heat pump heats the house only in these modes; otherwise only its standby is forecast.
+    HeatPumpModeEntity: select.warmepumpe_modus
+    HeatingModes:
+      - "Warmwasser & Heizung"
+    # Hourly forecast via weather.get_forecasts (Pirate Weather: 168 h).
+    WeatherEntity: weather.pirateweather
+    WeatherRefreshMinutes: 60
+
+  # Warm-water tank planner: heats with one-time heatings at the cheapest times that keep the
+  # comfort periods warm. Creates select.pv_control_warm_water_mode (Off / PlanOnly / Auto),
+  # comfort and boost temperature numbers, button.pv_control_warm_water_boost, a time + enable
+  # switch per comfort period, and sensor.pv_control_warm_water_plan. Set the heat pump's own
+  # warm-water setpoint low (e.g. 20 °C) before switching to Auto — it stays as a safety net.
+  WarmWater:
+    Name: "Warm Water"
+    TemperatureEntity: sensor.wp_warmwasser_temperatur
+    # Used for learning the tank model, replanning and the house load; the control itself uses
+    # OneTimeActiveEntity.
+    HeatingActiveEntity: binary_sensor.wp_warmwasser_erzeugung_aktiv
+    OneTimeActiveEntity: binary_sensor.wp_einmalige_ww_erzeugung_aktiv
+    OneTimeSetpointEntity: number.wp_solltemperatur_warmwasser_einmalig
+    OneTimeSwitchEntity: switch.wp_einmalige_warmwasser_erzeugung
+    AutomaticSetpointEntity: number.wp_solltemperatur_warmwasser
+    PowerEntity: sensor.wp_power_total
+    # Subtract the historical warm-water energy from the house load prediction (the plan adds it back).
+    HistoryDbColumn: "warmwaterenergy"
+    MaxTemp: 57
+    ComfortTempDefault: 42
+    ComfortMarginK: 1
+    BoostTempDefault: 45
+    # Heat pump efficiency vs outside temperature (from LoadForecast.WeatherEntity): electrical
+    # energy −3 % per K warmer (measured COP 3.9 → 6.3 over 15 K). 0 = off.
+    EfficiencyChangePerK: 0.03
+    ComfortPeriods:
+      - Name: Morning
+        DefaultTime: "06:30"
+        DurationMinutes: 60
+      - Name: Evening
+        DefaultTime: "19:00"
+        DurationMinutes: 120

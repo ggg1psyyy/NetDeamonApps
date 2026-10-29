@@ -1,5 +1,10 @@
 alias: PV Control - Battery Settings
-description: ""
+description: >-
+  Battery charging on/off (binary_sensor.pv_control_battery_charging_enabled): maximum (30 A) / 0 A
+  charge current. This register is stored in EEPROM, so it only changes with that switch. A bulk grid
+  charge (Manual Force Charge) runs at the import cap's current, which script.pv_control_apply_mode
+  writes and restores — this automation stays out of it while one runs; the charge power of every
+  other grid charge comes with sensor.pv_control_mode (VPP, RAM).
 triggers:
   - trigger: state
     entity_id:
@@ -11,29 +16,22 @@ triggers:
       - binary_sensor.pv_control_battery_charging_enabled
     to: "on"
     id: BATT_ENABLE
-conditions: []
+conditions:
+  - condition: template
+    value_template: >-
+      {{ not (is_state('sensor.pv_control_mode', 'force_charge') and state_attr('sensor.pv_control_mode', 'bulk') == true) }}
+variables:
+  charge_current: "{{ (state_attr('sensor.pv_control_mode', 'max_current_a') | int(30)) if trigger.id == 'BATT_ENABLE' else 0 }}"
 actions:
-  - choose:
-      - conditions:
-          - condition: trigger
-            id:
-              - BATT_ENABLE
-        sequence:
-          - action: number.set_value
-            metadata: {}
-            data:
-              value: "30"
-            target:
-              entity_id: number.solax_battery_charge_max_current
-      - conditions:
-          - condition: trigger
-            id:
-              - BATT_DISABLE
-        sequence:
-          - action: number.set_value
-            metadata: {}
-            data:
-              value: "0"
-            target:
-              entity_id: number.solax_battery_charge_max_current
-mode: single
+  - if:
+      - condition: template
+        value_template: >-
+          {{ (states('number.solax_battery_charge_max_current') | float(-1) - charge_current) | abs >= 0.1 }}
+    then:
+      - action: number.set_value
+        metadata: {}
+        data:
+          value: "{{ charge_current }}"
+        target:
+          entity_id: number.solax_battery_charge_max_current
+mode: queued

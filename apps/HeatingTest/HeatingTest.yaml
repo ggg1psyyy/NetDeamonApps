@@ -1,0 +1,58 @@
+NetDeamon.apps.HeatingTest.HeatingTestConfig:
+  # false: the app does nothing at all (no entities, no timer, no log). Independent of PVControl.
+  Enabled: true
+  DBLocation: "apps/HeatingTest/heating_test.db"
+  SampleSeconds: 60
+
+  # The only thing the test changes (restored after every test, also after a restart).
+  LevelEntity: number.wp_heizkennlinie_niveau
+  SlopeEntity: number.wp_heizkennlinie_neigung
+  # Start condition and log
+  OutdoorEntity: sensor.wp_aussentemperatur
+  OutdoorHouseEntity: sensor.temperature_outside
+  FlowEntity: sensor.wp_vorlauftemperatur_sekundar
+  FlowSetpointEntity: sensor.wp_vorlauftemperatur_soll
+  ReturnEntity: sensor.wp_rucklauftemperatur_sekundar
+  CompressorEntity: sensor.wp_leistung_verdichter
+  PowerEntity: sensor.wp_power_total
+  CopEntity: sensor.wp_leistungszahl
+  HeatingActiveEntity: binary_sensor.wp_heizung_aktiv
+  WarmWaterActiveEntity: binary_sensor.wp_warmwasser_erzeugung_aktiv
+
+  # A night only runs while the heat pump is in one of these modes (a running test ends and the
+  # level is restored when it leaves them).
+  HeatPumpModeEntity: select.warmepumpe_modus
+  HeatingModes:
+    - "Warmwasser & Heizung"
+
+  # A test night only starts if it's at most this warm outside at the start time, and the heat
+  # pump heated the house at least MinHeatingMinutes24h in the last 24 h.
+  MaxOutdoorAtStart: 6
+  MinHeatingMinutes24h: 120
+
+  # Initial values of the HA entities (number.heating_test_offset, time.heating_test_start,
+  # number.heating_test_duration); arm with switch.heating_test_armed.
+  DefaultOffsetK: -3
+  DefaultStartTime: "22:00"
+  DefaultDurationHours: 12
+
+  # Every room is logged; a test aborts (level restored) when a room with AbortBelowK falls more
+  # than that below its setpoint.
+  Rooms:
+    - Name: Wohnen/Küche
+      Climate: climate.wohnen_kuche
+      AbortBelowK: 1.0
+    - Name: Bad
+      Climate: climate.bad
+      AbortBelowK: 0.5
+    - Name: Arbeit/Gang
+      Climate: climate.arbeit_gang
+      AbortBelowK: 1.0
+    - Name: Gast
+      Climate: climate.gast
+      AbortBelowK: 1.0
+    - Name: Schlafen
+      Climate: climate.schlafen
+      AbortBelowK: 1.0
+    - Name: Keller
+      Climate: climate.keller

@@ -26,18 +26,18 @@ public class MqttConfig
     public List<string>? ButtonIDs { get; set; }
     public List<string>? RadialIDs { get; set; }
 
-    public List<int> GetAllFaderIDs()
-    {
-        return FaderIDs?.TryParseToIntList(out var ints) ?? false ? ints.Order().ToList() : [];
-    }
-    public List<int> GetAllButtonIDs()
-    {
-        return ButtonIDs?.TryParseToIntList(out var ints) ?? false ? ints.Order().ToList() : [];
-    }
-    public List<int> GetAllRadialIDs()
-    {
-        return RadialIDs?.TryParseToIntList(out var ints) ?? false ? ints.Order().ToList() : [];
-    }
+    /// <summary>Fader channels (numbers and ranges expanded), sorted.</summary>
+    public List<int> GetAllFaderIDs() => ParseIds(FaderIDs);
+    /// <summary>Button notes (numbers and ranges expanded), sorted.</summary>
+    public List<int> GetAllButtonIDs() => ParseIds(ButtonIDs);
+    /// <summary>Radial controllers (numbers and ranges expanded), sorted.</summary>
+    public List<int> GetAllRadialIDs() => ParseIds(RadialIDs);
+
+    /// <summary>IDs from config items like "3" or "1-8", sorted.</summary>
+    /// <param name="ids">Config items; null = none.</param>
+    /// <returns>The IDs; empty if none parse.</returns>
+    private static List<int> ParseIds(List<string>? ids) =>
+        ids?.TryParseToIntList(out var ints) ?? false ? ints.Order().ToList() : [];
 }
 
 public class EntityMapping

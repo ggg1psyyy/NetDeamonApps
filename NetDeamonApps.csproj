@@ -2,8 +2,8 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net9.0</TargetFramework>
-        <LangVersion>12.0</LangVersion>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>default</LangVersion>
         <Nullable>enable</Nullable>
         <RootNamespace>NetDeamon</RootNamespace>
     </PropertyGroup>
@@ -20,27 +20,52 @@
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </None>
-        <Compile Remove="apps\PVControl\Simulate.cs" />
         <Compile Remove="NetDeamonApps.Tests\**" />
-        <None Include="apps\PVControl\Simulate.cs" />
+        <None Remove="NetDeamonApps.Tests\**" />
+        <Content Remove="NetDeamonApps.Tests\**" />
+        <EmbeddedResource Remove="NetDeamonApps.Tests\**" />
         <Compile Remove="HA\**" />
         <None Remove="HA\**" />
+        <Compile Remove="tools\**" />
+        <None Remove="tools\**" />
+        <Content Remove="tools\**" />
+        <EmbeddedResource Remove="tools\**" />
     </ItemGroup>
+    <!-- Version from git (see apps/AppVersion.cs): 0.5.<commit count>+<short hash>[.dirty] -->
+    <PropertyGroup>
+        <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    </PropertyGroup>
+    <Target Name="GitVersion" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo">
+        <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+        </Exec>
+        <Exec Command="git rev-parse --short=7 HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitHash" />
+        </Exec>
+        <Exec Command="git status --porcelain --untracked-files=no" ConsoleToMSBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitChanges" />
+        </Exec>
+        <PropertyGroup Condition="'$(GitHash)' != ''">
+            <GitDirty Condition="'$(GitChanges)' != ''">.dirty</GitDirty>
+            <Version>0.5.$(GitCommitCount)</Version>
+            <InformationalVersion>0.5.$(GitCommitCount)+$(GitHash)$(GitDirty)</InformationalVersion>
+        </PropertyGroup>
+    </Target>
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
-        <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon4' folder for add-on or your custom folder to deploy." Importance="high" />
+        <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon6' folder for add-on or your custom folder to deploy." Importance="high" />
     </Target>
         
     <ItemGroup>
         <PackageReference Include="linq2db.SQLite.MS" Version="5.4.1.9" />
-        <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.10" />
-        <PackageReference Include="NetDaemon.AppModel" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Runtime" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.HassModel" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Client" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Extensions.Logging" Version="25.42.0" />
-        <PackageReference Include="NetDaemon.Extensions.Tts" Version="25.42.0" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+        <PackageReference Include="NetDaemon.AppModel" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Extensions.Mqtt" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Runtime" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.HassModel" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Client" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Extensions.Scheduling" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Extensions.Logging" Version="26.43.1" />
+        <PackageReference Include="NetDaemon.Extensions.Tts" Version="26.43.1" />
         <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
     </ItemGroup>
         

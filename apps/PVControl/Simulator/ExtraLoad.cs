@@ -1,41 +1,60 @@
+using System;
+
 namespace NetDeamon.apps.PVControl.Simulator;
 
-/// <summary>
-/// Represents a known extra load that is not captured in the historical load prediction —
-/// e.g. car charging, warm-water heat pump, washing machine running on a schedule.
-/// The simulator adds this load on top of the base house-load prediction for the relevant slots,
-/// so the SoC forecast and mode decisions account for the additional energy draw.
-/// </summary>
+/// <summary>A load on top of the base load forecast (EV session, warm-water heating), added to the simulated slots it covers.</summary>
 public class ExtraLoad
 {
-  /// <summary>Human-readable name shown in diagnostics (e.g. "Car charging").</summary>
+  /// <summary>Name for diagnostics, e.g. "EV Charger".</summary>
   public string Name { get; init; } = "";
 
-  /// <summary>Wall-clock time when this load switches on.</summary>
+  /// <summary>Priority (higher wins); not used by the simulation yet.</summary>
+  public int Priority { get; init; } = 10;
+
+  /// <summary>Switch-on time.</summary>
   public DateTime StartTime { get; init; }
 
-  /// <summary>Wall-clock time when this load switches off.</summary>
+  /// <summary>Switch-off time (exclusive).</summary>
   public DateTime EndTime { get; init; }
 
-  /// <summary>Constant power draw in Watts while active.</summary>
+  /// <summary>Constant power while running, W.</summary>
   public int PowerW { get; init; }
 
-  /// <summary>
-  /// Returns the energy consumed by this load within the given 15-minute slot, in Wh.
-  /// Handles partial overlap: if the load starts or ends mid-slot the proportional
-  /// energy is returned (e.g. a load that starts 7.5 min into the slot contributes half).
-  /// Returns 0 if the load is completely outside this slot.
-  /// </summary>
-  public int GetWhForSlot(DateTime slotStart)
-  {
-    var slotEnd = slotStart.AddMinutes(15);
+  /// <summary>Not fed from the house battery: PV surplus first, the rest directly from the grid (the
+  /// battery is held while it runs) — battery wear and round-trip losses. PriorityPlus's grid sessions.</summary>
+  public bool FromGrid { get; init; }
 
-    // No overlap with this slot
-    if (EndTime <= slotStart || StartTime >= slotEnd)
-      return 0;
+  /// <summary>Energy of the load within a 15-min slot (partial overlap pro rata).</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>Wh; 0 outside the slot.</returns>
+  public int GetWhForSlot(DateTime slotStart) =>
+    (int)Energy.Wh(PowerW, TimeRange.Overlap(slotStart, slotStart + TimeRange.Slot, StartTime, EndTime));
 
-    // Clamp to slot boundaries and convert overlap duration to hours → Wh
-    var overlapTicks = Math.Min(slotEnd.Ticks, EndTime.Ticks) - Math.Max(slotStart.Ticks, StartTime.Ticks);
-    return (int)(new TimeSpan(overlapTicks).TotalHours * PowerW);
-  }
+  /// <summary>Energy of the whole session, Wh.</summary>
+  public double EnergyWh => EnergyFromWh(null);
+
+  /// <summary>Energy the session still delivers from a time on: a session that began in the running slot only
+  /// from now (the simulation counts the rest of that slot only).</summary>
+  /// <param name="now">Current time; null = the whole session.</param>
+  /// <returns>Wh ≥ 0.</returns>
+  public double EnergyFromWh(DateTime? now) =>
+    Energy.Wh(PowerW, EndTime - (now is { } n && n > StartTime ? (n < EndTime ? n : EndTime) : StartTime));
+
+  /// <summary>Whether the load runs at a time.</summary>
+  /// <param name="t">Time to test.</param>
+  /// <returns>True if StartTime ≤ <paramref name="t"/> &lt; EndTime.</returns>
+  public bool Covers(DateTime t) => TimeRange.Contains(StartTime, EndTime, t);
+
+  /// <summary>The same load (name, priority, power) in another time range.</summary>
+  /// <param name="start">Switch-on time.</param>
+  /// <param name="end">Switch-off time.</param>
+  /// <returns>A new load.</returns>
+  public ExtraLoad Between(DateTime start, DateTime end) =>
+    new() { Name = Name, Priority = Priority, StartTime = start, EndTime = end, PowerW = PowerW, FromGrid = FromGrid };
+
+  /// <summary>The same load, fed from PV and the grid only or also from the battery.</summary>
+  /// <param name="fromGrid">See <see cref="FromGrid"/>.</param>
+  /// <returns>A new load.</returns>
+  public ExtraLoad WithFromGrid(bool fromGrid) =>
+    new() { Name = Name, Priority = Priority, StartTime = StartTime, EndTime = EndTime, PowerW = PowerW, FromGrid = fromGrid };
 }

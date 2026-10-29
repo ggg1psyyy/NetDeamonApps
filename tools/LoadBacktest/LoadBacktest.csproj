@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline backtest of load forecast models against a copy of DataLogger's energy_history.db.
+       Not part of the deployed app (excluded in NetDeamonApps.csproj, not in the solution).
+       Run: see README.md in this folder. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- The production load model (pure, no HA dependency) and the shared calculations it uses,
+       backtested as variant "App". -->
+  <ItemGroup>
+    <Compile Include="..\..\apps\PVControl\LoadModel\LoadModels.cs" Link="App\LoadModels.cs" />
+    <Compile Include="..\..\apps\Calculations.cs" Link="App\Calculations.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.ML" Version="3.0.1" />
+    <PackageReference Include="Microsoft.ML.FastTree" Version="3.0.1" />
+  </ItemGroup>
+
+</Project>

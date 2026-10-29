@@ -1,0 +1,49 @@
+alias: PV Control - Health
+description: >-
+  Notifies when sensor.pv_control_health changes (ok / degraded / error), when PVControl stopped
+  running (last_cycle older than 2 min) and when it runs again (ntfy, notify.ha_warnings).
+mode: queued
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.pv_control_health
+    not_from:
+      - unknown
+      - unavailable
+    not_to:
+      - unknown
+      - unavailable
+    id: LEVEL
+  - trigger: template
+    value_template: >-
+      {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
+      {{ lc is not none and now() - as_datetime(lc) > timedelta(minutes=2) }}
+    id: STOPPED
+  - trigger: template
+    value_template: >-
+      {% set lc = state_attr('sensor.pv_control_health', 'last_cycle') %}
+      {{ lc is not none and now() - as_datetime(lc) < timedelta(minutes=1) }}
+    id: RUNNING
+conditions: []
+actions:
+  # PVControl publishes the summary before the level (two MQTT messages); the short wait only makes sure
+  # both are in. Every level change notifies — no `for:` on the trigger (a hiccup shorter than it sent
+  # only the "ok" back, without the problem before).
+  - delay:
+      seconds: 2
+  - action: ntfy.publish
+    target:
+      entity_id: notify.ha_warnings
+    data:
+      # Reads the sensor, not trigger.to_state: a manual run has no trigger data (then it sends
+      # the current status).
+      title: >-
+        {% set id = trigger.id | default('') %}
+        {% if id == 'STOPPED' %}PV Control not running
+        {% elif id == 'RUNNING' %}PV Control running again
+        {% else %}PV Control {{ states('sensor.pv_control_health') }}{% endif %}
+      message: >-
+        {% set id = trigger.id | default('') %}
+        {% if id == 'STOPPED' %}No cycle since {{ state_attr('sensor.pv_control_health', 'last_cycle') }}
+        {% elif id == 'RUNNING' %}{{ states('sensor.pv_control_health') }}: {{ state_attr('sensor.pv_control_health', 'summary') }}
+        {% else %}{{ state_attr('sensor.pv_control_health', 'summary') }}{% endif %}
