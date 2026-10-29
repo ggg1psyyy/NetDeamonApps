@@ -61,7 +61,7 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
       (done as `PluginLoader.cs` in the current host project; it moves to `src/Host` once all apps are plugins)
 - [x] 4. Tag `before-plugins`; move HeatingTest → plugin (`src/HeatingTest`, `src/AppPlugin.props`; the host publishes plugins into `apps/plugins/<Name>/`), deploy, verify (version sensor, entities)
 - [x] 5. DataLogger → plugin (its DB into `apps/plugins/DataLogger/`; PVControl, still in the host, reads it there), deploy, verify (next hourly row)
-- [ ] 6. PVControl → plugin, deploy mid-quarter with low import, verify: `sensor.pv_control_version`,
+- [x] 6. PVControl → plugin (cost log `energy_costs.db` in its folder, the DataLogger's DB as `../DataLogger/`), deploy mid-quarter with low import, verify: `sensor.pv_control_version`,
       health ok, `binary_sensor.pv_control_inverter_in_sync` on, the EV's `charge_now` present,
       `sensor.pv_control_mode` attributes after one cycle. If it fails to load, HA degrades safely
       (mode-8 run time lapses to Self Use, Manual Mode reverted after 5 min, health reports
