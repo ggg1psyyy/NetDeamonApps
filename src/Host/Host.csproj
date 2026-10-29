@@ -38,8 +38,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="linq2db.SQLite.MS" />
-        <PackageReference Include="Microsoft.Data.Sqlite" />
         <PackageReference Include="NetDaemon.AppModel" />
         <PackageReference Include="NetDaemon.Extensions.Mqtt" />
         <PackageReference Include="NetDaemon.Runtime" />

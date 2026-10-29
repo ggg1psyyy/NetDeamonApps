@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -19,7 +20,7 @@ public sealed record AppPlugin(string Name, string AssemblyPath);
 /// app configs anyway.
 /// <para>Plugins load into the default load context: NetDaemon's types (<c>[NetDaemonApp]</c>, <c>IHaContext</c>)
 /// always come from the host — a plugin's own copy of them is never loaded, so its apps are the host's types.
-/// What only the plugin has (e.g. ImageSharp) is resolved from its folder (<see cref="AssemblyDependencyResolver"/>).
+/// What only the plugin has (e.g. ImageSharp, SQLite with its native library) is resolved from its folder (<see cref="AssemblyDependencyResolver"/>).
 /// A plugin built against another NetDaemon version than the host is skipped (<see cref="Incompatibility"/>).</para>
 /// </summary>
 public static class PluginLoader
@@ -99,9 +100,12 @@ public static class PluginLoader
       try
       {
         var resolver = new AssemblyDependencyResolver(plugin.AssemblyPath);
-        // Only reached for what the host doesn't have itself: the plugin's own dependencies.
+        // Only reached for what the host doesn't have itself: the plugin's own dependencies, managed and native
+        // (e.g. SQLite's e_sqlite3 under the plugin's runtimes/<rid>/native/).
         AssemblyLoadContext.Default.Resolving += (context, name) =>
           resolver.ResolveAssemblyToPath(name) is { } path ? context.LoadFromAssemblyPath(path) : null;
+        AssemblyLoadContext.Default.ResolvingUnmanagedDll += (_, name) =>
+          resolver.ResolveUnmanagedDllToPath(name) is { } path ? NativeLibrary.Load(path) : IntPtr.Zero;
         var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(plugin.AssemblyPath);
         if (Incompatibility(assembly.GetReferencedAssemblies(), host) is { } reason)
         {

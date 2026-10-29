@@ -67,9 +67,9 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
       (mode-8 run time lapses to Self Use, Manual Mode reverted after 5 min, health reports
       "not running").
 - [x] 7. MidiControl → plugin; ImageSharp out of everything else (its fonts and icons still come from the absolute
-      `/config/netdaemon5/...` paths: move them into its plugin folder when MIDI is revived). Once the host no longer has Microsoft.Data.Sqlite
-      itself, `PluginLoader` needs an `AssemblyLoadContext.Default.ResolvingUnmanagedDll` handler
-      (`resolver.ResolveUnmanagedDllToPath`): the native `e_sqlite3` then lies only under a plugin's `runtimes/`
+      `/config/netdaemon5/...` paths: move them into its plugin folder when MIDI is revived). SQLite stays in the host through Common
+      (`SqliteSchema`), so every plugin shares the host's SQLite; linq2db is PVControl's own. `PluginLoader` also
+      resolves a plugin's own native libraries (`ResolvingUnmanagedDll`)
 - [ ] 8. `deploy/` (build + layout, HA automations), tools reference projects, launch settings,
       devcontainer
 - [ ] 9. READMEs: root = umbrella (what's here, run one project alone, deploy, the plugin contract);
