@@ -53,8 +53,9 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
 - [x] 1. `Directory.Packages.props` (central package versions, one Microsoft.Data.Sqlite version
       for tools too) and `Directory.Build.props` (TargetFramework, Nullable, LangVersion)
 - [x] 2. `src/Common` (Calculations, generic Extensions, PriorityCounter, AppVersion, SqliteSchema)
-- [ ] 3. `src/Host` + plugin loader (discovery, version gate, dependency resolving) with tests;
+- [x] 3. `src/Host` + plugin loader (discovery, version gate, dependency resolving) with tests;
       `--plugins <folder>` to run a single plugin; the current apps still load as before
+      (done as `PluginLoader.cs` in the current host project; it moves to `src/Host` once all apps are plugins)
 - [ ] 4. Tag `before-plugins`; move HeatingTest → plugin, deploy, verify (version sensor, entities)
 - [ ] 5. DataLogger → plugin, deploy, verify (next hourly row)
 - [ ] 6. PVControl → plugin, deploy mid-quarter with low import, verify: `sensor.pv_control_version`,

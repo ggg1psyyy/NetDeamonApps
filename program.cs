@@ -5,6 +5,7 @@ using NetDaemon.Extensions.Scheduler;
 using NetDaemon.Extensions.Tts;
 using NetDaemon.Runtime;
 using NetDaemon.Extensions.MqttEntityManager;
+using NetDeamon;
 
 // Add next line if using code generator
 //using HomeAssistantGenerated;
@@ -22,6 +23,8 @@ try
         .ConfigureServices((_, services) =>
             services
                 .AddAppsFromAssembly(Assembly.GetExecutingAssembly())
+                // App plugins: apps/plugins/<Name>/<Name>.dll, and folders given with --plugins <folder>
+                .AddAppPlugins(args)
                 .AddNetDaemonStateManager()
                 .AddNetDaemonScheduler()
         // Add next line if using code generator
