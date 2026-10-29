@@ -85,7 +85,7 @@ namespace NetDeamon.apps.PVControl
       CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
       PVCCInstance.Initialize(ha, entityManager, logger, config, (NetDaemon.Extensions.Scheduler.DisposableScheduler)scheduler, apiManager);
       if (string.IsNullOrWhiteSpace(PVCC_Config.DBLocation))
-        PVCC_Config.DBLocation = "apps/plugins/DataLogger/energy_history.db";   // the DataLogger plugin's DB
+        PVCC_Config.DBLocation = PVConfig.DefaultDBLocation;
       
       PVCC_Logger.LogInformation("DB Location: {loc}", PVCC_Config.DBFullLocation);
 

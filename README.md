@@ -23,7 +23,9 @@ Every 15 seconds the app runs a forward simulation in 15-minute slots (now → e
 
 PVControl itself only sets entity states — you use HA automations to act on them.
 
-Design details live in [`apps/PVControl/ARCHITECTURE.md`](apps/PVControl/ARCHITECTURE.md).
+Design details live in [`src/PVControl/ARCHITECTURE.md`](src/PVControl/ARCHITECTURE.md).
+
+Deployed, PVControl lies in `apps/plugins/PVControl/` with `PVControl.yaml` and its cost log `energy_costs.db` (`EnergyCostDBLocation`); the load forecast reads the DataLogger's DB from there as `../DataLogger/energy_history.db` (`DBLocation`, the default).
 
 #### Main entity for automations
 

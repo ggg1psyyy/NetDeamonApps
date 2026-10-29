@@ -6,7 +6,7 @@ using Xunit;
 namespace NetDeamonApps.Tests;
 
 /// <summary>
-/// Weather-aware load forecast (apps/PVControl/LoadModel): data cleaning, the heat demand model
+/// Weather-aware load forecast (src/PVControl/LoadModel): data cleaning, the heat demand model
 /// (energy signature, 48-h scaling, heating off/just switched on), the base load level, the
 /// shadow comparison of nights, and WeatherLoadPrediction on a temporary DataLogger database
 /// (model vs fallback). That the model equals the backtested M2 is checked by tools/LoadBacktest

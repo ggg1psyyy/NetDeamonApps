@@ -220,7 +220,7 @@ public sealed class BoostedTrees : IModel
   }
 }
 
-/// <summary>The production model (apps/PVControl/LoadModel/LoadModels.cs), heating assumed on
+/// <summary>The production model (src/PVControl/LoadModel/LoadModels.cs), heating assumed on
 /// (the live model reads the heat pump mode; history has no mode before DataLogger v6).</summary>
 public sealed class AppModel : IModel
 {

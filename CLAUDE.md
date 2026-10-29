@@ -32,7 +32,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 ## Documentation
 
 - **`README.md`** describes only how things work **now** — no history, no dated incidents, no "before / used to" (that's what the commit log is for).
-- **`apps/PVControl/ARCHITECTURE.md`** explains **why** things are the way they are — incidents, measurements and dates that led to a design belong there.
+- **`src/PVControl/ARCHITECTURE.md`** explains **why** things are the way they are — incidents, measurements and dates that led to a design belong there.
 
 ## Tests
 
@@ -51,7 +51,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`TankModelTests`**, **`WarmWaterPlannerTests`**, **`WarmWaterControlTests`** — warm-water tank model fit (real history in `Data/`), the dynamic-program plan and heating prices, the control decision, the refit schedule (`WarmWaterController.RefitDue`; its HA calls aren't unit tested)
 - **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
 - **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`** (incl. first/last year), **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization and comparison (`SameAs`: a replan only on a real price change), network price periods, gross price composition, unit conversion
-- **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`apps/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
+- **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`src/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
 - **`DataLoggerPeriodTests`** — DataLogger periods as UTC instants: both repeated hours in October, no row for the skipped March hour, 23/25-h days, backfill
 - **`MiddayChargeVsNightTests`** — NeedToCharge's charge-vs-hold comparison uses the hours from the low until PV after it (live 2026-10-26 13:30: the midday quarter at 0.3649 instead of the night at 0.3727; holding still wins when the bridged hours are cheap)
 - **`ChargeAbovePriceLimitTests`** — above `ForceChargeMaxPrice` a NeedToCharge charge only protects the floor (no forecast margin)
@@ -71,7 +71,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`SourceSharesTests`** — what a kWh costs by its source (`SourceShares`: PV free, grid, battery) for `sensor.pv_control_battery_avg_cost_per_kwh` and the loads' cost totals, `CostTracker.BlendAverageCost`, `CostTracker.CounterBooking` (the cost log's totals: an unavailable counter keeps the last total), the shared price lookup `PriceList.GetPriceOrMean`
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation, restore after a restart, and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`EntityRegistrationTests`** — when `RegisterSensor` publishes an entity's MQTT discovery config: option lists (selects/enums) on every start so HA follows `InverterModes` etc., the state kept on a republish
-- **`AppFilesTests`** — `AppFiles.PathOf` (`src/Common`): an app's relative DB location lies in its assembly's (plugin) folder, next to its YAML; the HeatingTest and DataLogger defaults, PVControl finding the DataLogger's DB
+- **`AppFilesTests`** — `AppFiles.PathOf` (`src/Common`): an app's relative DB location lies in its assembly's (plugin) folder, next to its YAML; the HeatingTest and DataLogger defaults, PVControl finding the DataLogger's DB from its own plugin folder (`../DataLogger/`) and its cost DB
 - **`PluginLoaderTests`** — the host's plugin loader: finding plugin folders, the NetDaemon version gate, `--plugins`
 - **`AppVersionTests`** — build version from git (`Directory.Build.targets` target `GitVersion`, `src/Common/AppVersion.cs`: each app reads its own assembly), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
 
@@ -105,7 +105,7 @@ Each app consists of:
 - **MQTT Entity Registration**: All dynamic HA sensors/selects/numbers/switches/times are created via `IMqttEntityManager`, not static YAML — see `PVControlCommon.RegisterSensor()`
 - **Reactive Extensions**: State subscriptions use Rx.LINQ with throttling; cron jobs via `INetDaemonScheduler`
 - **`src/Common`** (`NetDeamonApps.Common`, shared by all apps): **Calculations.cs**: the basic calculations shared by all apps, each once — `TimeRange` (overlap, slot fraction, floor), `Energy` (W/Wh/minutes), `Soc` (SoC/Wh, charge time), `Mean` (weighted, age weight, hour-of-day profile), `Regression` (least squares), `StepFunction` (HA history held values, time-weighted mean). `SqliteSchema` (version, columns) for the apps' own DBs; `Extensions.ToISO8601`/`FromISO8601` for every stored or HA time. Use these instead of writing the formula again
-- **Extensions.cs** (Common): generic HA helpers — `GetEntityHistoryAsync()`, `GetUnitMultiplicator()`, `TryGetStateValue()` (any enum by name via `TryParseEnum`), attributes, ISO 8601, `DayLog`; PVControl's own types (`PriceTableEntry`, `InverterModes`, `BatteryStatuses`, `ForceChargeReasons`, `LoadSchedulingMode`, prediction-window helpers, `RunningIntAverage`) are in `apps/PVControl/PVControlExtensions.cs`
+- **Extensions.cs** (Common): generic HA helpers — `GetEntityHistoryAsync()`, `GetUnitMultiplicator()`, `TryGetStateValue()` (any enum by name via `TryParseEnum`), attributes, ISO 8601, `DayLog`; PVControl's own types (`PriceTableEntry`, `InverterModes`, `BatteryStatuses`, `ForceChargeReasons`, `LoadSchedulingMode`, prediction-window helpers, `RunningIntAverage`) are in `src/PVControl/PVControlExtensions.cs`
 
 ### Configuration
 `appsettings.json` holds HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.

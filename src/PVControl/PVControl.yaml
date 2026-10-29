@@ -112,8 +112,8 @@ NetDeamon.apps.PVControl.PVConfig:
   # Min SoC to keep (%) direct value (if both are used, sensor has priority)
   #MinBatterySoCValue: 10
   # Energycost logging
-  # DB location
-  EnergyCostDBLocation: "apps/PVControl/energy_costs.db"
+  # DB location; relative: in this plugin's folder (next to this YAML)
+  EnergyCostDBLocation: "energy_costs.db"
   # Grid import counters (kWh), in priority order: the first is used while it works (unavailable, or
   # frozen while a later one keeps counting = failed), the next ones only as fallback.
   TotalImportEnergyEntities:

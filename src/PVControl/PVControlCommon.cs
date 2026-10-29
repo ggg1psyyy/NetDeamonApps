@@ -152,7 +152,11 @@ namespace NetDeamon.apps.PVControl
   }
   public partial class PVConfig
   {
+    /// <summary>The DataLogger's history DB (the load forecast's source); relative = from this plugin's folder
+    /// (<see cref="NetDeamon.AppFiles.PathOf"/>).</summary>
     public string DBLocation { get; set; } = default!;
+    /// <summary>The DataLogger plugin's DB, seen from this plugin's folder (both lie in <c>apps/plugins/</c>).</summary>
+    public const string DefaultDBLocation = "../DataLogger/energy_history.db";
 
     public string DBFullLocation
     {
