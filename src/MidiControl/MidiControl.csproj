@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- MidiControl: BCF2000 MIDI controller integration (README.md), side project. A NetDaemon app plugin
+       (../AppPlugin.props); the only one that needs ImageSharp. -->
+  <Import Project="..\AppPlugin.props" />
+
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" />
+  </ItemGroup>
+
+</Project>

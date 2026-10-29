@@ -66,7 +66,8 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
       `sensor.pv_control_mode` attributes after one cycle. If it fails to load, HA degrades safely
       (mode-8 run time lapses to Self Use, Manual Mode reverted after 5 min, health reports
       "not running").
-- [ ] 7. MidiControl → plugin; ImageSharp out of everything else. Once the host no longer has Microsoft.Data.Sqlite
+- [ ] 7. MidiControl → plugin; ImageSharp out of everything else (its fonts and icons still come from the absolute
+      `/config/netdaemon5/...` paths: move them into its plugin folder when MIDI is revived). Once the host no longer has Microsoft.Data.Sqlite
       itself, `PluginLoader` needs an `AssemblyLoadContext.Default.ResolvingUnmanagedDll` handler
       (`resolver.ResolveUnmanagedDllToPath`): the native `e_sqlite3` then lies only under a plugin's `runtimes/`
 - [ ] 8. `deploy/` (build + layout, HA automations), tools reference projects, launch settings,

@@ -39,6 +39,7 @@
         <AppPlugin Include="src\HeatingTest\HeatingTest.csproj" />
         <AppPlugin Include="src\DataLogger\DataLogger.csproj" />
         <AppPlugin Include="src\PVControl\PVControl.csproj" />
+        <AppPlugin Include="src\MidiControl\MidiControl.csproj" />
     </ItemGroup>
     <Target Name="PublishAppPlugins" AfterTargets="Publish">
         <MSBuild Projects="@(AppPlugin)" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))apps\plugins\%(AppPlugin.Filename)\" />
@@ -62,7 +63,6 @@
         <PackageReference Include="NetDaemon.Extensions.Scheduling" />
         <PackageReference Include="NetDaemon.Extensions.Logging" />
         <PackageReference Include="NetDaemon.Extensions.Tts" />
-        <PackageReference Include="SixLabors.ImageSharp.Drawing" />
     </ItemGroup>
         
     <ItemGroup>
