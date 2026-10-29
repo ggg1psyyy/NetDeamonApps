@@ -19,6 +19,17 @@ folder. A plugin built against another NetDaemon major.minor than the host is sk
 the host and the other plugins start anyway; the add-on log shows `Plugin <Name> loaded (<version>)` or why it was
 skipped.
 
+## Design
+
+- **The host provides what all plugins share** — NetDaemon with everything it brings, Common and SQLite — and a
+  plugin references those for compiling only (`ExcludeAssets="runtime"` in `src/AppPlugin.props`; Common keeps its
+  own packages private). So each lies once in the deployed folder, and a plugin folder holds only the plugin and
+  what is really its own (linq2db, ImageSharp). Central package versions keep host and plugins on the same versions.
+- **Plugins load into the default load context**, not one context each: there a plugin would get its own copy of
+  NetDaemon.AppModel, `[NetDaemonApp]` would be a different type and no app would be found. A context per plugin
+  stays the way to go for third-party plugins with conflicting dependencies.
+- **Version gate:** a plugin built against another NetDaemon major.minor than the host is skipped, never loaded half.
+
 ## Configuration
 
 `appsettings.json` (not committed): the HA connection (host, port, token) and MQTT. `appsettings.Development.json` for

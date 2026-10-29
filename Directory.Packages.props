@@ -16,7 +16,7 @@
     <PackageVersion Include="NetDaemon.HassModel" Version="26.43.1" />
     <PackageVersion Include="NetDaemon.Runtime" Version="26.43.1" />
     <!-- Data -->
-    <PackageVersion Include="linq2db.SQLite.MS" Version="5.4.1.9" />
+    <PackageVersion Include="linq2db" Version="5.4.1.9" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <!-- MidiControl -->
     <PackageVersion Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />

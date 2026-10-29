@@ -32,5 +32,18 @@ class KeepTests(unittest.TestCase):
             self.assertFalse(keep(n), n)
 
 
+
+class StaleFilesTests(unittest.TestCase):
+    def test_what_the_build_no_longer_has_goes_data_stays(self):
+        published = ['PVControl.dll', 'PVControl.deps.json', 'PVControl.yaml', 'linq2db.dll']
+        deployed = published + ['NetDaemon.AppModel.dll', 'runtimes/linux-arm64/native/libe_sqlite3.so',
+                                'energy_costs.db', 'energy_costs.db-wal', 'appsettings.json']
+        self.assertEqual(['NetDaemon.AppModel.dll', 'runtimes/linux-arm64/native/libe_sqlite3.so'],
+                         deploy.stale_files(published, deployed))
+
+    def test_nothing_stale(self):
+        self.assertEqual([], deploy.stale_files(['a.dll'], ['a.dll', 'x.db']))
+
+
 if __name__ == '__main__':
     unittest.main()

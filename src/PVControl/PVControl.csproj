@@ -11,8 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="linq2db.SQLite.MS" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="linq2db" />
+    <PackageReference Include="Microsoft.Data.Sqlite" ExcludeAssets="runtime;native" />
   </ItemGroup>
 
 </Project>

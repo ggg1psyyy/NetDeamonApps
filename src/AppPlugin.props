@@ -10,15 +10,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(MSBuildThisFileDirectory)Common\Common.csproj" />
+    <!-- What the host provides (Common with SQLite, NetDaemon and everything it brings) is referenced for compiling
+         only: never copied into the plugin's folder, the host's copy is the one loaded anyway. -->
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Common\Common.csproj" Private="false" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="NetDaemon.AppModel" />
-    <PackageReference Include="NetDaemon.Client" />
-    <PackageReference Include="NetDaemon.Extensions.Mqtt" />
-    <PackageReference Include="NetDaemon.Extensions.Scheduling" />
-    <PackageReference Include="NetDaemon.HassModel" />
+    <PackageReference Include="NetDaemon.AppModel" ExcludeAssets="runtime" />
+    <PackageReference Include="NetDaemon.Client" ExcludeAssets="runtime" />
+    <PackageReference Include="NetDaemon.Extensions.Mqtt" ExcludeAssets="runtime" />
+    <PackageReference Include="NetDaemon.Extensions.Scheduling" ExcludeAssets="runtime" />
+    <PackageReference Include="NetDaemon.HassModel" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <!-- The app's YAML config next to its assembly (deployed under ./apps, where NetDaemon reads app configs). -->

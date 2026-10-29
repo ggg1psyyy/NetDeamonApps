@@ -27,6 +27,8 @@
         <AppPlugin Include="..\MidiControl\MidiControl.csproj" />
     </ItemGroup>
     <Target Name="PublishAppPlugins" AfterTargets="Publish">
+        <!-- The host doesn't reference the plugins, so its restore doesn't cover them: restore first (own evaluation). -->
+        <MSBuild Projects="@(AppPlugin)" Targets="Restore" Properties="Configuration=$(Configuration);_AppPluginRestore=true" />
         <MSBuild Projects="@(AppPlugin)" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))apps\plugins\%(AppPlugin.Filename)\" />
     </Target>
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
@@ -38,6 +40,8 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- SQLite for every plugin (Common uses it, the plugins reference it for compiling only). -->
+        <PackageReference Include="Microsoft.Data.Sqlite" />
         <PackageReference Include="NetDaemon.AppModel" />
         <PackageReference Include="NetDaemon.Extensions.Mqtt" />
         <PackageReference Include="NetDaemon.Runtime" />

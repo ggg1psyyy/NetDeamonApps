@@ -10,6 +10,13 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
+    <!-- At run time the host provides these to the plugins (they reference them for compiling only): the tests too. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="NetDaemon.AppModel" />
+    <PackageReference Include="NetDaemon.Client" />
+    <PackageReference Include="NetDaemon.Extensions.Mqtt" />
+    <PackageReference Include="NetDaemon.Extensions.Scheduling" />
+    <PackageReference Include="NetDaemon.HassModel" />
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>

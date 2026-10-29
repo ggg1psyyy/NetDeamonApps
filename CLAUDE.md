@@ -10,7 +10,7 @@ NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant: a
 - **HeatingTest** — Automated step test of the heat pump's heating-curve level (test/reference nights) with its own SQLite log; independent of PVControl, `Enabled: false` in its YAML switches it off completely
 - **MidiControl** — BCF2000 MIDI controller integration (side project, low priority)
 
-Shared code: `src/Common` (each basic calculation once — use it instead of writing a formula again). Restructure plan and decisions: `docs/restructure-plan.md`.
+Shared code: `src/Common` (each basic calculation once — use it instead of writing a formula again).
 
 ## Build & Run
 
@@ -49,6 +49,7 @@ Each app consists of:
 - `AppName.yaml` — configuration (entity IDs, parameters); copied to output dir at build
 - Config model class deserialized via `IAppConfig<T>` DI
 - Files the app keeps (DBs): a relative location via `AppFiles.PathOf` lies in the plugin's folder, next to its YAML
+- **Namespaces stay as they are:** YAML config keys and NetDaemon app ids are full type names (DataLogger's class lives in namespace `PVControl`) — renaming one silently breaks its config
 
 ### Configuration
 `src/Host/appsettings.json` (not committed) holds the HA connection (host, port, token) and MQTT credentials. App-specific entity IDs and parameters live in each app's `.yaml` file.

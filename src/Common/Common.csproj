@@ -8,10 +8,12 @@
     <RootNamespace>NetDeamon</RootNamespace>
   </PropertyGroup>
 
+  <!-- Private: Common's packages don't flow on to who references it. The host ships them (its own references),
+       plugins compile against them without copying them, so each lies only once in the deployed folder. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="NetDaemon.Client" />
-    <PackageReference Include="NetDaemon.HassModel" />
+    <PackageReference Include="Microsoft.Data.Sqlite" PrivateAssets="all" />
+    <PackageReference Include="NetDaemon.Client" PrivateAssets="all" />
+    <PackageReference Include="NetDaemon.HassModel" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>

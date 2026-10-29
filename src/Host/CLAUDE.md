@@ -5,7 +5,7 @@ function, documentation, HA config) are in the root `CLAUDE.md`.
 
 The host starts NetDaemon and loads the plugins (`PluginLoader`: default load context, a `Resolving` and a
 `ResolvingUnmanagedDll` handler per plugin, the NetDaemon major.minor gate). It has no apps; the assembly stays
-`NetDeamonApps` (the add-on starts that file). Why plugins load into the default context: `docs/restructure-plan.md`.
+`NetDeamonApps` (the add-on starts that file). Why plugins load into the default context and share the host's dependencies: `README.md` (Design).
 
 ## Tests (`tests/Host.Tests`)
 

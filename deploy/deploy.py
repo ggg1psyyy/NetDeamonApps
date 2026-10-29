@@ -63,6 +63,17 @@ def seconds_until_allowed(t):
     return 0
 
 
+def stale_files(published, deployed):
+    """Files of a deployed plugin folder that its new build no longer has (e.g. dependencies the host now provides),
+    as paths relative to the folder; never the KEEP files (settings, DBs)."""
+    keep = lambda f: any(fnmatch.fnmatch(os.path.basename(f), p) for p in KEEP)
+    return sorted(f for f in deployed if f not in set(published) and not keep(f))
+
+
+def files_in(folder):
+    return [os.path.relpath(os.path.join(d, f), folder).replace(os.sep, '/') for d, _, fs in os.walk(folder) for f in fs]
+
+
 def git(*args): return subprocess.run(['git', '-C', ROOT] + list(args), capture_output=True, text=True).stdout.strip()
 
 
@@ -95,6 +106,13 @@ def apps(cfg, dry_run, force):
     ignore = lambda d, names: [n for n in names if any(fnmatch.fnmatch(n, p) for p in KEEP)]
     shutil.copytree(PUBLISH, target, dirs_exist_ok=True, ignore=ignore)
     print(now(), 'copied to', target)
+    for name in plugins:   # a plugin folder holds exactly its build (plus its data): drop what the build no longer has
+        new, old = os.path.join(PUBLISH, 'apps', 'plugins', name), os.path.join(target, 'apps', 'plugins', name)
+        stale = stale_files(files_in(new), files_in(old))
+        for f in stale: os.remove(os.path.join(old, f))
+        for d, _, _ in sorted(os.walk(old), key=lambda x: -len(x[0])):
+            if d != old and not os.listdir(d): os.rmdir(d)
+        if stale: print(f'  {name}: removed {len(stale)} files the build no longer has')
     ha.call('services/hassio/addon_restart', {'addon': cfg['addon']})
     print(now(), 'restarted', cfg['addon'])
 

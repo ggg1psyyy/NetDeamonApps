@@ -20,7 +20,6 @@ of app plugins, one plugin per app — each its own project, buildable and testa
 | `tests/<Project>.Tests` | xUnit tests per project |
 | [`deploy/`](deploy/README.md) | Deploy to the NetDaemon add-on and PVControl's HA automations |
 | [`tools/LoadBacktest`](tools/LoadBacktest/README.md) | Offline backtest of load forecast models |
-| [`docs/`](docs/restructure-plan.md) | The host/plugin restructure plan |
 
 Deployed (`/config/netdaemon6`):
 
@@ -58,15 +57,16 @@ second time next to the add-on — PVControl would then command the inverter twi
 ## Writing a plugin
 
 1. `src/<Name>/<Name>.csproj` importing `../AppPlugin.props` (NetDaemon packages, Common, `EnableDynamicLoading`,
-   YAML copied to the output); add own packages to it — they stay in the plugin's folder.
+   YAML copied to the output); add own packages to it — they stay in the plugin's folder. A package the host already
+   provides (e.g. `Microsoft.Data.Sqlite`) is referenced with `ExcludeAssets="runtime;native"`, so it isn't copied again.
 2. Apps as usual: a class with `[NetDaemonApp]`, its config from `<Name>.yaml` (`IAppConfig<T>`).
 3. Files the app keeps (DBs): a relative location resolved with `AppFiles.PathOf(location, GetType().Assembly)` lies
    in the plugin's folder, next to its YAML.
 4. Add it as `<AppPlugin Include="..\<Name>\<Name>.csproj" />` in `src/Host/Host.csproj` (published into
    `apps/plugins/<Name>/`), its tests as `tests/<Name>.Tests` on `../Tests.props`, both to `NetDeamon.sln`.
 
-The host provides NetDaemon, Common and SQLite; a plugin built against another NetDaemon major.minor is skipped
-(logged). Details: [`src/Host/README.md`](src/Host/README.md).
+The host provides NetDaemon, Common and SQLite — a plugin references them for compiling only, so its folder holds
+just the plugin and its own dependencies; a plugin built against another NetDaemon major.minor is skipped (logged). Details: [`src/Host/README.md`](src/Host/README.md).
 
 ## Development notes
 
