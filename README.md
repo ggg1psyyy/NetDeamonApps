@@ -373,10 +373,11 @@ For local development, set `ASPNETCORE_ENVIRONMENT=Development` and configure `s
 
 ## Tests
 
-The xUnit test project lives at `NetDeamonApps.Tests/` and covers pure-logic components without needing a live HA connection:
+Each project has its xUnit test project in `tests/<Project>.Tests/` (`Common`, `Host`, `HeatingTest`, `DataLogger`, `PVControl`), covering pure-logic components without needing a live HA connection:
 
 ```bash
-dotnet test NetDeamonApps.Tests/
+dotnet test                          # all
+dotnet test tests/PVControl.Tests    # one project
 ```
 
 | Test class | What it covers |
@@ -402,7 +403,8 @@ dotnet test NetDeamonApps.Tests/
 | `DailyTargetChargeTests` | Daily target charge: the target by the end of the day's PV, only what PV won't deliver, in the cheapest quarters under the limit |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) and their first/last year |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
-| `ExtensionsTests` | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …) |
+| `ExtensionsTests`, `ParseExtensionsTests` (Common) | Unit conversion of `unit_of_measurement` strings (kWh, MWh, ct, …), number lists, enums by name |
+| `PVControlExtensionsTests` | PVControl's helpers: prediction windows, quarter hours, daily running sums, running averages |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `DataLoggerPeriodTests` | DataLogger hours and days across both clock changes, backfill of an empty table |
 | `ChargeAbovePriceLimitTests` | Above the force-charge price limit a grid charge only protects the floor, never the forecast margin alone |

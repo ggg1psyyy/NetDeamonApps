@@ -70,6 +70,8 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
       `/config/netdaemon5/...` paths: move them into its plugin folder when MIDI is revived). SQLite stays in the host through Common
       (`SqliteSchema`), so every plugin shares the host's SQLite; linq2db is PVControl's own. `PluginLoader` also
       resolves a plugin's own native libraries (`ResolvingUnmanagedDll`)
+- [x] Tests split: `tests/<Project>.Tests` (shared `tests/Tests.props`); PVControl.Tests also references DataLogger
+      (the DB contract it reads)
 - [ ] 8. `deploy/` (build + layout, HA automations), tools reference projects, launch settings,
       devcontainer
 - [ ] 9. READMEs: root = umbrella (what's here, run one project alone, deploy, the plugin contract);

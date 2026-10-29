@@ -8,7 +8,7 @@ namespace NetDeamonApps.Tests;
 /// SQLite log (HeatingTestDb, against a temporary file). The app class itself only reads HA
 /// entities and calls number.set_value, which needs a live Home Assistant.
 /// </summary>
-public class HeatingTestTests : TestBase
+public class HeatingTestTests
 {
   static readonly DateTime Start = new(2026, 11, 20, 22, 0, 0);
   static readonly TestSettings Armed = new(true, new TimeOnly(22, 0), 12, -3);

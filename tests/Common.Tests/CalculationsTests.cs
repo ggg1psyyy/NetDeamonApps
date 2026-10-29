@@ -1,12 +1,11 @@
 using System;
 using NetDeamon.apps;
-using NetDeamon.apps.PVControl.Managers;
 using Xunit;
 
 namespace NetDeamonApps.Tests;
 
 /// <summary>
-/// The basic calculations every app shares (apps/Calculations.cs) — each exists once, the callers
+/// The basic calculations every app shares (src/Common/Calculations.cs) — each exists once, the callers
 /// differ only in their parameters. The cases pin the results of the copies they replaced.
 /// </summary>
 public class CalculationsTests
@@ -46,13 +45,6 @@ public class CalculationsTests
   public void Ceiling_Quarter(int m, int s, int expectedMinute) =>
     Assert.Equal(T.AddMinutes(expectedMinute), T.AddMinutes(m).AddSeconds(s).Ceiling(15));
 
-  [Theory]
-  [InlineData(0, 0, 15)]   // on a quarter → the next one
-  [InlineData(15, 30, 30)] // seconds into a quarter → the next one
-  [InlineData(29, 59, 30)]
-  public void NextQuarterHour_StrictlyAfter(int m, int s, int expectedMinute) =>
-    Assert.Equal(T.AddMinutes(expectedMinute), T.AddMinutes(m).AddSeconds(s).GetNextQuarterHour());
-
   // ── Energy, SoC ──────────────────────────────────────────────────────────────────────
 
   [Fact]
@@ -83,10 +75,6 @@ public class CalculationsTests
   {
     // Battery average cost: 5 kWh at 0.10 + 1 kWh at 0.40
     Assert.Equal(0.15, Mean.Weighted(0.10, 5, 0.40, 1), 6);
-    // Energy per level: (stored × prior + measured) / (prior + levels)
-    float stored = 0.62f, measured = 2.1f, levels = 3f;
-    Assert.Equal((stored * LevelEnergyLearner.PriorWeightLevels + measured) / (LevelEnergyLearner.PriorWeightLevels + levels),
-      LevelEnergyLearner.Blend(stored, measured, levels), 5);
   }
 
   [Fact]

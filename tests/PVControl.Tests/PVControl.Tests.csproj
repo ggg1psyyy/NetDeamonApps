@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The PVControl plugin (src/PVControl); DataLogger too: PVControl reads its DB (schema, file name), its tests build that DB. -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PVControl\PVControl.csproj" />
+    <ProjectReference Include="..\..\src\DataLogger\DataLogger.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Data\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

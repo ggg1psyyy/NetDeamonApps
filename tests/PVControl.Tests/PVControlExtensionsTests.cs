@@ -2,55 +2,9 @@ using NetDeamon.apps;
 using Xunit;
 
 namespace NetDeamonApps.Tests;
-
-/// <summary>
-/// Tests for GetUnitMultiplicator's string-parsing overload — the SI-prefix lookup that
-/// converts a unit_of_measurement string (kWh, MWh, ct, etc.) to a base-unit multiplier.
-/// The (Entity) overload isn't tested here since Entity requires a live IHaContext.
-/// </summary>
-public class ExtensionsTests
-{
-  [Theory]
-  [InlineData("kWh", 1000f)]
-  [InlineData("kW", 1000f)]
-  [InlineData("MWh", 1000000f)]
-  [InlineData("MW", 1000000f)]
-  [InlineData("mWh", 0.001f)]
-  [InlineData("mW", 0.001f)]
-  [InlineData("ct", 0.01f)]
-  [InlineData("ct/kWh", 0.01f)]
-  [InlineData("€", 1f)]
-  [InlineData("EUR", 1f)]
-  [InlineData("W", 1f)]
-  [InlineData("Wh", 1f)]
-  [InlineData("%", 1f)]
-  [InlineData(null, 1f)]
-  // Real HA unit strings that merely start with k/M/m without being SI-prefixed W/Wh —
-  // must fall through unscaled (1f), not be treated as kilo/mega/milli.
-  [InlineData("min", 1f)]
-  [InlineData("mbar", 1f)]
-  [InlineData("mA", 1f)]
-  [InlineData("Mbit/s", 1f)]
-  [InlineData("kB/s", 1f)]
-  public void GetUnitMultiplicator_ReturnsExpectedMultiplier(string? unit, float expected)
-  {
-    Assert.Equal(expected, Extensions.GetUnitMultiplicator(unit));
-  }
-
-  [Fact]
-  public void GetUnitMultiplicator_DistinguishesKiloMegaMilliByCase()
-  {
-    // Case sensitivity is the whole point of the fix: 'k' (kilo), 'M' (mega) and 'm' (milli)
-    // must not collapse into the same bucket just because a naive check lowercases first.
-    Assert.Equal(1000f, Extensions.GetUnitMultiplicator("kWh"));
-    Assert.Equal(1000000f, Extensions.GetUnitMultiplicator("MWh"));
-    Assert.Equal(0.001f, Extensions.GetUnitMultiplicator("mWh"));
-  }
-}
-
-/// <summary>Tests for Extensions.cs's Dictionary&lt;DateTime, int&gt; time-series helpers — pure
-/// data transformations with no HA dependency, used throughout the prediction/simulation pipeline.</summary>
-public class DictionaryTimeSeriesExtensionsTests
+/// <summary>PVControl's own helpers (prediction windows, quarter hours, daily running sums, RunningIntAverage)
+/// and TryGetStateValue with its enum.</summary>
+public class PVControlExtensionsTests
 {
   private static readonly DateTime Day1 = new(2025, 6, 15);
   private static readonly DateTime Day2 = new(2025, 6, 16);
@@ -204,6 +158,16 @@ public class DictionaryTimeSeriesExtensionsTests
 
   // ── GetNextQuarterHour ────────────────────────────────────────────────────
 
+  static readonly DateTime Quarter = new(2026, 10, 23, 14, 0, 0);
+
+  [Theory]
+  [InlineData(0, 0, 15)]   // on a quarter → the next one
+  [InlineData(15, 30, 30)] // seconds into a quarter → the next one
+  [InlineData(29, 59, 30)]
+  public void NextQuarterHour_StrictlyAfter(int m, int s, int expectedMinute) =>
+    Assert.Equal(Quarter.AddMinutes(expectedMinute), Quarter.AddMinutes(m).AddSeconds(s).GetNextQuarterHour());
+
+
   [Theory]
   [InlineData(2025, 6, 15, 10, 0, 0, 2025, 6, 15, 10, 15)]   // exactly on a boundary -> advances to the next one
   [InlineData(2025, 6, 15, 10, 0, 30, 2025, 6, 15, 10, 15)]  // seconds within a boundary minute -> still advances
@@ -219,41 +183,6 @@ public class DictionaryTimeSeriesExtensionsTests
     var expected = new DateTime(ey, emo, ed, eh, emi, 0);
 
     Assert.Equal(expected, time.GetNextQuarterHour());
-  }
-
-  // ── TryParseToIntList ─────────────────────────────────────────────────────
-
-  [Fact]
-  public void TryParseToIntList_ParsesSingleValuesAndRanges()
-  {
-    bool ok = new List<string> { "3", "5-8", "1" }.TryParseToIntList(out var numbers);
-
-    Assert.True(ok);
-    Assert.Equal([3, 5, 6, 7, 8, 1], numbers);
-  }
-
-  [Fact]
-  public void TryParseToIntList_ReturnsFalseForEmptyList()
-  {
-    Assert.False(((List<string>)[]).TryParseToIntList(out var numbers));
-    Assert.Empty(numbers);
-  }
-
-  [Fact]
-  public void TryParseToIntList_ReturnsFalseForNullList()
-  {
-    List<string>? list = null;
-    Assert.False(list!.TryParseToIntList(out var numbers));
-    Assert.Empty(numbers);
-  }
-
-  [Fact]
-  public void TryParseToIntList_SkipsMalformedEntriesWithoutFailing()
-  {
-    bool ok = new List<string> { "3", "not-a-number", "5" }.TryParseToIntList(out var numbers);
-
-    Assert.True(ok);
-    Assert.Equal([3, 5], numbers);
   }
 
   [Fact]
@@ -281,19 +210,6 @@ public class DictionaryTimeSeriesExtensionsTests
     t = t.AddHours(1);
     Assert.Equal(500, avg.GetAverage());
     Assert.Equal(1, avg.Count);
-  }
-
-  // TryGetStateValue's enum case (InverterModes, LoadSchedulingMode — any enum since the move to Common).
-  [Theory]
-  [InlineData("force_charge", true, InverterModes.force_charge)]
-  [InlineData("grid_only", true, InverterModes.grid_only)]
-  [InlineData("Force_Charge", false, InverterModes.automatic)]   // case-sensitive, as before
-  [InlineData("7", false, InverterModes.automatic)]              // a number isn't a mode name
-  [InlineData("reset", false, InverterModes.automatic)]          // removed mode
-  public void TryParseEnum_ByName(string state, bool ok, InverterModes expected)
-  {
-    Assert.Equal(ok, Extensions.TryParseEnum(state, out InverterModes mode));
-    Assert.Equal(expected, mode);
   }
 
   [Fact]

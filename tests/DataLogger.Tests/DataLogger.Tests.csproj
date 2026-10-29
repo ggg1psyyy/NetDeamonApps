@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The DataLogger plugin (src/DataLogger). -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DataLogger\DataLogger.csproj" />
+  </ItemGroup>
+
+</Project>

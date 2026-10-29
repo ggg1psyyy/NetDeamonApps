@@ -16,14 +16,14 @@ NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant. F
 dotnet build                          # Debug build
 dotnet build -c Release               # Release build
 dotnet publish src/Host -c Release    # Publish host + plugins; copy src/Host/bin/Release/net10.0/publish to /config/netdaemon6 on HA
-dotnet test NetDeamonApps.Tests/     # Run unit tests (from repo root)
+dotnet test                          # Run all unit tests (from repo root; one project: dotnet test tests/PVControl.Tests)
 ```
 
-The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with valid HA host/token.
+One test project per project lives at `tests/<Project>.Tests/` (shared settings in `tests/Tests.props`, all in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with valid HA host/token.
 
 ## Testing Requirements
 
-**Every new or changed feature/function must be accompanied by a corresponding test.** If the logic is testable without HA (pure computation, data transformation, decision logic), add or update a test in `NetDeamonApps.Tests`. If HA integration makes unit testing impractical, document why in a comment near the test class.
+**Every new or changed feature/function must be accompanied by a corresponding test.** If the logic is testable without HA (pure computation, data transformation, decision logic), add or update a test in the project's `tests/<Project>.Tests`. If HA integration makes unit testing impractical, document why in a comment near the test class.
 
 ## One calculation, one function
 
@@ -36,7 +36,27 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 
 ## Tests
 
-`NetDeamonApps.Tests` (xUnit) covers pure-logic components that don't need HA:
+xUnit, pure-logic components that don't need HA, one project per project (`tests/`):
+
+**`Common.Tests`** (`src/Common`):
+- **`CalculationsTests`** — the shared basic calculations (`src/Common/Calculations.cs`: time ranges/slot fractions/rounding, W/Wh/minutes, SoC/Wh and charge time, weighted and age-weighted means, hour-of-day profile, least squares, step functions), `DayLog`, `ToSlug` (`GetNextQuarterHour` is PVControl's: `PVControlExtensionsTests`); `Energy.CounterIncrease` (every meter's increase — DataLogger, import cap, cost tracker; resets and glitches) is pinned in `HistoryTimestampTests`
+- **`ExtensionsTests`**, **`ParseExtensionsTests`** — `GetUnitMultiplicator`, `TryParseToIntList`, `TryParseEnum` (any enum by name)
+- **`AppFilesTests`** — `AppFiles.PathOf`: a relative location lies in the app assembly's (plugin) folder, an absolute one stays
+- **`AppVersionTests`** — build version from git (`Directory.Build.targets` target `GitVersion`, `src/Common/AppVersion.cs`: each app reads its own assembly), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
+
+**`Host.Tests`** (`src/Host`):
+- **`PluginLoaderTests`** — the host's plugin loader: finding plugin folders, the NetDaemon version gate, `--plugins`
+
+**`HeatingTest.Tests`**:
+- **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
+- **`AppFilesTests`** — the DB's default location in the plugin folder
+
+**`DataLogger.Tests`**:
+- **`DataLoggerPeriodTests`** — DataLogger periods as UTC instants: both repeated hours in October, no row for the skipped March hour, 23/25-h days, backfill
+- **`DataLoggerOperationTests`** — DataLogger schema v6/v7/v9: the period's value (`PeriodValue`: time-weighted mean, counter increase; `Number`: the one state parser), minutes in a state, state changes, time-weighted means, prevailing mode, the v6, v7 (heat and electricity per mode) and v9 (PVControl mode, inverter EEPROM writes) migrations
+- **`AppFilesTests`** — the DB's default location in the plugin folder
+
+**`PVControl.Tests`** (also references DataLogger: PVControl reads its DB — schema and file name):
 - **`PredictionContainerTests`** — validates the 192-slot 15-min window check (`DataOK`)
 - **`MidnightRolloverTests`** — the load prediction's day rollover (`HouseEnergy.NeedsDayRollover`: the start of the 48-h window decides) and the PV forecast's window cut (`CombineForecastLists`)
 - **`SimulatorTests`** — end-to-end `EnergySimulator.Simulate()` tests using injectable `SimulationInput` (no HA needed)
@@ -45,14 +65,12 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`CheapWindowShorterThanSessionTests`** — PriorityPlus when the cheap window is shorter than the session (live 2026-10-25 08:00): shortened session (`StartChoice.Partial`), longest passing end, min window, follow-up
 - **`LoadSchedulingDecisionTests`** — Priority/PriorityPlus live SoC gate with restart hysteresis
 - **`ReplanPolicyTests`** — when a load's schedule search reruns, house-load deviation trigger, min-off latch (`DelayUntil`: a moved session keeps its energy and supply)
-- **`LevelEnergyLearnerTests`** — learning energy per level unit and charge power
+- **`LevelEnergyLearnerTests`** — learning energy per level unit (`Blend`: the weighted mean with the prior) and charge power
 - **`MorningTopUpTests`** — NeedToCharge grid charge with the real 2026-10-22 night: forecast margin of the night charge, no top-up at peak price when holding the floor is as cheap
 - **`FoggyDayTopUpTests`** — NeedToCharge with a small PV bump before a foggy day (live 2026-10-24): the charge target's trough search runs to the PV peak after the critical point, so the cheap hours really charge from the grid
 - **`TankModelTests`**, **`WarmWaterPlannerTests`**, **`WarmWaterControlTests`** — warm-water tank model fit (real history in `Data/`), the dynamic-program plan and heating prices, the control decision, the refit schedule (`WarmWaterController.RefitDue`; its HA calls aren't unit tested)
-- **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
-- **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`** (incl. first/last year), **`EnergyCostTests`**, **`ExtensionsTests`** — PV running-average correction, price normalization and comparison (`SameAs`: a replan only on a real price change), network price periods, gross price composition, unit conversion
+- **`NetEnergyPredictionTests`**, **`PriceListTests`**, **`NetworkPricePeriodTests`** (incl. first/last year), **`EnergyCostTests`**, **`PVControlExtensionsTests`** — PV running-average correction, price normalization and comparison (`SameAs`: a replan only on a real price change), network price periods, gross price composition, unit conversion
 - **`LoadModelTests`**, **`WeatherForecastTests`** — weather-aware load forecast (`src/PVControl/LoadModel`): cleaning, heat demand model, base level, night scoring, `WeatherLoadPrediction` on a temporary DB; Pirate Weather parsing (real response in `Data/`)
-- **`DataLoggerPeriodTests`** — DataLogger periods as UTC instants: both repeated hours in October, no row for the skipped March hour, 23/25-h days, backfill
 - **`MiddayChargeVsNightTests`** — NeedToCharge's charge-vs-hold comparison uses the hours from the low until PV after it (live 2026-10-26 13:30: the midday quarter at 0.3649 instead of the night at 0.3727; holding still wins when the bridged hours are cheap)
 - **`ChargeAbovePriceLimitTests`** — above `ForceChargeMaxPrice` a NeedToCharge charge only protects the floor (no forecast margin)
 - **`DailyTargetChargeTests`** — the daily target charge (`switch.pv_control_force_charge_at_cheapest_period`): the target by the end of the day's PV (`SimulationInput.DailyTargetDeadline`), only what PV won't deliver, in the cheapest quarters under the limit, tomorrow's deadline after sunset
@@ -63,19 +81,15 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 - **`RunningSlotSessionTests`** — sessions coupled to their energy (`SessionPlanner.EndForEnergy`: from now in the running slot; live 2026-10-28 21:28 the EV started at the evening's highest price), `ExtraLoad.EnergyFromWh`, follow-ups cover the real rest, `FindMaxSessionEnd` returns an energy's exact end, the `price_scan` line
 - **`ImportCapTests`** — import cap (SNE-G-V power price): `PriorityCounter` (list order = priority, fallback while the first fails, frozen detection live and per period — `FirstWorking` for the DataLogger), `QuarterImport` (quarters as UTC instants across the clock changes; a finished quarter scaled to exactly 15 min, none without a start reading), `MonthPeakTracker` (restore from sensor + DataLogger, the higher wins; an older month's quarter never replaces a later peak), `ImportCapGuard` (battery throttled first, then extra loads paused, reaction time; an extra load running outside PVControl's switch counts; `NextLimit`: lowered at once, raised only with twice the headroom — the 2026-10-29 bulk + EV night), `HealthChecks.ImportCap` (none configured = error)
 - **`ImportCapSimulationTests`** — the cap in the plan: `SimulationInput.GridChargeWhPerSlot`, force charge with the EV under the cap, `ExceedsImportCapVs` in the PriorityPlus price check, `GridChargeRoomW` (a charge starts at the room its planned EV session leaves), warm-water start waits for room, DataLogger v8 `maxquarterimport`
-- **`DataLoggerOperationTests`** — DataLogger schema v6/v7/v9: the period's value (`PeriodValue`: time-weighted mean, counter increase; `Number`: the one state parser), minutes in a state, state changes, time-weighted means, prevailing mode, the v6, v7 (heat and electricity per mode) and v9 (PVControl mode, inverter EEPROM writes) migrations
 - **`PricePublicationTrackerTests`** — when tomorrow's prices first appear (`sensor.pv_control_price_publication`, also per source)
 - **`HeldReadingTests`** — battery SoC held through sensor dropouts, stale after 2 min (PVControl then falls back to normal mode)
 - **`RunningSlotTests`** — no jumps at quarter boundaries: the simulation's running slot counts only its rest (`SimulationInput.SlotFraction`), the 0.1-kWh PV energy counter made continuous (`CounterInterpolator`)
-- **`CalculationsTests`** — the shared basic calculations (`src/Common/Calculations.cs`: time ranges/slot fractions/rounding, W/Wh/minutes, SoC/Wh and charge time, weighted and age-weighted means, hour-of-day profile, least squares, step functions), `DayLog`, `ToSlug`; `Energy.CounterIncrease` (every meter's increase — DataLogger, import cap, cost tracker; resets and glitches) is pinned in `HistoryTimestampTests`
 - **`SourceSharesTests`** — what a kWh costs by its source (`SourceShares`: PV free, grid, battery) for `sensor.pv_control_battery_avg_cost_per_kwh` and the loads' cost totals, `CostTracker.BlendAverageCost`, `CostTracker.CounterBooking` (the cost log's totals: an unavailable counter keeps the last total), the shared price lookup `PriceList.GetPriceOrMean`
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation, restore after a restart, and `HealthChecks` (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`EntityRegistrationTests`** — when `RegisterSensor` publishes an entity's MQTT discovery config: option lists (selects/enums) on every start so HA follows `InverterModes` etc., the state kept on a republish
-- **`AppFilesTests`** — `AppFiles.PathOf` (`src/Common`): an app's relative DB location lies in its assembly's (plugin) folder, next to its YAML; the HeatingTest and DataLogger defaults, PVControl finding the DataLogger's DB from its own plugin folder (`../DataLogger/`) and its cost DB
-- **`PluginLoaderTests`** — the host's plugin loader: finding plugin folders, the NetDaemon version gate, `--plugins`
-- **`AppVersionTests`** — build version from git (`Directory.Build.targets` target `GitVersion`, `src/Common/AppVersion.cs`: each app reads its own assembly), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
+- **`AppFilesTests`** — PVControl finds the DataLogger's DB from its own plugin folder (`../DataLogger/`), its cost DB in its folder
 
-`TestBase` initialises `PVControlCommon.PVCC_Logger` via reflection (private setter) so PVControl code can log without throwing.
+`TestBase` (PVControl.Tests) initialises `PVControlCommon.PVCC_Logger` via reflection (private setter) so PVControl code can log without throwing.
 
 ## Architecture
 

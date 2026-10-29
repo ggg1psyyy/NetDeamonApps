@@ -124,4 +124,13 @@ public class LevelEnergyLearnerTests
     var afterStop = Run(l, learned, new[] { 0.0 }.Concat(Enumerable.Repeat(900.0, 20)), T0.AddMinutes(5)); // 80 s after restart
     Assert.Equal(learned, afterStop);
   }
+
+  [Fact]
+  public void Blend_IsTheWeightedMeanWithThePrior()
+  {
+    // Energy per level: (stored × prior + measured) / (prior + levels)
+    float stored = 0.62f, measured = 2.1f, levels = 3f;
+    Assert.Equal((stored * LevelEnergyLearner.PriorWeightLevels + measured) / (LevelEnergyLearner.PriorWeightLevels + levels),
+      LevelEnergyLearner.Blend(stored, measured, levels), 5);
+  }
 }

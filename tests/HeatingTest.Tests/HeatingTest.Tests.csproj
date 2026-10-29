@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The HeatingTest plugin (src/HeatingTest). -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HeatingTest\HeatingTest.csproj" />
+  </ItemGroup>
+
+</Project>

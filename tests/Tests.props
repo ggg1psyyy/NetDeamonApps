@@ -1,20 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project>
+
+  <!-- Shared settings of the test projects (tests/<Project>.Tests): xUnit, one per project under src/. -->
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>NetDeamonApps.Tests</RootNamespace>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\src\Host\Host.csproj" />
-    <ProjectReference Include="..\src\HeatingTest\HeatingTest.csproj" />
-    <ProjectReference Include="..\src\DataLogger\DataLogger.csproj" />
-    <ProjectReference Include="..\src\PVControl\PVControl.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="Data\**" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -23,6 +14,6 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
+
 </Project>

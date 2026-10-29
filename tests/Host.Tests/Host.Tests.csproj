@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The host's plugin loader (src/Host). -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Host\Host.csproj" />
+  </ItemGroup>
+
+</Project>
