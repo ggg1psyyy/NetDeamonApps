@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DataLogger: logs energy sensor history to SQLite (README.md); PVControl reads that DB. A NetDaemon app
+       plugin (../AppPlugin.props). -->
+  <Import Project="..\AppPlugin.props" />
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+</Project>
