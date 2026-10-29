@@ -1,45 +1,30 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- The host (shim): starts NetDaemon and loads the app plugins (PluginLoader). The HA add-on starts
+         NetDeamonApps.dll, so the assembly keeps that name. -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <AssemblyName>NetDeamonApps</AssemblyName>
         <RootNamespace>NetDeamon</RootNamespace>
     </PropertyGroup>
-  
+
     <ItemGroup>
-        <None Update="$(MSBuildProjectDir)appsettings.Development.json">
+        <None Update="appsettings.Development.json">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>Never</CopyToPublishDirectory>
-        </None>        
-        <None Update="$(MSBuildProjectDir)appsettings.json">
+        </None>
+        <None Update="appsettings.json">
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
-        <None Update="$(MSBuildProjectDir)apps\**\*.yaml">
-            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-        </None>
-        <Compile Remove="NetDeamonApps.Tests\**" />
-        <None Remove="NetDeamonApps.Tests\**" />
-        <Content Remove="NetDeamonApps.Tests\**" />
-        <EmbeddedResource Remove="NetDeamonApps.Tests\**" />
-        <Compile Remove="HA\**" />
-        <None Remove="HA\**" />
-        <Compile Remove="tools\**" />
-        <Compile Remove="src\**" />
-        <None Remove="src\**" />
-        <Content Remove="src\**" />
-        <EmbeddedResource Remove="src\**" />
-        <None Remove="tools\**" />
-        <Content Remove="tools\**" />
-        <EmbeddedResource Remove="tools\**" />
     </ItemGroup>
 
-    <!-- App plugins (src/<Name>/), published with the host into apps/plugins/<Name>/ (PluginLoader). The host
-         doesn't reference them: they're loaded at run time. -->
+    <!-- App plugins, published with the host into apps/plugins/<Name>/ (PluginLoader). The host doesn't
+         reference them: they're loaded at run time. -->
     <ItemGroup>
-        <AppPlugin Include="src\HeatingTest\HeatingTest.csproj" />
-        <AppPlugin Include="src\DataLogger\DataLogger.csproj" />
-        <AppPlugin Include="src\PVControl\PVControl.csproj" />
-        <AppPlugin Include="src\MidiControl\MidiControl.csproj" />
+        <AppPlugin Include="..\HeatingTest\HeatingTest.csproj" />
+        <AppPlugin Include="..\DataLogger\DataLogger.csproj" />
+        <AppPlugin Include="..\PVControl\PVControl.csproj" />
+        <AppPlugin Include="..\MidiControl\MidiControl.csproj" />
     </ItemGroup>
     <Target Name="PublishAppPlugins" AfterTargets="Publish">
         <MSBuild Projects="@(AppPlugin)" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))apps\plugins\%(AppPlugin.Filename)\" />
@@ -47,9 +32,9 @@
     <Target Name="AfterPublishMessage" AfterTargets="Publish">
         <Message Text="Publish done! Copy all content in directory: $(PublishDir) to the `/config/netdaemon6' folder for add-on or your custom folder to deploy." Importance="high" />
     </Target>
-        
+
     <ItemGroup>
-        <ProjectReference Include="src\Common\Common.csproj" />
+        <ProjectReference Include="..\Common\Common.csproj" />
     </ItemGroup>
 
     <ItemGroup>
@@ -63,9 +48,5 @@
         <PackageReference Include="NetDaemon.Extensions.Scheduling" />
         <PackageReference Include="NetDaemon.Extensions.Logging" />
         <PackageReference Include="NetDaemon.Extensions.Tts" />
-    </ItemGroup>
-        
-    <ItemGroup>
-      <EmbeddedResource Remove="HA\**" />
     </ItemGroup>
 </Project>

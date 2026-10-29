@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Offline backtest of load forecast models against a copy of DataLogger's energy_history.db.
-       Not part of the deployed app (excluded in NetDeamonApps.csproj, not in the solution).
+       Not part of the deployed app (not in the solution).
        Run: see README.md in this folder. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>

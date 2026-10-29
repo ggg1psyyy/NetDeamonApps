@@ -13,13 +13,13 @@ NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant. F
 ## Build & Run
 
 ```bash
-dotnet build                   # Debug build
-dotnet build -c Release        # Release build
-dotnet publish -c Release      # Publish; copy output to /config/netdaemon6 on HA
+dotnet build                          # Debug build
+dotnet build -c Release               # Release build
+dotnet publish src/Host -c Release    # Publish host + plugins; copy src/Host/bin/Release/net10.0/publish to /config/netdaemon6 on HA
 dotnet test NetDeamonApps.Tests/     # Run unit tests (from repo root)
 ```
 
-The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with valid HA host/token.
+The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with valid HA host/token.
 
 ## Testing Requirements
 
@@ -80,7 +80,7 @@ The test project lives at `NetDeamonApps.Tests/` inside the repo (tracked in `Ne
 ## Architecture
 
 ### App Discovery
-`program.cs` bootstraps the NetDaemon host. Apps are auto-discovered via reflection from any class with `[NetDaemonApp]`. Use `[Focus]` in DEBUG builds to run only one app.
+`src/Host/program.cs` bootstraps the NetDaemon host; `src/Host/PluginLoader.cs` loads every app plugin from `apps/plugins/<Name>/` (each app is its own project under `src/`). Apps are auto-discovered via reflection from any class with `[NetDaemonApp]`. Use `[Focus]` in DEBUG builds to run only one app.
 
 ### App Structure Pattern
 Each app consists of:

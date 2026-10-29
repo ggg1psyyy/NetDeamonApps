@@ -58,7 +58,7 @@ apps/plugins/<Name>/<Name>.dll  one folder per plugin, with its YAML and its own
 - [x] 2. `src/Common` (Calculations, generic Extensions, PriorityCounter, AppVersion, SqliteSchema)
 - [x] 3. `src/Host` + plugin loader (discovery, version gate, dependency resolving) with tests;
       `--plugins <folder>` to run a single plugin; the current apps still load as before
-      (done as `PluginLoader.cs` in the current host project; it moves to `src/Host` once all apps are plugins)
+      (`src/Host`, moved there once all apps were plugins)
 - [x] 4. Tag `before-plugins`; move HeatingTest → plugin (`src/HeatingTest`, `src/AppPlugin.props`; the host publishes plugins into `apps/plugins/<Name>/`), deploy, verify (version sensor, entities)
 - [x] 5. DataLogger → plugin (its DB into `apps/plugins/DataLogger/`; PVControl, still in the host, reads it there), deploy, verify (next hourly row)
 - [x] 6. PVControl → plugin (cost log `energy_costs.db` in its folder, the DataLogger's DB as `../DataLogger/`), deploy mid-quarter with low import, verify: `sensor.pv_control_version`,

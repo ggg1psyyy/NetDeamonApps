@@ -361,7 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-/appsettings.json
+appsettings.json
 /apps/DataLogger/energy_history.db
 
 # JetBrains Rider

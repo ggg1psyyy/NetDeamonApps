@@ -360,16 +360,16 @@ Integrates a BCF2000 MIDI controller with Home Assistant — maps faders/buttons
 ## Build & Deploy
 
 ```bash
-dotnet build                  # Debug build
-dotnet build -c Release       # Release build
-dotnet publish -c Release     # Publish for deployment
+dotnet build                          # Debug build (whole solution)
+dotnet build -c Release               # Release build
+dotnet publish src/Host -c Release    # Publish the host with every app plugin (apps/plugins/<Name>/)
 ```
 
-Copy the published output to `/config/netdaemon6` on your Home Assistant instance (NetDaemon 6 add-on) or your custom deployment folder.
+Copy `src/Host/bin/Release/net10.0/publish/` to `/config/netdaemon6` on your Home Assistant instance (NetDaemon 6 add-on) or your custom deployment folder.
 
 The build gets its version from git: `0.5.<commit count>+<short hash>`, with `.dirty` appended when it was built with uncommitted changes (e.g. `0.5.233+1bdea38`, `0.5.233+1bdea38.dirty`). After a deploy, `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' "Firmware" show it; their history shows every deploy. Building needs `git` on the path, otherwise the version is `1.0.0`.
 
-For local development, set `ASPNETCORE_ENVIRONMENT=Development` and configure `appsettings.json` with your HA host, port, and token.
+For local development, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with your HA host, port, and token.
 
 ## Tests
 
