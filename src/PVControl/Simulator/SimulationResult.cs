@@ -11,6 +11,9 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 {
   private readonly SimulationInput _input;
 
+  /// <summary>The input this run was simulated from (the DP shadow plans on the same).</summary>
+  internal SimulationInput Input => _input;
+
   // ── Core timeline ─────────────────────────────────────────────────────────────────────
   /// <summary>One slot per 15 min from the start through the end of tomorrow.</summary>
   public IReadOnlyList<SimulationSlot> Slots { get; }
@@ -195,7 +198,5 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   private float? _ownGridCost;
   /// <summary>Import cost − export earnings of this run, €.</summary>
-  private float OwnGridCost => _ownGridCost ??= Slots.Sum(s =>
-    new SourceShares(Pv: -s.GridExportWh / 1000f, Grid: s.GridImportWh / 1000f, Battery: 0)
-      .Cost(_input.ImportPrices.GetPriceOrMean(s.Time), batteryPrice: 0, pvPrice: _input.ExportPrices.GetPriceOrMean(s.Time)));
+  private float OwnGridCost => _ownGridCost ??= Slots.Sum(s => _input.GridCostOf(s.Time, s.GridImportWh, s.GridExportWh));
 }

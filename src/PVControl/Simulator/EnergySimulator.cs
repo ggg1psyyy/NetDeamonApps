@@ -937,7 +937,7 @@ public static class EnergySimulator
   /// <param name="chargeTargetSocPercent">Target of a force charge, %.</param>
   /// <param name="slotFraction">Simulated share of the slot (limits the charge rate).</param>
   /// <returns>Battery charge, battery discharge, grid import, grid export; each Wh ≥ 0.</returns>
-  private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ComputeEnergyFlows(
+  internal static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ComputeEnergyFlows(
     InverterState state, int pvWh, int totalLoadWh, int currentEnergyWh, SimulationInput input, int chargeTargetSocPercent,
     double slotFraction = 1.0)
   {

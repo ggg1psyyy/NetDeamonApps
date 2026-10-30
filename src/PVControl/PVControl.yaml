@@ -218,3 +218,11 @@ NetDeamon.apps.PVControl.PVConfig:
       - Name: Evening
         DefaultTime: "19:00"
         DurationMinutes: 120
+  # DP shadow planner: plans the battery globally (dynamic program) next to the greedy plan every IntervalMinutes,
+  # publishes the comparison (sensor.pv_control_dp_shadow) and logs it per quarter (DBLocation, in this plugin's
+  # folder) — never steers. BandPenaltyPerPctQuarter: € per % below the preferred minimum per quarter.
+  DpShadow:
+    Enabled: true
+    IntervalMinutes: 5
+    BandPenaltyPerPctQuarter: 0.005
+    DBLocation: "dp_shadow.db"

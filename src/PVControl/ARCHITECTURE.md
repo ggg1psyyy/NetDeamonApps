@@ -1018,3 +1018,21 @@ target. Once below the minimum there is no dip ahead to keep: refilled in the ch
 not while PV charges the battery (live 2026-10-21: a SoC dropout read as 0 % would otherwise have bought from the grid
 while PV was filling the battery).
 
+## DP shadow: a global plan next to the greedy one (`Optimizer/`)
+
+The greedy simulation decides quarter by quarter and solves the next low at a time: on 2026-10-30 it charged at 23:00
+for the morning and again at 03:00 for the next evening's dip, which only came into view after 23:00 had passed in its
+run. A dynamic program plans the whole horizon at once instead. It runs as a shadow (computed, published, logged, never
+steering) to compare before anything changes: the greedy rules are robust against forecast errors, an optimizer uses
+the forecast to the last %, so its value has to show over weeks of real days. Choices:
+- **DP, not LP:** the flows are non-linear (SoC-dependent VPP limit, efficiency, discrete modes, import cap); a DP
+  takes them from the simulation's own `ComputeEnergyFlows` per transition, needs no solver and no native library, and
+  `WarmWaterPlanner` already is one. 0.25-% SoC steps keep the rounding of small quarters below a few cents per plan.
+- **One cost model (`PlanEvaluation`):** the DP's objective is exactly what the greedy plan is judged by — grid cost
+  (`SimulationInput.GridCostOf`, also behind the simulation's `NetGridCostVs`), penalties below the preferred minimum
+  and the hard floor, the energy left at the end at the mean price after the round trip (without it a plan empties the
+  battery at the horizon's end for free).
+- **The band as a penalty**, not a rule: 0.005 € per % and quarter — a dip of 5 % for 2 h costs 0.20 €, so the DP
+  only trades the reserve for a clear saving. The penalty is the knob the shadow's log can calibrate.
+- **Same input:** the DP plans on the greedy run's `SimulationInput` (forecasts, prices, planned extra loads), so
+  both plans differ only in the battery decisions. Extra loads stay planned by the greedy logic for now.

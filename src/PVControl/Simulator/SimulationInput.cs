@@ -181,6 +181,15 @@ public class SimulationInput
   /// <param name="socPercent">SoC or SoC difference, %.</param>
   /// <returns>Wh.</returns>
   public int SocToWh(int socPercent) => Soc.ToWh(socPercent, BatteryCapacityWh);
+
+  /// <summary>Grid cost of a slot: import cost − export earnings (lost export counts), €; the one cost of a planned
+  /// slot (the simulation's NetGridCostVs, the DP shadow and its comparison).</summary>
+  /// <param name="slotStart">Slot start (its prices, <see cref="PriceList.GetPriceOrMean"/>).</param>
+  /// <param name="importWh">Grid import, Wh.</param>
+  /// <param name="exportWh">Grid export, Wh.</param>
+  public float GridCostOf(DateTime slotStart, int importWh, int exportWh) =>
+    new SourceShares(Pv: -exportWh / 1000f, Grid: importWh / 1000f, Battery: 0)
+      .Cost(ImportPrices.GetPriceOrMean(slotStart), batteryPrice: 0, pvPrice: ExportPrices.GetPriceOrMean(slotStart));
   /// <summary>SoC of an energy with this battery (<see cref="Soc.FromWh"/>).</summary>
   /// <param name="wh">Energy, Wh.</param>
   /// <returns>%.</returns>

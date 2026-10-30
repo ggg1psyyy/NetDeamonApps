@@ -30,6 +30,9 @@ namespace NetDeamon.apps.PVControl
     private readonly AppSubscriptions _subscriptions = new();
     // PVControl instances created and not disposed: more than one is a health error (HealthChecks.Instances).
     private static int s_liveInstances;
+    // The DP shadow planner (Optimizer.DpShadow): computed and published next to the greedy plan, never steering.
+    private Optimizer.DpShadow? _dpShadow;
+    private Entity? _dpShadowEntity;
     // nullforgiving "!" used to supress CS8618 for now
     private HouseEnergy _house = null!;
     #region Created Entities
@@ -130,6 +133,8 @@ namespace NetDeamon.apps.PVControl
           await PVCC_EntityManager.RemoveAsync(id);
       }
       _house = new HouseEnergy();
+      if (PVCC_Config.DpShadow is { Enabled: true } dpConfig)
+        _dpShadow = new Optimizer.DpShadow(dpConfig, AppFiles.PathOf(dpConfig.DBLocation, typeof(PVConfig).Assembly));
       await _house.SeedSoCHistoryAsync(cancellationToken);
       await RegisterControlSensors(false);
       #region Load settings from HA if available
@@ -1057,6 +1062,7 @@ namespace NetDeamon.apps.PVControl
       await PublishPredictionsAsync(now);
       await PublishPricesAsync(now);
       await LogCostsAsync(now);
+      RunDpShadowIfDue(now);
       PVCC_Logger.LogTrace("Leave Schedule");
     }
 
@@ -1414,6 +1420,32 @@ namespace NetDeamon.apps.PVControl
       await PVCC_EntityManager.SetAttributesAsync(_bestImportPriceEntity.EntityId, attr_bestImportPrice);
     }
 
+    /// <summary>
+    /// Starts the DP shadow in the background when due, on this cycle's greedy simulation, and publishes the comparison
+    /// (sensor.pv_control_dp_shadow). It never affects the cycle: not awaited, every failure only logged.
+    /// </summary>
+    /// <param name="now">Current time.</param>
+    private void RunDpShadowIfDue(DateTime now)
+    {
+      if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || !shadow.Due(now) || _house.SimulationState is not { } sim)
+        return;
+      _ = Task.Run(async () =>
+      {
+        try
+        {
+          if (await shadow.RunAsync(sim, now) is { } report && !_subscriptions.IsDisposed)
+          {
+            await PVCC_EntityManager.SetStateAsync(entity.EntityId, report.DpModeNow.ToString());
+            await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, Optimizer.DpShadow.Attributes(report));
+          }
+        }
+        catch (Exception ex)
+        {
+          PVCC_Logger.LogWarning(ex, "DP shadow failed (the greedy plan is unaffected)");
+        }
+      });
+    }
+
     /// <summary>The cost log: one row per quarter (import/export totals and increases, the prices) in the energy costs DB.</summary>
     /// <param name="now">Current time.</param>
     private async Task LogCostsAsync(DateTime now)
@@ -1494,6 +1526,9 @@ namespace NetDeamon.apps.PVControl
     {
       // Deployed build: republished on every start so the device's "Firmware" follows it too.
       var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
+      if (_dpShadow is not null)
+        _dpShadowEntity = await RegisterSensor("sensor.pv_control_dp_shadow", "DP shadow plan", null, "mdi:chart-timeline-variant-shimmer",
+          reRegister: reset);
       await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly));
       PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Of(GetType().Assembly));
       _healthEntity = await RegisterSensor("sensor.pv_control_health", "Health", "ENUM", "mdi:heart-pulse",
