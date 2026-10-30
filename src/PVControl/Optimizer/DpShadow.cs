@@ -26,6 +26,13 @@ namespace NetDeamon.apps.PVControl.Optimizer
     public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter);
   }
 
+  /// <summary>An entry of the DP's predicted SoC (the format of sensor.pv_control_info_predicted_soc's <c>data_actual</c>).</summary>
+  /// <param name="Time">Slot start.</param>
+  /// <param name="Soc">SoC at the slot start, %.</param>
+  /// <param name="Mode">The DP's mode; "past" before now.</param>
+  /// <param name="ExtraLoad">A planned extra load runs (the same loads as the greedy plan).</param>
+  public sealed record PredictedSocEntry(DateTime Time, int Soc, string Mode, bool ExtraLoad);
+
   /// <summary>A grid charge of a plan: a block of consecutive force_charge quarters.</summary>
   /// <param name="Start">First quarter.</param>
   /// <param name="End">End of the last quarter.</param>
@@ -60,6 +67,9 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>The last comparison; null before the first run.</summary>
     public DpShadowReport? Last { get; private set; }
 
+    /// <summary>The last DP plan; null before the first run.</summary>
+    public DpPlan? LastPlan { get; private set; }
+
     /// <summary>Whether a run is due: the interval passed and none is running.</summary>
     /// <param name="now">Current time.</param>
     public bool Due(DateTime now) => config.Enabled && Volatile.Read(ref _running) == 0 && now - _lastRun >= TimeSpan.FromMinutes(config.IntervalMinutes);
@@ -76,6 +86,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
         _lastRun = now;
         var sw = Stopwatch.StartNew();
         var dp = await Task.Run(() => BatteryDpPlanner.Plan(greedy.Input, config.Options));
+        LastPlan = dp;
         Last = Report(greedy, dp, now, (int)sw.ElapsedMilliseconds, config.Options);
         var quarter = TimeRange.Floor(now, TimeRange.SlotMinutes);
         if (quarter > _lastLoggedQuarter)
@@ -130,6 +141,38 @@ namespace NetDeamon.apps.PVControl.Optimizer
       Close();
       return blocks;
     }
+
+    /// <summary>
+    /// The DP's predicted SoC over today and tomorrow, as sensor.pv_control_info_predicted_soc has it (so a second graph
+    /// only swaps the entity): the plan's quarters with its SoC and mode, the past quarters with the same actual SoC as
+    /// the greedy sensor (mode "past") — both graphs start alike and part from now.
+    /// </summary>
+    /// <param name="dp">The DP plan.</param>
+    /// <param name="todayAndTomorrow">The greedy prediction's SoC over today and tomorrow (its past quarters: the actual SoC).</param>
+    /// <param name="greedy">The greedy simulation (the extra loads of a quarter).</param>
+    public static List<PredictedSocEntry> PredictedSoc(DpPlan dp, IReadOnlyDictionary<DateTime, int> todayAndTomorrow, SimulationResult greedy)
+    {
+      var planned = dp.Slots.ToDictionary(s => s.Time);
+      var loads = greedy.Slots.ToDictionary(s => s.Time, s => s.ExtraLoadWh > 0);
+      return todayAndTomorrow.OrderBy(x => x.Key).Select(x => planned.TryGetValue(x.Key, out var slot)
+          ? new PredictedSocEntry(x.Key, slot.SocPct, slot.Mode.ToString(), loads.GetValueOrDefault(x.Key))
+          : new PredictedSocEntry(x.Key, x.Value, "past", false))
+        .ToList();
+    }
+
+    /// <summary>The attributes of sensor.pv_control_dp_shadow_predicted_soc (sensor.pv_control_info_predicted_soc's format).</summary>
+    /// <param name="entries">The predicted SoC (<see cref="PredictedSoc"/>).</param>
+    /// <param name="now">Current time.</param>
+    /// <param name="computedAt">When the plan was computed.</param>
+    public static object PredictedSocAttributes(IReadOnlyList<PredictedSocEntry> entries, DateTime now, DateTime computedAt) => new
+    {
+      current_entry_time = entries.LastOrDefault(e => e.Time <= now)?.Time.ToISO8601(),
+      computed_at = computedAt.ToISO8601(),
+      data_actual = entries.Select(e => new
+      {
+        datetime = e.Time.ToISO8601(), soc = e.Soc, mode = e.Mode, extra_load = e.ExtraLoad, export_allowed = true,
+      }),
+    };
 
     /// <summary>The attributes of sensor.pv_control_dp_shadow.</summary>
     /// <param name="r">The comparison.</param>

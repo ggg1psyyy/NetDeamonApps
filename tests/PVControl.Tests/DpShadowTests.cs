@@ -99,4 +99,24 @@ public class DpShadowTests : TestBase, IDisposable
   [Fact]
   public void Disabled_NeverDue() =>
     Assert.False(new DpShadow(new DpShadowConfig { Enabled = false }, _db).Due(Day));
+
+  [Fact]
+  public void PredictedSoc_TheGreedySensorsFormat_PastAsIs_PlanFromNow()
+  {
+    // today 00:00 → tomorrow 23:45 like sensor.pv_control_info_predicted_soc; before now the same actual SoC.
+    var now = Day.AddHours(22);
+    var input = Input(now, 29);
+    var greedy = EnergySimulator.Simulate(input);
+    var dp = BatteryDpPlanner.Plan(input);
+    var todayAndTomorrow = new Dictionary<DateTime, int>();
+    for (var t = Day; t < Day.AddDays(2); t = t.AddMinutes(15))
+      todayAndTomorrow[t] = t < now ? 50 : greedy.Slots.FirstOrDefault(s => s.Time == t)?.SoC ?? 0;
+    var entries = DpShadow.PredictedSoc(dp, todayAndTomorrow, greedy);
+    Assert.Equal(192, entries.Count);
+    Assert.All(entries.Where(e => e.Time < now), e => { Assert.Equal("past", e.Mode); Assert.Equal(50, e.Soc); });
+    var fromNow = entries.Where(e => e.Time >= now).ToList();
+    Assert.Equal(dp.Slots.Select(s => s.SocPct), fromNow.Select(e => e.Soc));
+    Assert.Equal(dp.Slots.Select(s => s.Mode.ToString()), fromNow.Select(e => e.Mode));
+  }
 }
+

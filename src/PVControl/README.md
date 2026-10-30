@@ -299,12 +299,14 @@ Next to the greedy plan (which keeps deciding), a dynamic program plans the batt
 (`Optimizer/BatteryDpPlanner`: states = SoC in 0.25-% steps, per quarter normal, grid_only or a grid charge to a
 target on the VPP or bulk path, the flows by the simulation's own function). Both plans are judged by one cost model
 (`PlanEvaluation`): grid cost, a penalty per % and quarter below the preferred minimum (and, practically forbidding,
-below the hard floor), minus the value of the energy left at the end. Every `IntervalMinutes` (default 5) it runs in
+below the hard floor), minus the value of the energy left at the end — at what refilling it would cost (the cheapest
+import price of the horizon's last 24 h, after the round trip), so no plan buys energy for after the horizon. Every `IntervalMinutes` (default 5) it runs in
 the background on the greedy run's input; it never reaches the inverter.
 
 | Entity / file | Content |
 |---|---|
 | `sensor.pv_control_dp_shadow` | State: the DP's mode now; attributes: `greedy_mode_now`, `agree_now`, `saving_eur` (greedy − DP total), both totals, grid costs and band penalties, both plans' lows, both plans' grid charges (`start`, `end`, `kwh`, `avg_price`), `runtime_ms` |
+| `sensor.pv_control_dp_shadow_predicted_soc` | The DP's predicted SoC in the format of `sensor.pv_control_info_predicted_soc` (`data_actual`: `datetime`, `soc`, `mode`, `extra_load`, `export_allowed`; past quarters the same actual SoC) — a second graph only swaps the entity; state: the DP's SoC now |
 | `dp_shadow.db` (plugin folder) | Table `shadow`, one row per quarter: SoC, both modes, both totals and grid costs, both lows, both next charges, run time |
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
@@ -338,7 +340,7 @@ dotnet test tests/PVControl.Tests
 | `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch (a moved session keeps its energy and supply) |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
-| `BatteryDpPlannerTests`, `DpShadowTests` | DP shadow: never dearer than the greedy plan under the one cost model, tonight's two lows in one charge, hard floor, enforced floor, flows add up, the greedy plan's cost equals the simulation's own, run time; charge blocks, the comparison, one log row per quarter |
+| `BatteryDpPlannerTests`, `DpShadowTests` | DP shadow: never dearer than the greedy plan under the one cost model, tonight's two lows in one charge, no charge at the horizon's end (refill price), hard floor, enforced floor, flows add up, the greedy plan's cost equals the simulation's own, run time; charge blocks, the comparison, one log row per quarter, the predicted SoC in the greedy sensor's format |
 | `PreferredMinimumTests` | The preferred minimum: the night charge lifts the morning low to it in the cheap hours; the live 2026-10-30 day (all prices above the limit) charges at midday to keep the evening at it; a late dip with only peak quarters before it isn't bought there; below it but above the hard floor nothing is bought at the peak; the hard floor is held (and released only 2 % above it); flat prices keep it; enforced it is the hard floor; planned loads keep it overnight |
 | `MorningTopUpTests` | Grid charge on a real night (prices, load forecast): night charge with forecast margin, no top-up at peak price before PV (grid_only holds the floor) |
 | `FoggyDayTopUpTests` | Grid charge before a foggy day: the trough is searched up to the PV peak after the critical point, not a small bump before it |

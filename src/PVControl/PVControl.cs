@@ -33,6 +33,7 @@ namespace NetDeamon.apps.PVControl
     // The DP shadow planner (Optimizer.DpShadow): computed and published next to the greedy plan, never steering.
     private Optimizer.DpShadow? _dpShadow;
     private Entity? _dpShadowEntity;
+    private Entity? _dpShadowSocEntity;
     // nullforgiving "!" used to supress CS8618 for now
     private HouseEnergy _house = null!;
     #region Created Entities
@@ -1427,16 +1428,21 @@ namespace NetDeamon.apps.PVControl
     /// <param name="now">Current time.</param>
     private void RunDpShadowIfDue(DateTime now)
     {
-      if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || !shadow.Due(now) || _house.SimulationState is not { } sim)
+      if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || _dpShadowSocEntity is not { } socEntity
+          || !shadow.Due(now) || _house.SimulationState is not { } sim)
         return;
+      var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       _ = Task.Run(async () =>
       {
         try
         {
-          if (await shadow.RunAsync(sim, now) is { } report && !_subscriptions.IsDisposed)
+          if (await shadow.RunAsync(sim, now) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
           {
             await PVCC_EntityManager.SetStateAsync(entity.EntityId, report.DpModeNow.ToString());
             await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, Optimizer.DpShadow.Attributes(report));
+            var soc = Optimizer.DpShadow.PredictedSoc(plan, todayAndTomorrow, sim);
+            await PVCC_EntityManager.SetStateAsync(socEntity.EntityId, plan.Slots[0].SocPct.ToString(CultureInfo.InvariantCulture));
+            await PVCC_EntityManager.SetAttributesAsync(socEntity.EntityId, Optimizer.DpShadow.PredictedSocAttributes(soc, now, report.ComputedAt));
           }
         }
         catch (Exception ex)
@@ -1527,8 +1533,13 @@ namespace NetDeamon.apps.PVControl
       // Deployed build: republished on every start so the device's "Firmware" follows it too.
       var version = await RegisterSensor("sensor.pv_control_version", "Version", null, "mdi:tag-outline", republish: true);
       if (_dpShadow is not null)
+      {
         _dpShadowEntity = await RegisterSensor("sensor.pv_control_dp_shadow", "DP shadow plan", null, "mdi:chart-timeline-variant-shimmer",
           reRegister: reset);
+        // Its own sensor: the predicted SoC alone is as large as the greedy one's (just under the recorder's 16 kB).
+        _dpShadowSocEntity = await RegisterSensor("sensor.pv_control_dp_shadow_predicted_soc", "DP shadow predicted SoC", "Battery",
+          "mdi:calendar-question", addConfig: new { unit_of_measurement = "%" }, defaultValue: "0", reRegister: reset);
+      }
       await PVCC_EntityManager.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly));
       PVCC_Logger.LogInformation("PVControl version {Version}", AppVersion.Of(GetType().Assembly));
       _healthEntity = await RegisterSensor("sensor.pv_control_health", "Health", "ENUM", "mdi:heart-pulse",

@@ -1036,3 +1036,14 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   only trades the reserve for a clear saving. The penalty is the knob the shadow's log can calibrate.
 - **Same input:** the DP plans on the greedy run's `SimulationInput` (forecasts, prices, planned extra loads), so
   both plans differ only in the battery decisions. Extra loads stay planned by the greedy logic for now.
+- **The end value at the refill price:** at first the energy left at the end was valued at the mean import price
+  (peaks included) — the first live run (2026-10-30 12:17) bought 5.5 kWh at 0.41 at the horizon's very end, for
+  after it, and "saved" 0.52 € on paper while paying 3.4 € more to the grid. Now it is worth what refilling it costs:
+  the cheapest import price of the horizon's last 24 h after the round trip.
+- **Interpolated, not rounded:** the cost of the rest at an exact energy is interpolated between the two grid states
+  around it; rounding to the nearest state turned every quarter's small drain (100 Wh = 3.47 steps) into 3 steps, the
+  DP believed the battery lasted longer and its plan came out dearer than the greedy one under the same model — the
+  test that the DP is never dearer caught it. Penalties use the whole % the simulation and the evaluation use.
+- **Its own predicted-SoC sensor** (`sensor.pv_control_dp_shadow_predicted_soc`, the greedy sensor's format): together
+  with the comparison it would pass the recorder's 16 kB attribute limit.
+

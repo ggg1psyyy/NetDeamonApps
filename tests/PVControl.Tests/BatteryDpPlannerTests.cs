@@ -31,11 +31,13 @@ public class BatteryDpPlannerTests : TestBase
   static SimulationInput Input(DateTime start, int soc, int pvWh = 240, int loadWh = 100, int preferred = 20, bool enforce = false)
   {
     var prices = new List<PriceTableEntry>();
+    var export = new List<PriceTableEntry>();   // live the export earns about half the import price (no network fee, no tax)
     var load = new Dictionary<DateTime, int>();
     var pv = new Dictionary<DateTime, int>();
     for (var t = Day.AddDays(-1); t < Day.AddDays(3); t = t.AddMinutes(15))
     {
       prices.Add(new PriceTableEntry(t, t.AddMinutes(15), Price(t)));
+      export.Add(new PriceTableEntry(t, t.AddMinutes(15), Price(t) / 2));
       load[t] = loadWh;
       pv[t] = t.Hour >= 10 && t.Hour < 15 ? pvWh : 0;
     }
@@ -43,7 +45,7 @@ public class BatteryDpPlannerTests : TestBase
     {
       StartTime = start, StartSocPercent = soc, BatteryCapacityWh = 11_520,
       AbsoluteMinSocPercent = 12, PreferredMinSocPercent = preferred, EnforcePreferredSoc = enforce,
-      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = prices,
+      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = export,
       LoadPredictionWh = load, PVPredictionWh = pv, ExtraLoads = [],
       EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.35f,
       ForceChargeTargetSocPercent = 95, CurrentMode = new InverterState(InverterModes.normal),
@@ -83,7 +85,7 @@ public class BatteryDpPlannerTests : TestBase
     var greedy = EnergySimulator.Simulate(input).Slots;
     var dp = BatteryDpPlanner.Plan(input, O).Slots;
     var dpStarts = ChargeStarts(dp).Where(t => t < Day.AddDays(1).AddHours(9)).ToList();
-    Assert.Single(dpStarts);
+    Assert.True(dpStarts.Count == 1, string.Join(", ", dp.Where(s => s.Time.Minute % 30 == 0).Select(s => $"{s.Time:dd HH:mm} {s.Mode} {s.SocPct}%")));
     Assert.Equal(23, dpStarts[0].Hour);
     Assert.True(dp.Where(s => s.Time >= Day.AddDays(1).AddHours(15)).All(s => s.SocPct >= 19),
       string.Join(", ", dp.Where(s => s.Time.Minute == 0).Select(s => $"{s.Time:dd HH} {s.Mode} {s.SocPct}%")));
@@ -137,4 +139,28 @@ public class BatteryDpPlannerTests : TestBase
     BatteryDpPlanner.Plan(input, O);
     Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"{sw.ElapsedMilliseconds} ms");
   }
+
+  [Fact]
+  public void EndValue_AtTheCheapestPriceOfTheLastDay()
+  {
+    // Horizon from 30.10. 22:00 to 01.11. 00:00: its last 24 h are 31.10.; cheapest there 0.40 (00–05 h).
+    var input = Input(Day.AddHours(22), 29);
+    Assert.Equal(0.40f, PlanEvaluation.RefillPrice(input), 4);
+    int floorWh = input.SocToWh(input.GetEffectiveMinSoC());
+    Assert.Equal(0.40f * input.RoundTripEfficiency, PlanEvaluation.EndValue(input, floorWh + 1000), 4);
+    Assert.Equal(0f, PlanEvaluation.EndValue(input, floorWh - 500));
+  }
+
+  [Fact]
+  public void HorizonEnd_NoChargeAboveTheRefillPrice()
+  {
+    // Live 2026-10-30 12:17: valued at the mean price, the plan bought 5.5 kWh at 0.41 at the horizon's very end for
+    // after it. At the refill price (the last day's cheapest) a charge there doesn't pay.
+    var input = Input(Day.AddHours(22), 29);
+    var end = BatteryDpPlanner.HorizonEnd(input);
+    var lastHours = BatteryDpPlanner.Plan(input, O).Slots.Where(s => s.Time >= end.AddHours(-4)).ToList();
+    Assert.True(!lastHours.Any(s => s.Mode == InverterModes.force_charge),
+      string.Join(", ", BatteryDpPlanner.Plan(input, O).Slots.Where(s => s.Time.Minute % 30 == 0).Select(s => $"{s.Time:dd HH:mm} {s.Mode} {s.SocPct}%")));
+  }
 }
+
