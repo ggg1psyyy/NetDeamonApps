@@ -119,8 +119,8 @@ public class FindWindowConditionTests : TestBase
       StartSocPercent             = StartSoc,
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,
@@ -397,8 +397,8 @@ public class FindWindowConditionTests : TestBase
       StartSocPercent             = 85,  // 9 792 Wh — enough for the cheap window
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,
@@ -487,8 +487,8 @@ public class FindWindowConditionTests : TestBase
       StartSocPercent             = TroughSoc,
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,
@@ -565,8 +565,8 @@ public class FindWindowConditionTests : TestBase
                                          // still needs grid help, but PV fully recovers it by T1
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,
@@ -618,8 +618,8 @@ public class FindWindowConditionTests : TestBase
       StartSocPercent             = 20,
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,
@@ -774,8 +774,8 @@ public class FindWindowConditionTests : TestBase
       StartSocPercent             = 40,   // 40 % = 4 608 Wh → hits AbsMin mid-afternoon with EV
       BatteryCapacityWh           = BatCap,
       AbsoluteMinSocPercent       = AbsMin,
-      PreferredMinSocPercent      = 30,
-      EnforcePreferredSoc         = false,
+      PreferredMinSocPercent      = AbsMin,
+      EnforcePreferredSoc         = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps          = ChargeA,
       InverterEfficiency          = 0.9f,
       ImportPrices                = prices,

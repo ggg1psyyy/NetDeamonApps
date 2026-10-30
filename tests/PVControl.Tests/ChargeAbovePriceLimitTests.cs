@@ -29,7 +29,7 @@ public class ChargeAbovePriceLimitTests : TestBase
     return EnergySimulator.Simulate(new SimulationInput
     {
       StartTime = Day.AddHours(13).AddMinutes(30), StartSocPercent = soc, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 30, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps = 30, ChargeVoltageV = 240, InverterEfficiency = 0.95f,
       ImportPrices = new PriceList(prices).WithEstimatedPrices(Day.AddDays(2), 0.05f),
       ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.08f))),

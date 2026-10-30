@@ -39,7 +39,7 @@ public class MiddayChargeVsNightTests
     return new SimulationInput
     {
       StartTime = start, StartSocPercent = soc, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 25, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true, // a hard floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps = 30, InverterEfficiency = 0.95f,
       ImportPrices = new PriceList(prices), ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.17f))),
       PublishedPricesUntil = Day.AddDays(2),

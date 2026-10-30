@@ -720,7 +720,8 @@ public class SimulatorTests : TestBase
       start,
       startSocPct:   25,
       pvWhPerSlot:   2000,  // strong daytime PV — battery fully recharges during day
-      loadWhPerSlot: 300)); // 1200 W load; (25%−12%) × 10000 Wh / 1200 W ≈ 65 min → hits AbsMin before 08:00
+      loadWhPerSlot: 300,   // 1200 W load; (25%−12%) × 10000 Wh / 1200 W ≈ 65 min → hits AbsMin before 08:00
+      prefMinSocPct: 12));  // no preferred band: the plan would keep it, this is about the window of the drain
 
     Assert.Equal(PVPeriods.BeforePV, result.CurrentPVPeriod);
 

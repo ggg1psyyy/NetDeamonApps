@@ -1005,3 +1005,16 @@ restarts of 2026-10-25 07:15 (a row "08:00" with 6.2 kWh booked at 09:15) and 20
 2026-10-29 was the first night with no deploy after a restart. A second live instance is now a health error
 (`HealthChecks.Instances`: PVControl counts its instances, created minus disposed).
 
+The same day the plan let the battery dip to 17 % from 21:15 and refilled at 23:15: every price was above the
+0.35 force-charge limit, and refilling after the dip (0.394) was a little cheaper than charging at midday (0.401).
+The preferred minimum is now a planning constraint independent of the limit (`PreferredBandChargesNow`): kept in the
+cheapest quarters before the dip, but never in a quarter above the coming 24 h's average price — a dip the forecast
+only sees late, with peak quarters before it, isn't bought there. The band's own target (`PreferredBandTargetSoc`)
+covers only until PV lifts the battery back to the minimum or a quarter as cheap as now comes after the dip — buying
+the whole night at midday would only move energy to a dearer quarter; the floor's deficit target
+(`DeficitChargeTargetSoc`) also ended its window at the dip when the look-ahead only fell after it (tomorrow's PV
+lower than tonight's start). A band-only charge carries the reason GoingUnderPreferredMinima, which selects that
+target. Once below the minimum there is no dip ahead to keep: refilled in the cheapest quarters of the coming 24 h,
+not while PV charges the battery (live 2026-10-21: a SoC dropout read as 0 % would otherwise have bought from the grid
+while PV was filling the battery).
+

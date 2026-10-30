@@ -74,8 +74,10 @@ public static class EnergySimulator
       // user-initiated force charging and would cause massive over-charging here).
       int chargeTargetSocPercent = input.ForceChargeTargetSocPercent;
       if (IsNeedCharge(newMode))
-        chargeTargetSocPercent = DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
-          withMargin: input.ImportPrices.GetPrice(slotTime) <= input.ForceChargeMaxPrice);
+        chargeTargetSocPercent = !input.EnforcePreferredSoc && newMode.ModeReason == ForceChargeReasons.GoingUnderPreferredMinima
+          ? PreferredBandTargetSoc(input, slotTime, currentSoc, baseFutureSoC, needToCharge.LatestChargeTime)
+          : DeficitChargeTargetSoc(currentSoc, slotTime, endSlot, baseFutureSoC, needToCharge, input,
+              withMargin: BandAllowedAt(input, input.ImportPrices.GetPrice(slotTime)));
       else if (newMode is { Mode: InverterModes.force_charge, ModeReason: ForceChargeReasons.ForcedChargeAtMinimumPrice })
         chargeTargetSocPercent = DailyTargetChargeSoc(input, slotTime, currentSoc, baseFutureSoC) ?? chargeTargetSocPercent;
       // The charge path is chosen when a grid charge starts and kept while it runs.
@@ -375,6 +377,75 @@ public static class EnergySimulator
   {
     int peak = baseFutureSoC.Where(s => s.Key >= slotTime && s.Key <= lowTime).Select(s => s.Value).DefaultIfEmpty(currentSoc).Max();
     return Math.Max(0, 100 - Math.Max(peak, currentSoc));
+  }
+
+  /// <summary>Whether the band above the hard floor (<see cref="SoftBandPct"/>) may be bought at a price: the preferred
+  /// minimum (not enforced) at any price — <see cref="PreferredBandChargesNow"/> picks its quarters —, the forecast
+  /// margin of an enforced floor only under ForceChargeMaxPrice.</summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="price">Import price of the quarter, €/kWh.</param>
+  public static bool BandAllowedAt(SimulationInput input, float price) =>
+    !input.EnforcePreferredSoc || price <= input.ForceChargeMaxPrice;
+
+  /// <summary>
+  /// Whether the preferred minimum is charged in the current quarter: it is one of the cheapest quarters before the
+  /// dip that the deficit needs (<see cref="ChargesInCheapestQuarters"/> without a price limit) — once below it, of the
+  /// coming 24 h —, and not above the average price of the coming 24 h: the band is never bought at an expensive time.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="window">Quarters before the dip.</param>
+  /// <param name="upcoming">All upcoming quarters.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="simulatedSoc">Simulated SoC now, %.</param>
+  /// <param name="targetSoc">Target of the charge, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="pvWhSlot">PV of the slot, Wh.</param>
+  /// <param name="totalLoadWhSlot">Load incl. extra loads of the slot, Wh.</param>
+  private static bool PreferredBandChargesNow(SimulationInput input, List<PriceTableEntry> window, List<PriceTableEntry> upcoming,
+    DateTime now, int simulatedSoc, int targetSoc, Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot)
+  {
+    if (targetSoc <= simulatedSoc) return false;   // nothing to keep: no charge that only lets the grid carry the load
+    var day = upcoming.Where(p => p.StartTime < now.AddHours(24)).ToList();
+    // Already below it (an unforeseen load, a dropout): no dip ahead to keep — refilled in the cheapest quarters of the
+    // coming 24 h, and not while PV charges the battery anyway.
+    if (simulatedSoc < input.GetPreferredMinSoC())
+    {
+      if (pvWhSlot > totalLoadWhSlot) return false;
+      window = day;
+    }
+    if (RankNow(window, now, float.MaxValue) is not { } rank) return false;
+    if (day.Count == 0 || rank.Now.Price > day.Average(p => p.Price)) return false;
+    return ChargesInCheapestQuarters(input, now, rank.Cheaper, simulatedSoc, targetSoc, baseFutureSoC, pvWhSlot, totalLoadWhSlot);
+  }
+
+  /// <summary>
+  /// Target SoC of a charge for the preferred minimum: the look-ahead stays at it (+ <see cref="ChargeTargetBufferPct"/>)
+  /// until PV lifts the battery back to it after the dip, or the first quarter after the dip that is at most as expensive
+  /// as now, whichever comes first — from there PV or an as cheap refill take over, so buying more now only moves energy
+  /// to a dearer quarter. At most the room a PV peak before then leaves.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="now">Current slot.</param>
+  /// <param name="currentSoc">Simulated SoC now, %.</param>
+  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
+  /// <param name="dip">When the look-ahead goes under the preferred minimum (the need's latest charge time).</param>
+  /// <returns>Target SoC, % (at most 100).</returns>
+  private static int PreferredBandTargetSoc(SimulationInput input, DateTime now, int currentSoc, Dictionary<DateTime, int> baseFutureSoC, DateTime dip)
+  {
+    float priceNow = input.ImportPrices.GetPrice(now);
+    int preferred = input.GetPreferredMinSoC();
+    var cheapAgain = input.QuarterHourlyImportPrices.Where(p => p.StartTime > dip && p.Price <= priceNow)
+      .Select(p => (DateTime?)p.StartTime).FirstOrDefault() ?? now.AddHours(24);
+    // PV refills: back at the preferred minimum after the look-ahead first went under it (not after the need's latest
+    // charge time — that has a lead, the look-ahead is still above the minimum there).
+    var under = baseFutureSoC.Where(x => x.Key >= now && x.Value < preferred).Select(x => (DateTime?)x.Key).FirstOrDefault();
+    var pvRefills = under is { } u
+      ? baseFutureSoC.Where(x => x.Key > u && x.Value >= preferred).Select(x => (DateTime?)x.Key).FirstOrDefault() ?? cheapAgain
+      : cheapAgain;
+    var until = cheapAgain < pvRefills ? cheapAgain : pvRefills;
+    int low = baseFutureSoC.Where(x => x.Key >= now && x.Key <= until).Select(x => x.Value).DefaultIfEmpty(currentSoc).Min();
+    int deficit = Math.Max(0, preferred + ChargeTargetBufferPct - low);
+    return Math.Min(100, currentSoc + Math.Min(deficit, PvRoomBeforeLow(currentSoc, now, until, baseFutureSoC)));
   }
 
   /// <summary>A hold at the hard floor (grid_only) ends only this far above it, %.</summary>
@@ -776,31 +847,42 @@ public static class EnergySimulator
       }
       // Above the price limit only for the floor itself, never for the forecast margin alone (live
       // 2026-10-25 12:15: 35.4 ct for a margin 19 h ahead; an EV drawing the battery triggered it again).
-      bool marginAllowed = importPriceNow <= input.ForceChargeMaxPrice;
+      bool marginAllowed = BandAllowedAt(input, importPriceNow);
       bool hardNeed = ComputeNeedToCharge(simulatedSoc, baseFutureSoC, currentMode, input, now, withMargin: false).NeedToCharge;
       if (inWindow && !marginAllowed && !hardNeed)
         inWindow = false;
-      // The soft band (the preferred minimum) is only worth cheap energy: bought only where it beats holding
-      // through the low incl. losses, never at an expensive time (live 2026-10-30: the house imported at the
-      // morning peak 0.50 after a heating run, the night charge at 0.39 had only aimed for the absolute floor).
-      if (inWindow && !hardNeed && !input.EnforcePreferredSoc
-          && !ChargingBeatsHolding(window, upcoming, need, PvTakeoverAfter(need.LatestChargeTime, baseFutureSoC.Keys, input), input))
-        inWindow = false;
+      // The preferred minimum (not enforced) is kept by the plan: charged in the cheapest quarters before the dip, also
+      // above the price limit and also when refilling after the dip would be a little cheaper — but never in a quarter
+      // above the coming 24 h's average price (live 2026-10-30: all prices above the 0.35 limit, the plan let the
+      // battery dip to 17 % from 21:15 and refilled at 23:15 instead of charging at midday's 0.40).
+      // With a hard need too (the floor itself would be reached), the floor's own triggers stay and the band's quarters add
+      // to them; without one only the band's rule decides.
+      bool floorTriggered = hardNeed && inWindow;
+      if (!input.EnforcePreferredSoc)
+      {
+        bool band = PreferredBandChargesNow(input, window, upcoming, now, simulatedSoc,
+          PreferredBandTargetSoc(input, now, simulatedSoc, baseFutureSoC, need.LatestChargeTime), baseFutureSoC, pvWhSlot, totalLoadWhSlot);
+        inWindow = floorTriggered || band;
+      }
       bool socOk = SocOkToCharge(currentMode, simulatedSoc);
       // Not before a PV peak that fills the battery anyway (live 2026-10-25 11:45: 95 %, PV to 100 %
       // by 12:15, the low only tomorrow 07:00 — the charge bought at 35 ct what PV then exported).
       // The rest of the deficit is bought after the peak.
+      bool bandOnly = !input.EnforcePreferredSoc && !floorTriggered;
       if (inWindow && PvRisesBeforeLow(simulatedSoc, now, need.LatestChargeTime, baseFutureSoC)
-          && DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input, marginAllowed) - simulatedSoc <= MinPvRoomPct)
+          && (bandOnly ? PreferredBandTargetSoc(input, now, simulatedSoc, baseFutureSoC, need.LatestChargeTime)
+                       : DeficitChargeTargetSoc(simulatedSoc, now, endSlot, baseFutureSoC, need, input, marginAllowed)) - simulatedSoc <= MinPvRoomPct)
         inWindow = false;
 
       // No "next hour is cheaper, wait" deferral here: a cheaper next hour is already among
       // the chosen quarters, and deferring a chosen quarter just pushes the charge past them.
       if (inWindow && socOk)
       {
-        var reason = need.EstimatedSoc <= input.AbsoluteMinSocPercent + 2
-          ? ForceChargeReasons.GoingUnderAbsoluteMinima
-          : ForceChargeReasons.GoingUnderPreferredMinima;
+        // Without enforcing, the reason tells the charge's target apart: GoingUnderPreferredMinima = only the band
+        // (PreferredBandTargetSoc), GoingUnderAbsoluteMinima = the floor (DeficitChargeTargetSoc).
+        var reason = input.EnforcePreferredSoc
+          ? need.EstimatedSoc <= input.AbsoluteMinSocPercent + 2 ? ForceChargeReasons.GoingUnderAbsoluteMinima : ForceChargeReasons.GoingUnderPreferredMinima
+          : bandOnly ? ForceChargeReasons.GoingUnderPreferredMinima : ForceChargeReasons.GoingUnderAbsoluteMinima;
         return new InverterState(InverterModes.force_charge, reason);
       }
 
