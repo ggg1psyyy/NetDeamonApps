@@ -970,3 +970,32 @@ the host's folder, linq2db (PVControl's own) in the plugin's, and PVControl fail
 System.Data.SQLite", 17:39–17:46, rolled back). A reproduction with the plugin layout showed the plain call failing
 and the explicit one working; `SqliteOptionsTests` pins the explicit choice (in the test output both assemblies lie
 together, so the detection itself can't fail there).
+
+## Preferred minimum SoC: a band the plan keeps, not a second hard floor
+
+Until 2026-10-30 every floor decision used the floor in force: the preferred minimum only with
+`switch.pv_control_enforce_preferred_soc`, otherwise the absolute one (the inverter's 10 % + 2). Without enforcing,
+the preferred minimum didn't count in planning at all. That night the charge at 03:00 (0.39) only aimed for the
+absolute 12 % at the morning low (+ ~2 % forecast margin); a heat pump heating run at 07:05 (these runs come at
+different hours every morning, 0.4–1.4 kWh — no hour-of-day forecast places them) drained the rest, and from 07:28
+the house imported at the morning peak (0.50). Now (`EnergySimulator.SoftBandPct`): the band between the absolute
+and the preferred minimum takes the place of the forecast margin — planned for and charged like it (only in cheap
+quarters, under the price limit, and here also only where cheaper than holding through the low incl. losses), but
+the hold (`grid_only`) stays at the hard floor, so an unforeseen load may use the band. Planned loads keep the
+preferred minimum (`IsOvernightMinSocOk`, the Priority SoC gate): they are foreseen. Enforced, the preferred minimum
+is the hard floor with the forecast margin on top, as before. The older scenario tests pin an enforced 12 % floor —
+the semantics they were written for.
+
+The hold at the hard floor is released only `HoldReleasePct` (2 %) above it: at the bare floor the live SoC's 1-%
+steps switched normal/grid_only every 15 s (2026-10-30 07:44).
+
+## App instances after a reconnect to Home Assistant (`AppSubscriptions`)
+
+On 2026-10-29 21:51 Home Assistant closed the connection; on reconnecting NetDaemon reloaded every app: new
+instances, the old ones disposed. It ends an app's HA state subscriptions and its scheduler with it — not the
+subscriptions on singletons. PVControl's MQTT command subscriptions (the entity manager is a singleton) stayed alive,
+so every command after that also reached the old instance: it ran with its state of 21:51 and booked a cost row
+stamped "22:00" with all the import since 21:45 (counted twice), published its old inverter command (`seq 150`,
+applied 07:46:36) and stale health ("weather 20:53"). PVControl and HeatingTest now register their command
+subscriptions with `AppSubscriptions` and end them in `DisposeAsync`; handlers return once disposed.
+

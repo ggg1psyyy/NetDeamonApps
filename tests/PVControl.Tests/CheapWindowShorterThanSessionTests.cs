@@ -36,7 +36,7 @@ public class CheapWindowShorterThanSessionTests : TestBase
     return new SimulationInput
     {
       StartTime = Day.AddHours(8), StartSocPercent = 18, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 25, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true, // a hard 12 % floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps = 16, InverterEfficiency = 0.95f,
       ImportPrices = new PriceList(prices).WithEstimatedPrices(Day.AddDays(2), 0.05f),
       ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.08f))),

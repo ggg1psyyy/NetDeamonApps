@@ -87,7 +87,7 @@ public class VppChargePathTests
     return new SimulationInput
     {
       StartTime = start, StartSocPercent = soc, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 25, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true, // a hard 12 % floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ChargeVoltageV = 245,
       ImportPrices = new PriceList(prices), ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.17f))),
       PublishedPricesUntil = Night.AddDays(2),
@@ -208,7 +208,7 @@ public class ChargeStartAlignmentTests
     return new SimulationInput
     {
       StartTime = Night.AddHours(-2), StartSocPercent = soc, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 25, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true, // a hard 12 % floor with the forecast margin: the scenario as pinned (without enforcing, the preferred minimum is a band the plan keeps — PreferredMinimumTests)
       MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ChargeVoltageV = 245,
       ImportPrices = new PriceList(prices), ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.17f))),
       PublishedPricesUntil = Night.AddDays(2),

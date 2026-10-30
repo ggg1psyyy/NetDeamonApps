@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using NetDaemon.HassModel.Entities;
 using NetDeamon.apps.PVControl.Managers;
@@ -908,9 +908,9 @@ namespace NetDeamon.apps.PVControl
       }
 
       // ── Priority's ruleset (shared verbatim by PriorityPlus, via the climb below) ──────────
-      // May draw the battery down to its configured minimum — Optimal's ruleset above already
-      // established PV alone doesn't cover this. The floor is the same for Priority and
-      // PriorityPlus: PreferredMinSoC when EnforcePreferredSoC is on, AbsoluteMinSoC when off.
+      // May draw the battery down to the preferred minimum — Optimal's ruleset above already
+      // established PV alone doesn't cover this. A planned load is foreseen: it never uses the band
+      // between the preferred and the absolute minimum, which is left for unforeseen loads.
       void RunPriorityRuleset()
       {
         // Schedule new sessions as late as possible before sunrise. Nothing recharges the
@@ -994,8 +994,8 @@ namespace NetDeamon.apps.PVControl
           return;
         }
 
-        // Real-time battery SoC gate: PreferredMinSoC when EnforcePreferredSoC is on,
-        // AbsoluteMinSoC when off.
+        // Real-time battery SoC gate at the preferred minimum (a planned load never uses the band
+        // below it, see above).
         //
         // Without this gate, the simulation's IsOvernightMinSocOk looks at the NEXT overnight
         // window (sunset today → sunrise tomorrow). In the pre-dawn hours that window is 18h
@@ -1009,9 +1009,7 @@ namespace NetDeamon.apps.PVControl
         // again. PV surplus that already covers the charge rate bypasses the wait since it
         // won't draw the battery down further.
         {
-          int socFloor = _house.Battery.EnforcePreferredSoC
-            ? _house.Battery.PreferredMinimalSoC
-            : _house.Battery.AbsoluteMinimalSoC;
+          int socFloor = _house.Battery.PreferredMinimalSoC;
           int currentSoC = _house.Battery.BatterySoc;
           int netPvW = _house.CurrentAveragePVPower - _house.CurrentAverageHouseLoad;
 

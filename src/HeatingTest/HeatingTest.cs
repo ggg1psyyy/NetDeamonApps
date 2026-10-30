@@ -29,8 +29,10 @@ namespace NetDeamon.apps.HeatingTest;
 /// The decisions are in <see cref="HeatingTestLogic"/> (unit tested); this class is the HA side.
 /// </summary>
 [NetDaemonApp]
-public sealed class HeatingTest : IAsyncInitializable
+public sealed class HeatingTest : IAsyncInitializable, IAsyncDisposable
 {
+  // The MQTT command subscriptions outlive the app (the entity manager is a singleton): ended in DisposeAsync.
+  readonly AppSubscriptions _subscriptions = new();
   readonly IHaContext _ha;
   readonly IMqttEntityManager _mqtt;
   readonly ILogger<HeatingTest> _logger;
@@ -83,8 +85,8 @@ public sealed class HeatingTest : IAsyncInitializable
 
     await RegisterEntitiesAsync();
     foreach (var e in new[] { _armed, _offset, _startTime, _duration })
-      (await _mqtt.PrepareCommandSubscriptionAsync(e.EntityId).ConfigureAwait(false))
-        .SubscribeAsync(async state => await CommandAsync(e, state));
+      _subscriptions.Add((await _mqtt.PrepareCommandSubscriptionAsync(e.EntityId).ConfigureAwait(false))
+        .SubscribeAsync(async state => await CommandAsync(e, state)));
 
     int seconds = Math.Clamp(_config.SampleSeconds, 10, 600);
     _scheduler.SchedulePeriodic(TimeSpan.FromSeconds(seconds), async () => await CycleAsync());
@@ -267,8 +269,17 @@ public sealed class HeatingTest : IAsyncInitializable
     await _mqtt.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly)).ConfigureAwait(false);
   }
 
+  /// <summary>NetDaemon disposes the app on a reload (e.g. a reconnect to Home Assistant): its command subscriptions end,
+  /// so the old instance never acts on a command again.</summary>
+  public ValueTask DisposeAsync()
+  {
+    _subscriptions.Dispose();
+    return ValueTask.CompletedTask;
+  }
+
   async Task CommandAsync(Entity entity, string state)
   {
+    if (_subscriptions.IsDisposed) return;   // a command already on its way to a disposed instance
     string echo = state;
     if (entity.EntityId == _armed.EntityId)
     {

@@ -62,7 +62,11 @@ second time next to the add-on — PVControl would then command the inverter twi
 2. Apps as usual: a class with `[NetDaemonApp]`, its config from `<Name>.yaml` (`IAppConfig<T>`).
 3. Files the app keeps (DBs): a relative location resolved with `AppFiles.PathOf(location, GetType().Assembly)` lies
    in the plugin's folder, next to its YAML.
-4. Add it as `<AppPlugin Include="..\<Name>\<Name>.csproj" />` in `src/Host/Host.csproj` (published into
+4. Subscriptions on the MQTT entity manager (`PrepareCommandSubscriptionAsync(...).SubscribeAsync`) outlive the app —
+   NetDaemon reloads every app on a reconnect to Home Assistant and only ends the app's HA subscriptions and its
+   scheduler. Register them with an `AppSubscriptions` (Common) and dispose it in `IAsyncDisposable.DisposeAsync`;
+   handlers return once it is disposed.
+5. Add it as `<AppPlugin Include="..\<Name>\<Name>.csproj" />` in `src/Host/Host.csproj` (published into
    `apps/plugins/<Name>/`), its tests as `tests/<Name>.Tests` on `../Tests.props`, both to `NetDeamon.sln`.
 
 The host provides NetDaemon, Common and SQLite — a plugin references them for compiling only, so its folder holds

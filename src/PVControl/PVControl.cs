@@ -24,8 +24,10 @@ namespace NetDeamon.apps.PVControl
   [Focus]
 #endif
   /// <summary>The PVControl app: registers the HA entities, reacts to user changes and runs the 15-s cycle (simulation, inverter command, loads, sensors).</summary>
-  public class PVControl : IAsyncInitializable
+  public class PVControl : IAsyncInitializable, IAsyncDisposable
   {
+    // The MQTT command subscriptions (the entity manager is a singleton: they outlive the app, AppSubscriptions).
+    private readonly AppSubscriptions _subscriptions = new();
     // nullforgiving "!" used to supress CS8618 for now
     private HouseEnergy _house = null!;
     #region Created Entities
@@ -188,13 +190,13 @@ namespace NetDeamon.apps.PVControl
         _logEnergy = true;
       }
       #endregion
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_prefBatterySoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_prefBatterySoCEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeMaxPriceEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeMaxPriceEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeTargetSoCEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeTargetSoCEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enforcePreferredSocEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enforcePreferredSocEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_forceChargeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_forceChargeEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_overrideModeEntity.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_overrideModeEntity, state));
-      (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(_enableOpportunisticExport.EntityId).ConfigureAwait(false)).SubscribeAsync(async state => await UserStateChanged(_enableOpportunisticExport, state));
+      await SubscribeCommandAsync(_prefBatterySoCEntity);
+      await SubscribeCommandAsync(_forceChargeMaxPriceEntity);
+      await SubscribeCommandAsync(_forceChargeTargetSoCEntity);
+      await SubscribeCommandAsync(_enforcePreferredSocEntity);
+      await SubscribeCommandAsync(_forceChargeEntity);
+      await SubscribeCommandAsync(_overrideModeEntity);
+      await SubscribeCommandAsync(_enableOpportunisticExport);
 
       PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
       foreach (var load in _house.SchedulableLoads)
@@ -202,8 +204,7 @@ namespace NetDeamon.apps.PVControl
         if (load.ModeEntity is not null)
         {
           PVCC_Logger.LogInformation("Subscribing to mode commands for {load} ({id})", load.Config.Name, load.ModeEntity.EntityId);
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ModeEntity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.ModeEntity, state));
+          await SubscribeCommandAsync(load.ModeEntity);
         }
         else
         {
@@ -213,9 +214,7 @@ namespace NetDeamon.apps.PVControl
         if (load.TargetLevelEntity is not null)
         {
           PVCC_Logger.LogInformation("Subscribing to target level commands for {load} ({id})", load.Config.Name, load.TargetLevelEntity.EntityId);
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.TargetLevelEntity.EntityId)
-              .ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.TargetLevelEntity, state));
+          await SubscribeCommandAsync(load.TargetLevelEntity);
         }
         else
         {
@@ -223,17 +222,13 @@ namespace NetDeamon.apps.PVControl
         }
 
         if (load.ReadyByEntity is not null)
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ReadyByEntity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.ReadyByEntity, state));
+          await SubscribeCommandAsync(load.ReadyByEntity);
         if (load.EnforceReadyByEntity is not null)
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnforceReadyByEntity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.EnforceReadyByEntity, state));
+          await SubscribeCommandAsync(load.EnforceReadyByEntity);
         if (load.EnergyPerLevelEntity is not null)
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.EnergyPerLevelEntity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.EnergyPerLevelEntity, state));
+          await SubscribeCommandAsync(load.EnergyPerLevelEntity);
         if (load.ChargePowerEntity is not null)
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(load.ChargePowerEntity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(load.ChargePowerEntity, state));
+          await SubscribeCommandAsync(load.ChargePowerEntity);
 
         // AvailabilityEntity is a plain external HA entity (not an app-owned command entity
         // like ModeEntity/TargetLevelEntity above), so it uses the same StateChanges()
@@ -256,8 +251,7 @@ namespace NetDeamon.apps.PVControl
       if (_house.WarmWater is { } warmWater)
       {
         foreach (var entity in warmWater.CommandEntities)
-          (await PVCC_EntityManager.PrepareCommandSubscriptionAsync(entity.EntityId).ConfigureAwait(false))
-            .SubscribeAsync(async state => await UserStateChanged(entity, state));
+          await SubscribeCommandAsync(entity);
         await warmWater.RefitAsync(cancellationToken);
       }
 
@@ -273,8 +267,25 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Applies a change of a PVControl control entity (mode, SoC limits, load settings, …) and requests a replan.</summary>
     /// <param name="entity">The changed entity; null = ignored.</param>
     /// <param name="newState">Its new state.</param>
+    /// <summary>Handles the commands of a PVControl entity (<see cref="UserStateChanged(Entity?, string)"/>) until the app is disposed.</summary>
+    /// <param name="entity">The command entity.</param>
+    private async Task SubscribeCommandAsync(Entity entity) =>
+      _subscriptions.Add((await PVCC_EntityManager.PrepareCommandSubscriptionAsync(entity.EntityId).ConfigureAwait(false))
+        .SubscribeAsync(async state => await UserStateChanged(entity, state)));
+
+    /// <summary>NetDaemon disposes the app on a reload (e.g. a reconnect to Home Assistant): its command subscriptions end,
+    /// so the old instance never acts on a command again with its stale state.</summary>
+    public ValueTask DisposeAsync()
+    {
+      _subscriptions.Dispose();
+      PVCC_Logger.LogInformation("PVControl disposed: command subscriptions ended");
+      GC.SuppressFinalize(this);
+      return ValueTask.CompletedTask;
+    }
+
     private async Task UserStateChanged(Entity? entity, string newState)
     {
+      if (_subscriptions.IsDisposed) return;   // a command already on its way to a disposed instance
       if (entity == null)
         return;
       PVCC_Logger.LogDebug("Entering UserStateChanged - Entity: {ent}, newState: {state}", entity.EntityId, newState);
@@ -382,6 +393,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Runs one cycle (<see cref="ScheduledOperationsCore"/>) and publishes the health; a cycle requested while one runs follows right after.</summary>
     private async Task ScheduledOperations()
     {
+      if (_subscriptions.IsDisposed) return;
       if (!await _schedLock.WaitAsync(0))
       {
         _schedPendingRerun = true;

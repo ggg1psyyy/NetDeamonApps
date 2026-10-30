@@ -13,7 +13,9 @@ namespace NetDeamonApps.Tests;
 /// 03:00, every 1 % SoC tick moved the forecast trough below the floor again, giving 28 grid
 /// charges of 30–60 s between 03:20 and 04:37. Night scenario: 11.52 kWh battery, floor 12 %,
 /// ~400 W house load, PV from 08:00, flat price (the current quarter is always the cheapest).
-/// From 03:15 to 08:00 the battery loses 19 × 100 Wh ≈ 16.5 %.
+/// From 03:15 to 08:00 the battery loses 19 × 100 Wh ≈ 16.5 %. The floor is a hard one (EnforcePreferredSoc,
+/// preferred = 12 %): the forecast margin on top of it is what these start/stop bands are about (without enforcing,
+/// the preferred minimum is the band instead — <see cref="PreferredMinimumTests"/>).
 /// </summary>
 public class NeedToChargeHysteresisTests : TestBase
 {
@@ -34,7 +36,7 @@ public class NeedToChargeHysteresisTests : TestBase
     return new SimulationInput
     {
       StartTime = Night, StartSocPercent = soc, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 15, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true,
       MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = prices,
       LoadPredictionWh = load, PVPredictionWh = pv, ExtraLoads = [],
       EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.34f,
@@ -106,7 +108,7 @@ public class NeedToChargeHysteresisTests : TestBase
     var at0715 = new SimulationInput
     {
       StartTime = Night.Date.AddHours(7).AddMinutes(15), StartSocPercent = 15, BatteryCapacityWh = night.BatteryCapacityWh,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 15, EnforcePreferredSoc = false,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 12, EnforcePreferredSoc = true,
       MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = night.ImportPrices, ExportPrices = night.ExportPrices,
       LoadPredictionWh = night.LoadPredictionWh, PVPredictionWh = night.PVPredictionWh, ExtraLoads = [],
       EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.34f,

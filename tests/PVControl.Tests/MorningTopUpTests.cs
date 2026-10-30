@@ -60,7 +60,9 @@ public class MorningTopUpTests
       BatteryCapacityWh = 11_520,
       AbsoluteMinSocPercent = 12,
       PreferredMinSocPercent = 12,
-      EnforcePreferredSoc = false,
+      // A hard 12 % floor with the forecast margin on top: what this night was about (without enforcing,
+      // the preferred minimum is the band instead — PreferredMinimumTests).
+      EnforcePreferredSoc = true,
       MaxChargePowerAmps = 30,
       InverterEfficiency = 0.95f,
       ImportPrices = prices,

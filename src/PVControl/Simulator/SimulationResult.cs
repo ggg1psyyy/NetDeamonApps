@@ -121,9 +121,9 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   // ── Derived predicates ─────────────────────────────────────────────────────────────────
 
-  /// <summary>Whether the dark window stays at or above the floor in force (<see cref="SimulationInput.GetEffectiveMinSoC"/>).</summary>
+  /// <summary>Whether the dark window stays at or above the preferred minimum (<see cref="SimulationInput.GetPreferredMinSoC"/>): planned loads never use the band below it.</summary>
   public bool IsOvernightMinSocOk() =>
-    OvernightMinSocReached >= _input.GetEffectiveMinSoC();
+    OvernightMinSocReached >= _input.GetPreferredMinSoC();
 
   /// <summary>Slots importing more energy than the baseline (by energy, not by mode).</summary>
   /// <param name="baseline">Same input without the load in question.</param>

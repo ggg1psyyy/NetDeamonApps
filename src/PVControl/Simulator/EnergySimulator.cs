@@ -347,7 +347,7 @@ public static class EnergySimulator
     // Lift the trough to floor + forecast margin + ChargeTargetBufferPct: the level at which
     // ComputeNeedToCharge stops an ongoing charge, so the simulated charge and the live stop
     // condition agree.
-    int margin = withMargin ? ForecastMarginPct(troughTime - slotTime) : 0;
+    int margin = withMargin ? SoftBandPct(input, troughTime - slotTime) : 0;
     int deficit = Math.Max(0, floorSoc + margin + ChargeTargetBufferPct - baseTrough);
     // Grid energy charged before a PV peak on the way to the low only counts up to the room PV
     // leaves there: more is clipped at 100 % and pushes PV out to the grid.
@@ -377,13 +377,30 @@ public static class EnergySimulator
     return Math.Max(0, 100 - Math.Max(peak, currentSoc));
   }
 
+  /// <summary>A hold at the hard floor (grid_only) ends only this far above it, %.</summary>
+  public const int HoldReleasePct = 2;
+
   /// <summary>A NeedToCharge charge lifts the trough this far above floor + forecast margin, %.</summary>
   public const int ChargeTargetBufferPct = 1;
 
   /// <summary>A NeedToCharge charge starts only this far below floor + forecast margin (never below the floor), %; with <see cref="ChargeTargetBufferPct"/> a 2 % band between start and stop.</summary>
   public const int StartBelowPct = 1;
 
-  /// <summary>Extra SoC for forecast errors: +1 % per 2 h until the low, at most <see cref="MaxForecastMarginPct"/>.</summary>
+  /// <summary>
+  /// The band a NeedToCharge charge keeps above the hard floor (<see cref="SimulationInput.GetEffectiveMinSoC"/>), %:
+  /// without EnforcePreferredSoc the preferred minimum — what planning strives for, while an unforeseen load may
+  /// drain it down to the absolute minimum; with it (the preferred minimum is then the hard floor) the forecast
+  /// margin (<see cref="ForecastMarginPct"/>). Only charged in cheap quarters: under ForceChargeMaxPrice and cheaper
+  /// than holding through the low incl. losses — never bought at an expensive time; the hold (grid_only) acts at the
+  /// hard floor only.
+  /// </summary>
+  /// <param name="input">Simulation input (floors).</param>
+  /// <param name="untilLow">Time from now to the low the charge has to cover.</param>
+  /// <returns>Band, %.</returns>
+  public static int SoftBandPct(SimulationInput input, TimeSpan untilLow) =>
+    input.EnforcePreferredSoc ? ForecastMarginPct(untilLow) : Math.Max(0, input.GetPreferredMinSoC() - input.AbsoluteMinSocPercent);
+
+  /// <summary>Extra SoC for forecast errors: +1 % per 2 h until the low, at most <see cref="MaxForecastMarginPct"/>; on top of a hard preferred floor (<see cref="SoftBandPct"/>).</summary>
   /// <param name="untilLow">Time from now to the low the charge has to cover.</param>
   /// <returns>Margin, %.</returns>
   public static int ForecastMarginPct(TimeSpan untilLow) =>
@@ -474,7 +491,7 @@ public static class EnergySimulator
     bool charging = currentMode.Mode == InverterModes.force_charge;
     int Margin(DateTime t)
     {
-      int margin = withMargin ? ForecastMarginPct(t - now) : 0;
+      int margin = withMargin ? SoftBandPct(input, t - now) : 0;
       return charging ? margin : Math.Max(0, margin - StartBelowPct);
     }
 
@@ -760,8 +777,14 @@ public static class EnergySimulator
       // Above the price limit only for the floor itself, never for the forecast margin alone (live
       // 2026-10-25 12:15: 35.4 ct for a margin 19 h ahead; an EV drawing the battery triggered it again).
       bool marginAllowed = importPriceNow <= input.ForceChargeMaxPrice;
-      if (inWindow && !marginAllowed
-          && !ComputeNeedToCharge(simulatedSoc, baseFutureSoC, currentMode, input, now, withMargin: false).NeedToCharge)
+      bool hardNeed = ComputeNeedToCharge(simulatedSoc, baseFutureSoC, currentMode, input, now, withMargin: false).NeedToCharge;
+      if (inWindow && !marginAllowed && !hardNeed)
+        inWindow = false;
+      // The soft band (the preferred minimum) is only worth cheap energy: bought only where it beats holding
+      // through the low incl. losses, never at an expensive time (live 2026-10-30: the house imported at the
+      // morning peak 0.50 after a heating run, the night charge at 0.39 had only aimed for the absolute floor).
+      if (inWindow && !hardNeed && !input.EnforcePreferredSoc
+          && !ChargingBeatsHolding(window, upcoming, need, PvTakeoverAfter(need.LatestChargeTime, baseFutureSoC.Keys, input), input))
         inWindow = false;
       bool socOk = SocOkToCharge(currentMode, simulatedSoc);
       // Not before a PV peak that fills the battery anyway (live 2026-10-25 11:45: 95 %, PV to 100 %
@@ -787,7 +810,11 @@ public static class EnergySimulator
       // When there IS a PV surplus (pvWh >= loadWh), fall through to normal so the battery
       // can charge from PV — grid_only would block all battery charging and cause PV to be
       // exported while the battery sits idle until the next grid charge window.
-      if (simulatedSoc <= floorSoc && pvWhSlot < totalLoadWhSlot)
+      // Once holding, release only HoldReleasePct above the floor: at the bare floor the live SoC's 1-% steps
+      // switched normal/grid_only every cycle (live 2026-10-30 07:44).
+      bool holding = currentMode.Mode == InverterModes.grid_only
+        && currentMode.ModeReason is ForceChargeReasons.GoingUnderAbsoluteMinima or ForceChargeReasons.GoingUnderPreferredMinima;
+      if (simulatedSoc <= floorSoc + (holding ? HoldReleasePct : 0) && pvWhSlot < totalLoadWhSlot)
       {
         var floorReason = input.EnforcePreferredSoc
           ? ForceChargeReasons.GoingUnderPreferredMinima
