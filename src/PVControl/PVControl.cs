@@ -1080,6 +1080,9 @@ namespace NetDeamon.apps.PVControl
       attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
       attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);
       attr_Mode["charge_Reason"] = inverterState.ModeReason.ToString();
+      // The plan's grid cost over the horizon (to compare with the DP shadow's dp_grid_eur); whole cents, so the
+      // attribute only changes with the plan, not with every 15-s cycle's rounding.
+      attr_Mode["grid_eur"] = _house.SimulationState is { } plan ? Math.Round(plan.GridCost, 2) : null;
       // Attributes before the state (two MQTT messages): the reconciler reacts to the state change and must
       // see the seq/power/bulk that belong to it, not the previous ones.
       await PVCC_EntityManager.SetAttributesAsync(_modeEntity.EntityId, attr_Mode);

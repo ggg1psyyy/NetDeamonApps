@@ -196,6 +196,10 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
     return OwnGridCost - baseline.OwnGridCost + (missingEndKwh + roundTripLossKwh) * _input.ImportPrices.Mean;
   }
 
+  /// <summary>Import cost − export earnings of this run over the horizon, € (sensor.pv_control_mode's <c>grid_eur</c>, the
+  /// DP shadow's <c>greedy_grid_eur</c>).</summary>
+  public float GridCost => OwnGridCost;
+
   private float? _ownGridCost;
   /// <summary>Import cost − export earnings of this run, €.</summary>
   private float OwnGridCost => _ownGridCost ??= Slots.Sum(s => _input.GridCostOf(s.Time, s.GridImportWh, s.GridExportWh));

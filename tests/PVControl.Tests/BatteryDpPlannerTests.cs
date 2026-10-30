@@ -128,6 +128,7 @@ public class BatteryDpPlannerTests : TestBase
     var sim = EnergySimulator.Simulate(input);
     float own = sim.Slots.Sum(s => input.GridCostOf(s.Time, s.GridImportWh, s.GridExportWh));
     Assert.Equal(own, PlanEvaluation.Evaluate(sim, O).GridCost, 4);
+    Assert.Equal(own, sim.GridCost, 4);   // sensor.pv_control_mode's grid_eur = the shadow's greedy_grid_eur
   }
 
   [Fact]
