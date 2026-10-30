@@ -706,6 +706,18 @@ public class SimulatorTests : TestBase
   }
 
   [Fact]
+  public void GridCost_ImportCostLessExportEarnings_OverTheHorizon()
+  {
+    // sensor.pv_control_mode's grid_eur: what the plan buys and sells over its horizon (the sum NetGridCostVs uses).
+    var input = BuildInputDayPV(new DateTime(2025, 6, 15, 3, 0, 0), startSocPct: 25, pvWhPerSlot: 2000, loadWhPerSlot: 300);
+    var sim = EnergySimulator.Simulate(input);
+    float expected = sim.Slots.Sum(s => s.GridImportWh / 1000f * input.ImportPrices.GetPriceOrMean(s.Time)
+                                      - s.GridExportWh / 1000f * input.ExportPrices.GetPriceOrMean(s.Time));
+    Assert.Equal(expected, sim.GridCost, 3);
+    Assert.True(sim.Slots.Any(s => s.GridImportWh > 0) && sim.Slots.Any(s => s.GridExportWh > 0));
+  }
+
+  [Fact]
   public void OvernightMin_BeforePV_UsesPreDawnWindow()
   {
     // Regression: before the fix, OvernightMinSocReached used LastPVToday→FirstPVTomorrow.
