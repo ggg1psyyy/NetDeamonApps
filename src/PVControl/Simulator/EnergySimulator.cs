@@ -434,13 +434,11 @@ public static class EnergySimulator
   {
     float priceNow = input.ImportPrices.GetPrice(now);
     int preferred = input.GetPreferredMinSoC();
-    // The look-ahead's own dip (not the need's latest charge time — that has a lead, the look-ahead is still above the
-    // minimum there); the need's time only if it never goes under.
-    var under = PreferredDipAt(input, now, baseFutureSoC);
-    var from = under ?? dip;
-    var cheapAgain = input.QuarterHourlyImportPrices.Where(p => p.StartTime > from && p.Price <= priceNow)
+    var cheapAgain = input.QuarterHourlyImportPrices.Where(p => p.StartTime > dip && p.Price <= priceNow)
       .Select(p => (DateTime?)p.StartTime).FirstOrDefault() ?? now.AddHours(24);
-    // PV refills: back at the preferred minimum after the look-ahead first went under it.
+    // PV refills: back at the preferred minimum after the look-ahead first went under it (not after the need's latest
+    // charge time — that has a lead, the look-ahead is still above the minimum there).
+    var under = baseFutureSoC.Where(x => x.Key >= now && x.Value < preferred).Select(x => (DateTime?)x.Key).FirstOrDefault();
     var pvRefills = under is { } u
       ? baseFutureSoC.Where(x => x.Key > u && x.Value >= preferred).Select(x => (DateTime?)x.Key).FirstOrDefault() ?? cheapAgain
       : cheapAgain;
@@ -448,17 +446,6 @@ public static class EnergySimulator
     int low = baseFutureSoC.Where(x => x.Key >= now && x.Key <= until).Select(x => x.Value).DefaultIfEmpty(currentSoc).Min();
     int deficit = Math.Max(0, preferred + ChargeTargetBufferPct - low);
     return Math.Min(100, currentSoc + Math.Min(deficit, PvRoomBeforeLow(currentSoc, now, until, baseFutureSoC)));
-  }
-
-  /// <summary>When the look-ahead first goes under the preferred minimum: the dip the band is bought before.</summary>
-  /// <param name="input">Simulation input.</param>
-  /// <param name="now">Current slot.</param>
-  /// <param name="baseFutureSoC">SoC look-ahead without charging.</param>
-  /// <returns>The first slot under it; null if it never goes under.</returns>
-  private static DateTime? PreferredDipAt(SimulationInput input, DateTime now, Dictionary<DateTime, int> baseFutureSoC)
-  {
-    int preferred = input.GetPreferredMinSoC();
-    return baseFutureSoC.Where(x => x.Key >= now && x.Value < preferred).Select(x => (DateTime?)x.Key).FirstOrDefault();
   }
 
   /// <summary>A hold at the hard floor (grid_only) ends only this far above it, %.</summary>
@@ -873,13 +860,7 @@ public static class EnergySimulator
       bool floorTriggered = hardNeed && inWindow;
       if (!input.EnforcePreferredSoc)
       {
-        // Its own window: the quarters before the dip. The floor's window runs until PV takes over and also holds the
-        // quarters after the dip — at night a quarter there a fraction cheaper won, and the battery fell to the hard
-        // floor in between (live 2026-10-30 13:11: under 20 % from 00:00, 12 % at 02:30, the charge only at 04:00,
-        // although 23:00 at 0.394 lay before the dip).
-        var dipAt = PreferredDipAt(input, now, baseFutureSoC);
-        var bandWindow = dipAt is { } d ? upcoming.Where(p => p.StartTime < d).ToList() : window;
-        bool band = PreferredBandChargesNow(input, bandWindow, upcoming, now, simulatedSoc,
+        bool band = PreferredBandChargesNow(input, window, upcoming, now, simulatedSoc,
           PreferredBandTargetSoc(input, now, simulatedSoc, baseFutureSoC, need.LatestChargeTime), baseFutureSoC, pvWhSlot, totalLoadWhSlot);
         inWindow = floorTriggered || band;
       }

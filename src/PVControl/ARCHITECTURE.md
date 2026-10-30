@@ -1018,9 +1018,3 @@ target. Once below the minimum there is no dip ahead to keep: refilled in the ch
 not while PV charges the battery (live 2026-10-21: a SoC dropout read as 0 % would otherwise have bought from the grid
 while PV was filling the battery).
 
-The band has its own window: the quarters up to the look-ahead's first dip under the preferred minimum
-(`PreferredDipAt`). At first it used the floor's window, which runs until PV takes over and also holds the quarters
-after the dip: on 2026-10-30 at 13:11 (tomorrow's prices just in) 04:00 at 0.390 beat 23:00 at 0.394 by a fraction,
-and the plan let the battery fall from 20 % at 00:00 to the hard floor at 02:30 before charging. The midday case had
-not shown it — there the window happened to end at the dip.
-

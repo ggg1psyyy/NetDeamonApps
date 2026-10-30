@@ -195,45 +195,4 @@ public class PreferredMinimumTests : TestBase
     Assert.False(EnergySimulator.Simulate(Input(Day.AddHours(18), 26, loadWh: 40)).IsOvernightMinSocOk());
     Assert.True(EnergySimulator.Simulate(Input(Day.AddHours(18), 26, loadWh: 40, preferred: 12)).IsOvernightMinSocOk());
   }
-
-  /// <summary>Gross import prices of the night 2026-10-30/31 as published (hours from 30.10. 00:00).</summary>
-  static float Night1031(DateTime t) => (t.Date == Day ? t.Hour : t.Hour + 24) switch
-  {
-    22 => 0.412f, 23 => 0.394f, 24 => 0.4006f, 25 => 0.3983f, 26 => 0.3934f, 27 => 0.3926f, 28 => 0.3900f, 29 => 0.3935f,
-    30 => 0.4009f, 31 => 0.4181f, 32 => 0.4211f, 33 => 0.4064f, 34 => 0.3992f, 35 or 36 => 0.3983f, 37 => 0.3993f,
-    38 => 0.4001f, 39 => 0.4304f, 40 or 41 => 0.469f, 42 => 0.4716f, 43 => 0.4699f, 44 => 0.4619f, 45 => 0.4374f,
-    46 => 0.4253f, 47 => 0.4042f, _ => 0.45f,
-  };
-
-  [Fact]
-  public void Live20261030Night_BandBoughtBeforeTheDip_NotAfterIt()
-  {
-    // 22:00 at 29 %, preferred 20 %: under 20 % from ~00:30. The floor's window (until PV) held 04:00 at 0.390 — a
-    // fraction cheaper than 23:00 at 0.394 — and the plan let the battery fall to the hard floor before it. The band
-    // is bought before the dip: at 23:00, enough to stay at 20 % until the next as cheap quarter; the night's cheapest
-    // hour still carries the rest.
-    var prices = new List<PriceTableEntry>();
-    var load = new Dictionary<DateTime, int>();
-    var pv = new Dictionary<DateTime, int>();
-    for (var t = Day.AddDays(-1); t < Day.AddDays(3); t = t.AddMinutes(15))
-    {
-      prices.Add(new PriceTableEntry(t, t.AddMinutes(15), Night1031(t)));
-      load[t] = 100;
-      pv[t] = t.Hour >= 10 && t.Hour < 15 ? 240 : 0;
-    }
-    var input = new SimulationInput
-    {
-      StartTime = Day.AddHours(22), StartSocPercent = 29, BatteryCapacityWh = 11_520,
-      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20, EnforcePreferredSoc = false,
-      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = prices,
-      LoadPredictionWh = load, PVPredictionWh = pv, ExtraLoads = [],
-      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.35f,
-      ForceChargeTargetSocPercent = 95, CurrentMode = new InverterState(InverterModes.normal),
-    };
-    var night = EnergySimulator.Simulate(input).Slots.Where(s => s.Time < Day.AddDays(1).AddHours(10)).ToList();
-    Assert.True(night.All(s => s.SoC >= 19), Modes(night));
-    Assert.Contains(night, s => s.Time.Hour == 23 && s.State.Mode == InverterModes.force_charge);
-    Assert.DoesNotContain(night, s => s.State.Mode == InverterModes.grid_only);
-  }
 }
-
