@@ -118,5 +118,56 @@ public class DpShadowTests : TestBase, IDisposable
     Assert.Equal(dp.Slots.Select(s => s.SocPct), fromNow.Select(e => e.Soc));
     Assert.Equal(dp.Slots.Select(s => s.Mode.ToString()), fromNow.Select(e => e.Mode));
   }
+
+  /// <summary>An input with everything a snapshot has to carry: hourly prices, a grid-fed EV session and a battery-fed
+  /// extra load, the learned VPP curve, the import cap, a running charge.</summary>
+  static SimulationInput Rich()
+  {
+    var b = Input(Day.AddHours(21).AddMinutes(7), 31);
+    var hourly = new List<PriceTableEntry>();
+    for (var t = Day.AddDays(-1); t < Day.AddDays(2); t = t.AddHours(1))
+      hourly.Add(new PriceTableEntry(t, t.AddHours(1), 0.30f + 0.01f * (t.Hour % 7)));
+    return new SimulationInput
+    {
+      StartTime = b.StartTime, StartSocPercent = b.StartSocPercent, BatteryCapacityWh = b.BatteryCapacityWh,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 25, EnforcePreferredSoc = false,
+      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ChargeVoltageV = 240, MaxGridImportW = 9800,
+      ImportPrices = hourly, ExportPrices = b.ExportPrices, PublishedPricesUntil = Day.AddDays(1),
+      LoadPredictionWh = b.LoadPredictionWh, PVPredictionWh = b.PVPredictionWh,
+      ExtraLoads =
+      [
+        new ExtraLoad { Name = "EV Charger", StartTime = Day.AddHours(23), EndTime = Day.AddDays(1).AddHours(2), PowerW = 1850, FromGrid = true },
+        new ExtraLoad { Name = "Warm water", StartTime = Day.AddDays(1).AddHours(13), EndTime = Day.AddDays(1).AddHours(14), PowerW = 2000 },
+      ],
+      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.35f, ForceChargeTargetSocPercent = 95,
+      CurrentMode = new InverterState(InverterModes.force_charge, ForceChargeReasons.GoingUnderPreferredMinima) { Bulk = false },
+      VppChargePowerW = soc => 5780 - 34 * soc,
+    };
+  }
+
+  [Fact]
+  public void Snapshot_RebuildsTheSameSimulationAndDpPlan()
+  {
+    var input = Rich();
+    var bytes = ForecastSnapshot.From(input).ToBytes();
+    var again = ForecastSnapshot.FromBytes(bytes).ToInput();
+    // every slot equal: time, SoC, mode (incl. reason, bulk), all flows
+    Assert.Equal(EnergySimulator.Simulate(input).Slots, EnergySimulator.Simulate(again).Slots);
+    Assert.Equal(BatteryDpPlanner.Plan(input).Slots, BatteryDpPlanner.Plan(again).Slots);
+    Assert.InRange(bytes.Length, 100, 8_000);   // a row per quarter: about 0.5 MB per week at most
+  }
+
+  [Fact]
+  public async Task RunAsync_StoresTheSnapshotPerQuarter_ReadBackForAReplay()
+  {
+    var shadow = new DpShadow(new DpShadowConfig(), _db);
+    var sim = EnergySimulator.Simulate(Rich());
+    await shadow.RunAsync(sim, Day.AddHours(21).AddMinutes(7));
+    var stored = await DpShadow.ReadSnapshotsAsync(_db);
+    var (quarter, snapshot) = Assert.Single(stored);
+    Assert.Equal(Day.AddHours(21), quarter);
+    Assert.Equal(31, snapshot.StartSocPercent);
+    Assert.Equal(2, snapshot.ExtraLoads.Count);
+  }
 }
 

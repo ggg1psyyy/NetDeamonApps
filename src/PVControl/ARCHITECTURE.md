@@ -1046,4 +1046,10 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   test that the DP is never dearer caught it. Penalties use the whole % the simulation and the evaluation use.
 - **Its own predicted-SoC sensor** (`sensor.pv_control_dp_shadow_predicted_soc`, the greedy sensor's format): together
   with the comparison it would pass the recorder's 16 kB attribute limit.
+- **The planning situation per quarter (`ForecastSnapshot`):** the shadow compares both plans from the greedy run's real
+  state only — the DP never lives with its own decisions (a large night charge it plans is not there the next morning),
+  its savings of overlapping horizons don't add up, and both are judged against the forecast. A replay needs the
+  forecasts as they were: every quarter the whole simulation input is stored (gzip JSON in `dp_shadow.db`, its own DB
+  and not the recorder — beyond the 16 kB attribute limit, purged after 10 days, and HA's DB is large already). A test
+  pins that the stored input rebuilds exactly the same simulation and DP plan.
 

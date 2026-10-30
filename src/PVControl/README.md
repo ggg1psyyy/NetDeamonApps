@@ -307,7 +307,7 @@ the background on the greedy run's input; it never reaches the inverter.
 |---|---|
 | `sensor.pv_control_dp_shadow` | State: the DP's mode now; attributes: `greedy_mode_now`, `agree_now`, `saving_eur` (greedy − DP total), both totals, grid costs and band penalties, both plans' lows, both plans' grid charges (`start`, `end`, `kwh`, `avg_price`), `runtime_ms` |
 | `sensor.pv_control_dp_shadow_predicted_soc` | The DP's predicted SoC in the format of `sensor.pv_control_info_predicted_soc` (`data_actual`: `datetime`, `soc`, `mode`, `extra_load`, `export_allowed`; past quarters the same actual SoC) — a second graph only swaps the entity; state: the DP's SoC now |
-| `dp_shadow.db` (plugin folder) | Table `shadow`, one row per quarter: SoC, both modes, both totals and grid costs, both lows, both next charges, run time |
+| `dp_shadow.db` (plugin folder) | Table `shadow`, one row per quarter: SoC, both modes, both totals and grid costs, both lows, both next charges, run time. Table `forecast`, one row per quarter: the whole planning situation (`ForecastSnapshot`: forecasts, prices, planned extra loads, settings, the current mode, the VPP curve; gzip JSON, a few kB) — rebuilt exactly with `ForecastSnapshot.ToInput()` for a replay of the DP on its own path |
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
 quarter), `DBLocation`.
