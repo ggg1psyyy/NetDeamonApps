@@ -28,6 +28,8 @@ namespace NetDeamon.apps.PVControl
   {
     // The MQTT command subscriptions (the entity manager is a singleton: they outlive the app, AppSubscriptions).
     private readonly AppSubscriptions _subscriptions = new();
+    // PVControl instances created and not disposed: more than one is a health error (HealthChecks.Instances).
+    private static int s_liveInstances;
     // nullforgiving "!" used to supress CS8618 for now
     private HouseEnergy _house = null!;
     #region Created Entities
@@ -94,6 +96,7 @@ namespace NetDeamon.apps.PVControl
       if (!CheckConfiguration())
         throw new Exception("Error initializing configuration");
 
+      Interlocked.Increment(ref s_liveInstances);   // after the throw above: a failed construction isn't live
       PVCC_Logger.LogInformation("Finished PVControl constructor");
     }
     async Task IAsyncInitializable.InitializeAsync(CancellationToken cancellationToken)
@@ -277,6 +280,8 @@ namespace NetDeamon.apps.PVControl
     /// so the old instance never acts on a command again with its stale state.</summary>
     public ValueTask DisposeAsync()
     {
+      if (_subscriptions.IsDisposed) return ValueTask.CompletedTask;
+      Interlocked.Decrement(ref s_liveInstances);
       _subscriptions.Dispose();
       PVCC_Logger.LogInformation("PVControl disposed: command subscriptions ended");
       GC.SuppressFinalize(this);
@@ -936,6 +941,7 @@ namespace NetDeamon.apps.PVControl
         _lastHourlyRow = ReadLastHourlyRow();
       }
       issues.AddRange(HealthChecks.DataLogger(now, _lastHourlyRow));
+      issues.AddRange(HealthChecks.Instances(Volatile.Read(ref s_liveInstances)));
       return issues;
     }
 

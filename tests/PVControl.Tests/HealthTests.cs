@@ -172,4 +172,14 @@ public class HealthTests
     Assert.Empty(HealthChecks.WarmWater(false, false));
     Assert.Equal(HealthLevel.degraded, HealthChecks.WarmWater(true, false).Single().Level);
   }
+
+  [Fact]
+  public void Instances_MoreThanOneLive_IsAnError()
+  {
+    // Live 2026-10-30: after a reload the old instance still handled commands (cost row twice, an old inverter command).
+    Assert.Empty(HealthChecks.Instances(1));
+    var issue = Assert.Single(HealthChecks.Instances(2));
+    Assert.Equal(HealthLevel.error, issue.Level);
+    Assert.Contains("2 PVControl instances", issue.Message);
+  }
 }

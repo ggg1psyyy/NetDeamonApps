@@ -171,4 +171,15 @@ public static class HealthChecks
     else if (now - last > TimeSpan.FromHours(2))
       yield return new HealthIssue("datalogger", HealthLevel.degraded, $"DataLogger: last hourly row {last:dd.MM. HH:mm}");
   }
+
+  /// <summary>More than one live PVControl instance = error: an old one (not disposed after a reload) still handles
+  /// commands with its stale state (live 2026-10-30, after Home Assistant's restart at 21:51 the evening before).</summary>
+  /// <param name="liveInstances">PVControl instances created and not disposed.</param>
+  /// <returns>The issues.</returns>
+  public static IEnumerable<HealthIssue> Instances(int liveInstances)
+  {
+    if (liveInstances > 1)
+      yield return new HealthIssue("instances", HealthLevel.error,
+        $"{liveInstances} PVControl instances active — an old one still acts on commands; restart NetDaemon");
+  }
 }

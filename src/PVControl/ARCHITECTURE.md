@@ -999,3 +999,9 @@ stamped "22:00" with all the import since 21:45 (counted twice), published its o
 applied 07:46:36) and stale health ("weather 20:53"). PVControl and HeatingTest now register their command
 subscriptions with `AppSubscriptions` and end them in `DisposeAsync`; handlers return once disposed.
 
+It had happened before: the cost log has rows booked afterwards with older timestamps after the Home Assistant
+restarts of 2026-10-25 07:15 (a row "08:00" with 6.2 kWh booked at 09:15) and 2026-10-27 08:50 ("06:15", "09:00",
+"12:15" twice). The old instance only acts on a command, and the frequent deploys of those weeks ended it soon;
+2026-10-29 was the first night with no deploy after a restart. A second live instance is now a health error
+(`HealthChecks.Instances`: PVControl counts its instances, created minus disposed).
+
