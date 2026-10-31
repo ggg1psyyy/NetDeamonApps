@@ -1044,6 +1044,12 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   (peaks included) — the first live run (2026-10-30 12:17) bought 5.5 kWh at 0.41 at the horizon's very end, for
   after it, and "saved" 0.52 € on paper while paying 3.4 € more to the grid. Now it is worth what refilling it costs:
   the cheapest import price of the horizon's last 24 h after the round trip.
+- **The horizon ends at least at the preferred minimum (`PlanEvaluation.EndShortfall`):** the refill-price end value
+  alone let the plan slide under the preferred minimum at the horizon's end (live 2026-10-31 evening: tomorrow
+  midnight under 20 %, the next cheap night lies beyond the horizon). The plan is redone every few minutes and the
+  horizon moves on at midnight, but a plan that counts on an empty battery at its end isn't one to show or follow
+  (the user, 2026-10-31). Each % missing at the end costs the hard floor's rate — practically a rule, still solvable
+  where it can't be reached; it applies with an enforced floor too and judges the greedy plan the same way.
 - **Interpolated, not rounded:** the cost of the rest at an exact energy is interpolated between the two grid states
   around it; rounding to the nearest state turned every quarter's small drain (100 Wh = 3.47 steps) into 3 steps, the
   DP believed the battery lasted longer and its plan came out dearer than the greedy one under the same model — the

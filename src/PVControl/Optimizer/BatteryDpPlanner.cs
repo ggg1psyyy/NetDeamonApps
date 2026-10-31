@@ -36,10 +36,11 @@ public sealed record DpSlot(DateTime Time, int SocPct, InverterModes Mode, bool 
 /// <param name="BandPenalty">Quarters below the preferred minimum.</param>
 /// <param name="FloorPenalty">Quarters below the hard floor.</param>
 /// <param name="EndValue">Energy above the hard floor at the end, at what refilling it would cost (<see cref="PlanEvaluation.EndValue"/>).</param>
-public sealed record PlanCost(float GridCost, float BandPenalty, float FloorPenalty, float EndValue)
+/// <param name="EndShortfall">Ending the horizon under the preferred minimum (<see cref="PlanEvaluation.EndShortfall"/>).</param>
+public sealed record PlanCost(float GridCost, float BandPenalty, float FloorPenalty, float EndValue, float EndShortfall = 0)
 {
   /// <summary>The objective, €.</summary>
-  public float Total => GridCost + BandPenalty + FloorPenalty - EndValue;
+  public float Total => GridCost + BandPenalty + FloorPenalty - EndValue + EndShortfall;
 }
 
 /// <summary>A DP plan: the quarters from now to the simulation's end and its cost.</summary>
@@ -70,6 +71,18 @@ public static class PlanEvaluation
     float under = socPct < floor ? (float)(floor - socPct) * o.FloorPenaltyPerPctQuarter : 0f;
     return (band, under);
   }
+
+  /// <summary>
+  /// Penalty for ending the horizon under the preferred minimum, €: per % missing at the end at the hard floor's rate —
+  /// practically a rule (the user, 2026-10-31: the horizon ends at least at the preferred minimum; the plan is redone
+  /// every few minutes and the horizon moves on at midnight, but the plan up to there doesn't count on an empty
+  /// battery), still solvable where it can't be reached. Applies with EnforcePreferredSoc as well.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="endEnergyWh">Energy at the end, Wh.</param>
+  /// <param name="o">Options (the floor's rate).</param>
+  public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o) =>
+    Math.Max(0, input.GetPreferredMinSoC() - input.WhToSoc(endEnergyWh)) * o.FloorPenaltyPerPctQuarter;
 
   /// <summary>Value of the energy in the battery at the end, €: above the hard floor, at <see cref="RefillPrice"/> after the round trip.</summary>
   /// <param name="input">Simulation input.</param>
@@ -111,7 +124,7 @@ public static class PlanEvaluation
       band += b;
       floor += f;
     }
-    return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh));
+    return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh), EndShortfall(input, endEnergyWh, o));
   }
 
   /// <summary>Cost of the greedy simulation's plan under the one model.</summary>
@@ -177,7 +190,8 @@ public static class BatteryDpPlanner
     var policy = new Action[n][];
     value[n] = new float[states];
     float refill = PlanEvaluation.RefillPrice(input);
-    for (int s = 0; s < states; s++) value[n][s] = -PlanEvaluation.EndValue(input, WhOf(s), refill);
+    for (int s = 0; s < states; s++)
+      value[n][s] = -PlanEvaluation.EndValue(input, WhOf(s), refill) + PlanEvaluation.EndShortfall(input, WhOf(s), o);
 
     for (int i = n - 1; i >= 0; i--)
     {

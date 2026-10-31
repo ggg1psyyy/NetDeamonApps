@@ -208,5 +208,18 @@ public class BatteryDpPlannerTests : TestBase
     var strict = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions(BandPenaltyPerPctQuarter: 0.005f));
     Assert.Contains(strict.Slots.Where(s => s.Time < Day.AddHours(23)), s => s.Mode == InverterModes.force_charge);
   }
+
+  [Fact]
+  public void HorizonEnd_AtLeastThePreferredMinimum()
+  {
+    // Tonight's case: without the rule the plan let tomorrow's late evening slide to 17 % at the horizon's end (the
+    // next cheap night lies beyond it). The horizon ends at least at the preferred minimum (the user, 2026-10-31).
+    var input = Input(Day.AddHours(22), 29);
+    var plan = BatteryDpPlanner.Plan(input, O);
+    Assert.True(plan.EndSocPct >= 20, $"end {plan.EndSocPct} %");
+    Assert.Equal(0f, plan.Cost.EndShortfall);
+    // the same rule judges the greedy plan: under the minimum at the end it pays the shortfall
+    Assert.Equal(Math.Max(0, 20 - 17) * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17) + 5, O), 4);   // +5 Wh: SocToWh rounds down, back it would read 16 %
+  }
 }
 

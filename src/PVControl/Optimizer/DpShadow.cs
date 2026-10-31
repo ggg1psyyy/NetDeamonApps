@@ -194,6 +194,8 @@ namespace NetDeamon.apps.PVControl.Optimizer
       dp_grid_eur = Math.Round(r.Dp.GridCost, 3),
       greedy_band_penalty_eur = Math.Round(r.Greedy.BandPenalty, 3),
       dp_band_penalty_eur = Math.Round(r.Dp.BandPenalty, 3),
+      greedy_end_shortfall_eur = Math.Round(r.Greedy.EndShortfall, 3),
+      dp_end_shortfall_eur = Math.Round(r.Dp.EndShortfall, 3),
       greedy_min_soc = r.GreedyMinSoc,
       greedy_min_at = r.GreedyMinAt.ToISO8601(),
       dp_min_soc = r.DpMinSoc,
