@@ -87,7 +87,8 @@ public class BatteryDpPlannerTests : TestBase
     var dpStarts = ChargeStarts(dp).Where(t => t < Day.AddDays(1).AddHours(9)).ToList();
     Assert.True(dpStarts.Count == 1, string.Join(", ", dp.Where(s => s.Time.Minute % 30 == 0).Select(s => $"{s.Time:dd HH:mm} {s.Mode} {s.SocPct}%")));
     Assert.Equal(23, dpStarts[0].Hour);
-    Assert.True(dp.Where(s => s.Time >= Day.AddDays(1).AddHours(15)).All(s => s.SocPct >= 19),
+    // Late tomorrow evening the reserve may bridge to the next cheap night (beyond the horizon): only the hard floor holds.
+    Assert.True(dp.Where(s => s.Time >= Day.AddDays(1).AddHours(15)).All(s => s.SocPct >= 12),
       string.Join(", ", dp.Where(s => s.Time.Minute == 0).Select(s => $"{s.Time:dd HH} {s.Mode} {s.SocPct}%")));
     Assert.NotEmpty(greedy);
   }
@@ -162,6 +163,50 @@ public class BatteryDpPlannerTests : TestBase
     var lastHours = BatteryDpPlanner.Plan(input, O).Slots.Where(s => s.Time >= end.AddHours(-4)).ToList();
     Assert.True(!lastHours.Any(s => s.Mode == InverterModes.force_charge),
       string.Join(", ", BatteryDpPlanner.Plan(input, O).Slots.Where(s => s.Time.Minute % 30 == 0).Select(s => $"{s.Time:dd HH:mm} {s.Mode} {s.SocPct}%")));
+  }
+
+  /// <summary>An evening peak (0.51 until 21:00, 0.48 until 23:00) before a cheap night (0.39 from 23:00).</summary>
+  static SimulationInput EveningPeak(int soc)
+  {
+    var b = Input(Day.AddHours(18), soc, loadWh: 80);
+    float P(DateTime t) => (t.Date == Day ? t.Hour : t.Hour + 24) switch
+    {
+      >= 18 and < 21 => 0.51f, 21 or 22 => 0.48f, >= 23 and < 29 => 0.39f, >= 29 and < 33 => 0.47f, _ => 0.44f,
+    };
+    var prices = new List<PriceTableEntry>();
+    var export = new List<PriceTableEntry>();
+    for (var t = Day.AddDays(-1); t < Day.AddDays(3); t = t.AddMinutes(15))
+    {
+      prices.Add(new PriceTableEntry(t, t.AddMinutes(15), P(t)));
+      export.Add(new PriceTableEntry(t, t.AddMinutes(15), P(t) / 2));
+    }
+    return new SimulationInput
+    {
+      StartTime = b.StartTime, StartSocPercent = soc, BatteryCapacityWh = b.BatteryCapacityWh,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20, EnforcePreferredSoc = false,
+      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = export,
+      LoadPredictionWh = b.LoadPredictionWh, PVPredictionWh = b.PVPredictionWh, ExtraLoads = [],
+      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.35f,
+      ForceChargeTargetSocPercent = 95, CurrentMode = new InverterState(InverterModes.normal),
+    };
+  }
+
+  [Fact]
+  public void EveningPeak_TheReserveBridgesToTheCheapNight()
+  {
+    // 18:00 at 30 %: the evening drains it to ~16 % by 23:00. Using ~0.4 kWh of the reserve for ~2 h to buy at 0.39
+    // instead of 0.48–0.51 saves ~5 ct; the reserve costs ~0.75 ct at the default — the DP stretches: no charge in the
+    // peak, the band used, the hard floor kept (the user, 2026-10-31: stretching an expensive time to a cheaper charge
+    // may use up the preferred minimum).
+    var plan = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions());
+    var evening = plan.Slots.Where(s => s.Time < Day.AddHours(23)).ToList();
+    string trace = string.Join(", ", plan.Slots.Where(s => s.Time < Day.AddDays(1).AddHours(6)).Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%"));
+    Assert.True(evening.All(s => s.Mode != InverterModes.force_charge), trace);
+    Assert.True(evening.Min(s => s.SocPct) < 20, trace);
+    Assert.True(plan.Slots.All(s => s.SocPct >= 12), trace);
+    // With a reserve worth ten times as much (0.005 € per % and quarter) the peak is bought instead.
+    var strict = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions(BandPenaltyPerPctQuarter: 0.005f));
+    Assert.Contains(strict.Slots.Where(s => s.Time < Day.AddHours(23)), s => s.Mode == InverterModes.force_charge);
   }
 }
 

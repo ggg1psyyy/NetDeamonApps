@@ -1032,8 +1032,12 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   (`SimulationInput.GridCostOf`, also behind the simulation's `NetGridCostVs`), penalties below the preferred minimum
   and the hard floor, the energy left at the end at the mean price after the round trip (without it a plan empties the
   battery at the horizon's end for free).
-- **The band as a penalty**, not a rule: 0.005 € per % and quarter — a dip of 5 % for 2 h costs 0.20 €, so the DP
-  only trades the reserve for a clear saving. The penalty is the knob the shadow's log can calibrate.
+- **The band as a penalty**, not a rule: 0.0005 € per % and quarter ≈ 1.7 ct per kWh of reserve and hour. The reserve
+  may bridge an expensive time to a clearly cheaper charge — an evening peak at 0.51 before a night at 0.39 saves
+  ~12 ct per kWh over 2 h against ~3.5 ct for the reserve — but isn't used for fractions of a cent (tonight's 23:00 at
+  0.394 vs 04:00 at 0.390). It started at 0.005 (≈ 17 ct per kWh and hour): then the DP kept the minimum by buying
+  in the evening peak at 0.48 two hours before the cheap night (the user, 2026-10-31: stretching an expensive time to
+  a cheaper charge may use up the preferred minimum). The penalty is the knob the shadow's log can calibrate.
 - **Same input:** the DP plans on the greedy run's `SimulationInput` (forecasts, prices, planned extra loads), so
   both plans differ only in the battery decisions. Extra loads stay planned by the greedy logic for now.
 - **The end value at the refill price:** at first the energy left at the end was valued at the mean import price

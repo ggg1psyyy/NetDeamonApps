@@ -310,7 +310,8 @@ the background on the greedy run's input; it never reaches the inverter.
 | `dp_shadow.db` (plugin folder) | Table `shadow`, one row per quarter: SoC, both modes, both totals and grid costs, both lows, both next charges, run time. Table `forecast`, one row per quarter: the whole planning situation (`ForecastSnapshot`: forecasts, prices, planned extra loads, settings, the current mode, the VPP curve; gzip JSON, a few kB) — rebuilt exactly with `ForecastSnapshot.ToInput()` for a replay of the DP on its own path |
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
-quarter), `DBLocation`.
+quarter; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
+charge, not to save fractions of a cent), `DBLocation`.
 
 ## Build, test, run
 

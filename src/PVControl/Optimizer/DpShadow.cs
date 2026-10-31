@@ -18,7 +18,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>Minutes between two DP runs (the greedy simulation runs every 15 s).</summary>
     public int IntervalMinutes { get; set; } = 5;
     /// <summary>Penalty per % below the preferred minimum per quarter, € (<see cref="DpOptions.BandPenaltyPerPctQuarter"/>).</summary>
-    public float BandPenaltyPerPctQuarter { get; set; } = 0.005f;
+    public float BandPenaltyPerPctQuarter { get; set; } = 0.0005f;
     /// <summary>The shadow log (one row per quarter); relative = in the plugin's folder.</summary>
     public string DBLocation { get; set; } = "dp_shadow.db";
 

@@ -6,13 +6,14 @@ using System.Linq;
 namespace NetDeamon.apps.PVControl.Optimizer;
 
 /// <summary>Settings of the DP shadow planner (<see cref="BatteryDpPlanner"/>).</summary>
-/// <param name="BandPenaltyPerPctQuarter">Penalty per % below the preferred minimum per quarter, € (without EnforcePreferredSoc;
-/// the plan may only trade a dip into the band against a larger saving).</param>
+/// <param name="BandPenaltyPerPctQuarter">Penalty per % below the preferred minimum per quarter, € (without EnforcePreferredSoc).
+/// 0.0005 ≈ 1.7 ct per kWh of reserve and hour (11.5 kWh battery): the reserve bridges an expensive time to a clearly
+/// cheaper charge (an evening peak at 0.51 before a night at 0.39), but isn't used for fractions of a cent.</param>
 /// <param name="FloorPenaltyPerPctQuarter">Penalty per % below the hard floor per quarter, € — practically forbidden.</param>
 /// <param name="StatesPerPercent">SoC grid of the program: states per % (4 = 0.25 % steps).</param>
 /// <param name="ChargeStepPct">Charge targets a grid charge can stop at within a quarter, every this many %.</param>
 public sealed record DpOptions(
-  float BandPenaltyPerPctQuarter = 0.005f,
+  float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
   int StatesPerPercent = 4,
   int ChargeStepPct = 2);
