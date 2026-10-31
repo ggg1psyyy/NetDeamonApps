@@ -64,6 +64,8 @@ namespace NetDeamon.apps
     RoomForNegativeExport,
     /// <summary>Battery held while a load that never draws it runs (PriorityPlus EV from the grid).</summary>
     LoadFromGrid,
+    /// <summary>The DP plan steers (select.pv_control_planner = dp): its grid charge or hold.</summary>
+    DpPlan,
   }
 
   public enum PriceResolution

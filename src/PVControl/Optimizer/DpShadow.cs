@@ -70,9 +70,14 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>The last DP plan; null before the first run.</summary>
     public DpPlan? LastPlan { get; private set; }
 
-    /// <summary>Whether a run is due: the interval passed and none is running.</summary>
+    /// <summary>Minutes between two runs while the DP plan steers.</summary>
+    public const int SteeringIntervalMinutes = 1;
+
+    /// <summary>Whether a run is due: the interval passed (every minute while the DP steers) and none is running.</summary>
     /// <param name="now">Current time.</param>
-    public bool Due(DateTime now) => config.Enabled && Volatile.Read(ref _running) == 0 && now - _lastRun >= TimeSpan.FromMinutes(config.IntervalMinutes);
+    /// <param name="steering">The DP plan is selected to steer.</param>
+    public bool Due(DateTime now, bool steering = false) => config.Enabled && Volatile.Read(ref _running) == 0
+      && now - _lastRun >= TimeSpan.FromMinutes(steering ? SteeringIntervalMinutes : config.IntervalMinutes);
 
     /// <summary>Runs the DP in the background on the greedy run's input and compares; logs the quarter's row.</summary>
     /// <param name="greedy">The greedy simulation of this cycle.</param>

@@ -1254,8 +1254,9 @@ namespace NetDeamon.apps.PVControl
         if (_simulationResult is null || _simulationResult.Slots.Count == 0)
           return _planMode;
 
-        var planned = (_simulationResult.Slots.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
-                       ?? _simulationResult.Slots[0]).State;
+        var timeline = SteeringTimeline;
+        var planned = (timeline.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
+                       ?? timeline[0]).State;
 
         // ── User override ──────────────────────────────────────────────────────────────────
         // Only affects the command sent to the inverter right now.
@@ -1328,6 +1329,13 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>The simulation timeline (now → end of tomorrow) from the last RunSimulation() call.</summary>
     public IReadOnlyList<SimulationSlot> SimulationTimeline => _simulationResult?.Slots ?? [];
+
+    /// <summary>The DP plan as slots while it steers (select.pv_control_planner = dp and fresh, Optimizer.DpSteering);
+    /// null: the greedy simulation steers.</summary>
+    public IReadOnlyList<SimulationSlot>? DpSteering { get; set; }
+
+    /// <summary>The plan the inverter command comes from: the DP's while it steers, else the greedy simulation's.</summary>
+    public IReadOnlyList<SimulationSlot> SteeringTimeline => DpSteering is { Count: > 0 } dp ? dp : SimulationTimeline;
 
     /// <summary>Full simulation result including PV windows and derived predicates.</summary>
     public SimulationResult? SimulationState => _simulationResult;

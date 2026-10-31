@@ -62,6 +62,11 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_PredictedChargeEntity = null!;
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
+    private Entity _plannerEntity = null!;
+    // select.pv_control_planner: the selected planner, the one in effect this cycle, and whether the DP couldn't steer.
+    private Optimizer.Planner _planner = Optimizer.Planner.greedy;
+    private Optimizer.Planner _effectivePlanner = Optimizer.Planner.greedy;
+    private bool _dpStale;
     private Entity _currentImportPriceBruttoEntity = null!;
     private Entity _currentExportPriceBruttoEntity = null!;
     private Entity _activeNetworkPricePeriodEntity = null!;
@@ -155,6 +160,8 @@ namespace NetDeamon.apps.PVControl
         _house.EnableCheapForceCharge = forceCharge;
       if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
         _house.OverrideMode = mode;
+      if (_plannerEntity.TryGetStateValue(out Optimizer.Planner planner))
+        _planner = planner;
       if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
         _house.Battery.PreferredMinBatterySoC = prefSoC;
       if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
@@ -205,6 +212,7 @@ namespace NetDeamon.apps.PVControl
       await SubscribeCommandAsync(_enforcePreferredSocEntity);
       await SubscribeCommandAsync(_forceChargeEntity);
       await SubscribeCommandAsync(_overrideModeEntity);
+      await SubscribeCommandAsync(_plannerEntity);
       await SubscribeCommandAsync(_enableOpportunisticExport);
 
       PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
@@ -304,6 +312,11 @@ namespace NetDeamon.apps.PVControl
       _house.RequestReplan($"user changed {entity.EntityId}");
       newState = newState.ToLower();
 
+      if (entity.EntityId == _plannerEntity.EntityId)
+      {
+        _planner = Enum.TryParse(newState, out Optimizer.Planner selected) ? selected : Optimizer.Planner.greedy;
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _planner.ToString());
+      }
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
         if (Enum.TryParse(newState, out InverterModes modeselect))
@@ -698,7 +711,7 @@ namespace NetDeamon.apps.PVControl
     /// behind sensor.pv_control_mode's charge attributes and binary_sensor.pv_control_need_to_charge_from_grid_today.</summary>
     /// <param name="now">Current time.</param>
     private PlannedCharge? PlannedGridCharge(DateTime now) =>
-      InverterCommand.NextCharge(_house.SimulationTimeline, now, _house.Battery.BatteryCapacity);
+      InverterCommand.NextCharge(_house.SteeringTimeline, now, _house.Battery.BatteryCapacity);
 
     /// <summary>
     /// Learns the VPP charge curve (<see cref="Managers.VppChargeCurve"/>) from a remote-controlled grid
@@ -948,6 +961,7 @@ namespace NetDeamon.apps.PVControl
       }
       issues.AddRange(HealthChecks.DataLogger(now, _lastHourlyRow));
       issues.AddRange(HealthChecks.Instances(Volatile.Read(ref s_liveInstances)));
+      issues.AddRange(HealthChecks.DpPlanner(_planner == Optimizer.Planner.dp, _dpStale));
       return issues;
     }
 
@@ -1043,6 +1057,12 @@ namespace NetDeamon.apps.PVControl
       // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
+      // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
+      var (dpTimeline, effective, dpStale) = Optimizer.DpSteering.Choose(_planner, _dpShadow?.LastPlan, _dpShadow?.Last?.ComputedAt, now, _house.SimulationState);
+      if (effective != _effectivePlanner)
+        PVCC_Logger.LogInformation("Planner steering: {Planner}{Stale}", effective, dpStale ? " (DP plan stale)" : "");
+      _house.DpSteering = dpTimeline;
+      (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
       await PublishPricePublicationAsync(now);
       // update Grid Values for Inverter Check, as it won't update if it stays the same
@@ -1080,6 +1100,8 @@ namespace NetDeamon.apps.PVControl
       attr_Mode["next_charge_window_end"] = charge?.End.ToISO8601() ?? "none";
       attr_Mode["price"] = (charge is { } c ? _house.Prices.PriceListImport.GetPriceOrMean(c.Start) : 0f).ToString(CultureInfo.InvariantCulture);
       attr_Mode["charge_Reason"] = inverterState.ModeReason.ToString();
+      attr_Mode["planner"] = _effectivePlanner.ToString();
+      attr_Mode["planner_selected"] = _planner.ToString();
       // The plan's grid cost over the horizon (to compare with the DP shadow's dp_grid_eur); whole cents, so the
       // attribute only changes with the plan, not with every 15-s cycle's rounding.
       attr_Mode["grid_eur"] = _house.SimulationState is { } plan ? Math.Round(plan.GridCost, 2) : null;
@@ -1432,7 +1454,7 @@ namespace NetDeamon.apps.PVControl
     private void RunDpShadowIfDue(DateTime now)
     {
       if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || _dpShadowSocEntity is not { } socEntity
-          || !shadow.Due(now) || _house.SimulationState is not { } sim)
+          || !shadow.Due(now, steering: _planner == Optimizer.Planner.dp) || _house.SimulationState is not { } sim)
         return;
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       _ = Task.Run(async () =>
@@ -1576,6 +1598,11 @@ namespace NetDeamon.apps.PVControl
       _overrideModeEntity = await RegisterSensor("select.pv_control_mode_override", "Mode Override", "select", "mdi:form-select",
         addConfig: new { options = Enum.GetNames<InverterModes>() },
         defaultValue: InverterModes.automatic.ToString(),
+        reRegister: reset);
+      // Which plan steers the battery: the greedy simulation or the DP plan (falls back to greedy when it's stale).
+      _plannerEntity = await RegisterSensor("select.pv_control_planner", "Planner", "select", "mdi:chart-timeline-variant-shimmer",
+        addConfig: new { options = Enum.GetNames<Optimizer.Planner>() },
+        defaultValue: Optimizer.Planner.greedy.ToString(),
         reRegister: reset);
 
       _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Force charge at cheapest price", "switch", "mdi:transmission-tower",

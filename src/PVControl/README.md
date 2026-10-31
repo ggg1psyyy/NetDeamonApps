@@ -309,6 +309,16 @@ the background on the greedy run's input; it never reaches the inverter.
 | `sensor.pv_control_dp_shadow_predicted_soc` | The DP's predicted SoC in the format of `sensor.pv_control_info_predicted_soc` (`data_actual`: `datetime`, `soc`, `mode`, `extra_load`, `export_allowed`; past quarters the same actual SoC) — a second graph only swaps the entity; state: the DP's SoC now |
 | `dp_shadow.db` (plugin folder) | Table `shadow`, one row per quarter: SoC, both modes, both totals and grid costs, both lows, both next charges, run time. Table `forecast`, one row per quarter: the whole planning situation (`ForecastSnapshot`: forecasts, prices, planned extra loads, settings, the current mode, the VPP curve; gzip JSON, a few kB) — rebuilt exactly with `ForecastSnapshot.ToInput()` for a replay of the DP on its own path |
 
+**Which plan steers: `select.pv_control_planner`** (`greedy` / `dp`, default `greedy`). With `dp` the inverter command
+comes from the DP plan — the current quarter and the next grid charge; override, minimum run, import cap guard and the
+HA reconciler act on it exactly as on the greedy plan — and the DP runs every minute. A DP plan older than 10 min (or
+none yet) never steers: the greedy plan takes over and `sensor.pv_control_health` reports "DP plan stale" (degraded).
+`sensor.pv_control_mode` shows `planner` (in effect) and `planner_selected`; a DP command carries the reason `DpPlan`.
+The greedy simulation keeps running for everything else (EV and warm-water planning, the sensors).
+`sensor.pv_control_info_predicted_soc` always shows the greedy plan, `sensor.pv_control_dp_shadow_predicted_soc` the DP.
+The DP only plans normal, grid_only and grid charges: while it steers there is no grid charge at a negative import
+price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.
+
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
 quarter; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
 charge, not to save fractions of a cent), `DBLocation`.

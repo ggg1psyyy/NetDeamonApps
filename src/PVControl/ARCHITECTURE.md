@@ -1057,3 +1057,16 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   and not the recorder — beyond the 16 kB attribute limit, purged after 10 days, and HA's DB is large already). A test
   pins that the stored input rebuilds exactly the same simulation and DP plan.
 
+## Choosing the planner (`select.pv_control_planner`)
+
+From 2026-10-31 the DP plan can steer (the user preferred its plans to the greedy ones after a day of the shadow,
+before the planned evaluation). The command chain derives everything from one list of slots — the current quarter
+(`HouseEnergy.ProposedState`) and the next grid charge (`InverterCommand.NextCharge`) — so the DP plan is handed over as
+such slots (`DpSteering.ToTimeline`, reason `DpPlan`) and override, minimum run, import cap guard, bulk/VPP path and
+the HA reconciler stay exactly as they are. The greedy simulation keeps running every cycle: the EV and warm-water
+planning, the predicted-SoC sensor and the comparison need it, and it is the fallback — a DP plan older than 10 min
+(a failed or hanging run) never steers, the greedy plan takes over and health says so. While the DP steers it runs
+every minute (~1 s in the background) so a changed SoC or forecast reaches the command quickly. Known gap: the DP's
+actions are normal, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
+target charge exist in the greedy rules only.
+

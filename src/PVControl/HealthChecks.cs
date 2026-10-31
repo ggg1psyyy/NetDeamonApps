@@ -182,4 +182,16 @@ public static class HealthChecks
       yield return new HealthIssue("instances", HealthLevel.error,
         $"{liveInstances} PVControl instances active — an old one still acts on commands; restart NetDaemon");
   }
+
+  /// <summary>The DP plan selected but not steering (none yet, or older than DpSteering.MaxPlanAge): degraded — the
+  /// greedy plan steers meanwhile.</summary>
+  /// <param name="dpSelected">select.pv_control_planner = dp.</param>
+  /// <param name="stale">It couldn't steer this cycle.</param>
+  /// <returns>The issues.</returns>
+  public static IEnumerable<HealthIssue> DpPlanner(bool dpSelected, bool stale)
+  {
+    if (dpSelected && stale)
+      yield return new HealthIssue("dp_planner", HealthLevel.degraded, "DP plan stale or missing — the greedy plan steers");
+  }
 }
+
