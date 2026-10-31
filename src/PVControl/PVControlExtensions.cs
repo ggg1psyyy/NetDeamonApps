@@ -64,8 +64,19 @@ namespace NetDeamon.apps
     RoomForNegativeExport,
     /// <summary>Battery held while a load that never draws it runs (PriorityPlus EV from the grid).</summary>
     LoadFromGrid,
-    /// <summary>The DP plan steers (select.pv_control_planner = dp): its grid charge or hold.</summary>
+    /// <summary>The DP plan steers (select.pv_control_planner = dp): its grid charge or hold (no reason derived).</summary>
     DpPlan,
+    // The DP's own reasons (Optimizer.DpSteering.ReasonOf), apart from the greedy ones: the greedy simulation's
+    // hysteresis reads the running mode's reason (a NeedToCharge charge, a floor hold) and must not take a DP charge
+    // for its own. Appended: stored snapshots and the published command keep the values as numbers.
+    /// <summary>DP: without this charge or hold the battery would go under the absolute minimum before it is filled again.</summary>
+    DpAbsoluteMinimum,
+    /// <summary>DP: … under the preferred minimum (or end the horizon under it).</summary>
+    DpPreferredMinimum,
+    /// <summary>DP: grid charge now, cheaper than the grid at the times it replaces later.</summary>
+    DpCheaperThanLater,
+    /// <summary>DP: battery held for a dearer time later.</summary>
+    DpSavedForLater,
   }
 
   public enum PriceResolution

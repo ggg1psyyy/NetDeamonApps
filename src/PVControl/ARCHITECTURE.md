@@ -1074,11 +1074,22 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
 From 2026-10-31 the DP plan can steer (the user preferred its plans to the greedy ones after a day of the shadow,
 before the planned evaluation). The command chain derives everything from one list of slots — the current quarter
 (`HouseEnergy.ProposedState`) and the next grid charge (`InverterCommand.NextCharge`) — so the DP plan is handed over as
-such slots (`DpSteering.ToTimeline`, reason `DpPlan`) and override, minimum run, import cap guard, bulk/VPP path and
+such slots (`DpSteering.ToTimeline`) and override, minimum run, import cap guard, bulk/VPP path and
 the HA reconciler stay exactly as they are. The greedy simulation keeps running every cycle: the EV and warm-water
 planning, the predicted-SoC sensor and the comparison need it, and it is the fallback — a DP plan older than 10 min
 (a failed or hanging run) never steers, the greedy plan takes over and health says so. While the DP steers it runs
 every minute (~1 s in the background) so a changed SoC or forecast reaches the command quickly. Known gap: the DP's
 actions are normal, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
 target charge exist in the greedy rules only.
+
+### The DP's reasons
+
+The first evening the DP steered (2026-10-31) every charge and hold showed `DpPlan` — the user wants to see why. The
+DP has no rules to name, so the reason is read from its plan afterwards (`DpSteering.ReasonOf`): take the rest of the
+charge or hold off the battery and look at the plan's low until the battery is filled again — under a minimum, the
+quarter protects it; otherwise it is a price decision. A whole block counts, not one quarter: the last quarter of a
+night charge alone never matters, the charge does. The DP's reasons are their own enum values, not the greedy ones:
+the greedy simulation reads the running mode's reason (`IsNeedCharge`'s hysteresis, the floor hold's release margin)
+and would otherwise take a running DP charge for its own NeedToCharge. Appended to the enum — snapshots and the
+published command store it as a number.
 
