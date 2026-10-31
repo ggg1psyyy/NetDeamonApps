@@ -221,5 +221,42 @@ public class BatteryDpPlannerTests : TestBase
     // the same rule judges the greedy plan: under the minimum at the end it pays the shortfall
     Assert.Equal(Math.Max(0, 20 - 17) * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17) + 5, O), 4);   // +5 Wh: SocToWh rounds down, back it would read 16 %
   }
+
+  [Fact]
+  public void Bulk_NotWhereVppChargesAsCheaply()
+  {
+    // Live 2026-10-31 19:45 (the stored planning situation): without a cost the night charge took 04:45 in bulk —
+    // VPP from 04:15 in the same hourly price block costs the same. With it: VPP only, the grid cost unchanged.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-10-31_1945.json.gz"));
+    var input = ForecastSnapshot.FromBytes(bytes).ToInput();
+    var free = BatteryDpPlanner.Plan(input, O with { BulkPenaltyPerQuarter = 0 });
+    var plan = BatteryDpPlanner.Plan(input, O);
+    Assert.Contains(free.Slots, s => s.Mode == InverterModes.force_charge && s.Bulk);
+    Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.force_charge && s.Bulk);
+    Assert.Equal(free.Cost.GridCost, plan.Cost.GridCost, 3);
+  }
+
+  [Fact]
+  public void Bulk_WhereItSavesMore()
+  {
+    // One cheap quarter (0.20) at 60 % in an expensive day: VPP's limit at that SoC leaves energy bulk would buy —
+    // worth far more than the cent, so the DP still charges bulk.
+    var b = Input(Day.AddHours(1), 60, pvWh: 0);
+    var cheap = Day.AddHours(2);
+    var prices = b.ImportPrices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.StartTime == cheap ? 0.20f : 0.50f)).ToList();
+    var input = new SimulationInput
+    {
+      StartTime = b.StartTime, StartSocPercent = 60, BatteryCapacityWh = b.BatteryCapacityWh,
+      AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20, EnforcePreferredSoc = false,
+      MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = prices, ExportPrices = b.ExportPrices,
+      LoadPredictionWh = b.LoadPredictionWh, PVPredictionWh = b.PVPredictionWh, ExtraLoads = [],
+      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.35f,
+      ForceChargeTargetSocPercent = 95, CurrentMode = new InverterState(InverterModes.normal),
+      VppChargePowerW = soc => 5950 - 41 * soc,   // the YAML's default line: ~3.5 kW at 60 % against bulk's 6.9 kW
+    };
+    var slot = BatteryDpPlanner.Plan(input, O).Slots.Single(s => s.Time == cheap);
+    Assert.Equal(InverterModes.force_charge, slot.Mode);
+    Assert.True(slot.Bulk, $"{slot}");
+  }
 }
 

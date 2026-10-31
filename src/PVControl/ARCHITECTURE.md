@@ -1050,6 +1050,12 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   horizon moves on at midnight, but a plan that counts on an empty battery at its end isn't one to show or follow
   (the user, 2026-10-31). Each % missing at the end costs the hard floor's rate — practically a rule, still solvable
   where it can't be reached; it applies with an enforced floor too and judges the greedy plan the same way.
+- **VPP over bulk when it charges as cheaply (`BulkPenaltyPerQuarter`, 1 ct per bulk quarter):** the 2026-10-31
+  19:45 plan charged 04:30 VPP and 04:45 bulk — the VPP limit falls with the SoC, so bulk filled the last quarter.
+  Starting a quarter earlier in VPP costs exactly the same (04:00–05:00 is one hourly price block); the DP had no
+  reason to prefer either and took bulk. The user prefers VPP (several VPP top-ups are fine, bulk only where it pays).
+  The cost only enters the DP's choice, not `PlanCost`: any value from 0.2 ct to 1 € gave the same plan at the same
+  grid cost that night; 1 ct leaves bulk where it saves more (a cheap block too short for VPP).
 - **Interpolated, not rounded:** the cost of the rest at an exact energy is interpolated between the two grid states
   around it; rounding to the nearest state turned every quarter's small drain (100 Wh = 3.47 steps) into 3 steps, the
   DP believed the battery lasted longer and its plan came out dearer than the greedy one under the same model — the
