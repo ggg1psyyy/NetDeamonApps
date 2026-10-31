@@ -315,9 +315,9 @@ HA reconciler act on it exactly as on the greedy plan — and the DP runs every 
 none yet) never steers: the greedy plan takes over and `sensor.pv_control_health` reports "DP plan stale" (degraded).
 `sensor.pv_control_mode` shows `planner` (in effect) and `planner_selected`; a DP charge or hold carries its reason
 from the DP's own plan (`DpSteering.ReasonOf`): `LoadFromGrid` (held while the EV runs from the grid),
-`DpAbsoluteMinimum` / `DpPreferredMinimum` (without the rest of this charge or hold the battery would go under that
-minimum before it is filled again), `DpCheaperThanLater` (a charge cheaper than the grid it replaces later),
-`DpSavedForLater` (held for a dearer time).
+`AbsoluteMinimum` / `PreferredMinimum` (without the rest of this charge or hold the battery would go under that
+minimum before it is filled again), `CheaperThanLater` (a charge cheaper than the grid it replaces later),
+`SavedForLater` (held for a dearer time).
 The greedy simulation keeps running for everything else (EV and warm-water planning, the sensors).
 `sensor.pv_control_info_predicted_soc` always shows the greedy plan, `sensor.pv_control_dp_shadow_predicted_soc` the DP.
 The DP only plans normal, grid_only and grid charges: while it steers there is no grid charge at a negative import

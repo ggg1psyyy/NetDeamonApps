@@ -148,11 +148,11 @@ public class DpSteeringTests : TestBase
     var greedy = EnergySimulator.Simulate(input);
     var timeline = DpSteering.ToTimeline(BatteryDpPlanner.Plan(input), greedy);
     // 21:00 at 13 %: without the charge the evening runs under the absolute minimum before 23:00
-    Assert.Equal(ForceChargeReasons.DpAbsoluteMinimum, timeline.Single(s => s.Time == new DateTime(2026, 10, 31, 21, 0, 0)).State.ModeReason);
+    Assert.Equal(ForceChargeReasons.AbsoluteMinimum, timeline.Single(s => s.Time == new DateTime(2026, 10, 31, 21, 0, 0)).State.ModeReason);
     // the night: the battery held while the EV runs from the grid
     Assert.Equal(ForceChargeReasons.LoadFromGrid, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 1, 0, 0)).State.ModeReason);
     // 04:15–05:00 to ~47 %: nothing near a minimum afterwards — the night's 0.396 is cheaper than the afternoon's grid
-    Assert.Equal(ForceChargeReasons.DpCheaperThanLater, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 4, 30, 0)).State.ModeReason);
+    Assert.Equal(ForceChargeReasons.CheaperThanLater, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 4, 30, 0)).State.ModeReason);
     Assert.DoesNotContain(timeline, s => s.State.ModeReason == ForceChargeReasons.DpPlan);
     Assert.All(timeline, s => Assert.Equal(s.State.Mode == InverterModes.normal, s.State.ModeReason == ForceChargeReasons.None));
   }

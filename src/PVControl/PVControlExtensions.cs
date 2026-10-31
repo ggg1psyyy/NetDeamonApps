@@ -70,13 +70,13 @@ namespace NetDeamon.apps
     // hysteresis reads the running mode's reason (a NeedToCharge charge, a floor hold) and must not take a DP charge
     // for its own. Appended: stored snapshots and the published command keep the values as numbers.
     /// <summary>DP: without this charge or hold the battery would go under the absolute minimum before it is filled again.</summary>
-    DpAbsoluteMinimum,
+    AbsoluteMinimum,
     /// <summary>DP: … under the preferred minimum (or end the horizon under it).</summary>
-    DpPreferredMinimum,
+    PreferredMinimum,
     /// <summary>DP: grid charge now, cheaper than the grid at the times it replaces later.</summary>
-    DpCheaperThanLater,
+    CheaperThanLater,
     /// <summary>DP: battery held for a dearer time later.</summary>
-    DpSavedForLater,
+    SavedForLater,
   }
 
   public enum PriceResolution

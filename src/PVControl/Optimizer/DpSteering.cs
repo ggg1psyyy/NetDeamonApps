@@ -50,9 +50,9 @@ public static class DpSteering
   /// the same mode from here — a single quarter of a block never decides) is taken off the battery: its charge, or for
   /// a hold the house's draw it spares. If the plan's low after it, until the battery is filled again (the next grid
   /// charge, PV raising it, or the horizon's end), would then lie under the absolute minimum:
-  /// <see cref="ForceChargeReasons.DpAbsoluteMinimum"/>; under the preferred one:
-  /// <see cref="ForceChargeReasons.DpPreferredMinimum"/>; else it is a price decision
-  /// (<see cref="ForceChargeReasons.DpCheaperThanLater"/> / <see cref="ForceChargeReasons.DpSavedForLater"/>).
+  /// <see cref="ForceChargeReasons.AbsoluteMinimum"/>; under the preferred one:
+  /// <see cref="ForceChargeReasons.PreferredMinimum"/>; else it is a price decision
+  /// (<see cref="ForceChargeReasons.CheaperThanLater"/> / <see cref="ForceChargeReasons.SavedForLater"/>).
   /// </summary>
   /// <param name="dp">The DP plan.</param>
   /// <param name="i">The quarter's index in it.</param>
@@ -84,9 +84,9 @@ public static class DpSteering
       low = Math.Min(low, slots[j].SocPct);
     }
     double without = low - addedWh * 100.0 / input.BatteryCapacityWh;
-    if (without < input.AbsoluteMinSocPercent) return ForceChargeReasons.DpAbsoluteMinimum;
-    if (without < input.GetPreferredMinSoC()) return ForceChargeReasons.DpPreferredMinimum;
-    return s.Mode == InverterModes.force_charge ? ForceChargeReasons.DpCheaperThanLater : ForceChargeReasons.DpSavedForLater;
+    if (without < input.AbsoluteMinSocPercent) return ForceChargeReasons.AbsoluteMinimum;
+    if (without < input.GetPreferredMinSoC()) return ForceChargeReasons.PreferredMinimum;
+    return s.Mode == InverterModes.force_charge ? ForceChargeReasons.CheaperThanLater : ForceChargeReasons.SavedForLater;
   }
 
   /// <summary>Which plan steers now.</summary>
