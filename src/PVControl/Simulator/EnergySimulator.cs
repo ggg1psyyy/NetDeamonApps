@@ -92,7 +92,7 @@ public static class EnergySimulator
 
       // --- Step 5: advance SoC for the next slot ---
       // Keep Wh exact; derive % only for mode decisions (integer division, no rounding).
-      currentEnergyWh = Math.Clamp(currentEnergyWh + battChargeWh - battDischargeWh, 0, input.BatteryCapacityWh);
+      currentEnergyWh = input.NextEnergyWh(currentEnergyWh, battChargeWh, battDischargeWh);
       currentSoc = input.WhToSoc(currentEnergyWh);
     }
 
@@ -956,24 +956,24 @@ public static class EnergySimulator
       // because C# switch arms are matched in order and both modes share the same name prefix
       // PV disconnected (negative import price): the grid covers house load and battery charging
       InverterModes.force_charge_grid_only
-        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(0, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent),
+        => ForceCharge(0, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(0, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent, input),
 
       InverterModes.force_charge
-        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(pvWh, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent),
+        => ForceCharge(pvWh, totalLoadWh, availEnergy, maxCapacity, input.GridChargeWhPerSlot(pvWh, totalLoadWh, slotFraction, chargeLimitWh), chargeLimitWh, chargeTargetSocPercent, input),
 
       InverterModes.force_discharge
-        => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh),
+        => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh, input),
 
       // Battery idle (no charge/discharge rate): PV covers load, grid any shortfall, surplus exported
       InverterModes.grid_only
-        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh: 0, minEnergy),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh: 0, minEnergy, input),
 
       // PV surplus straight to the grid instead of the battery; the battery still covers a deficit
       InverterModes.feedin_priority
-        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, batteryChargeEnable: false),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, input, batteryChargeEnable: false),
 
       _ // normal, automatic — the standard PV-first flow
-        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, state.BatteryChargeEnable, state.ExportAllowed),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, input, state.BatteryChargeEnable, state.ExportAllowed),
     };
   }
 
@@ -988,7 +988,7 @@ public static class EnergySimulator
   /// <param name="exportAllowed">False: surplus is curtailed (negative export price).</param>
   /// <returns>Battery charge, battery discharge, grid import, grid export, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) Normal(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy,
+    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy, SimulationInput input,
     bool batteryChargeEnable = true, bool exportAllowed = true)
   {
     int net = pvWh - totalLoadWh;
@@ -996,13 +996,13 @@ public static class EnergySimulator
     {
       // PV surplus: charge battery up to the rate limit and available capacity (or curtail if
       // battery charging is disabled), export what's left over (or curtail if export is disallowed)
-      int battCharge = batteryChargeEnable ? Math.Min(net, Math.Min(maxChargeWh, maxCapacity - availEnergy)) : 0;
+      int battCharge = batteryChargeEnable ? Math.Min(net, Math.Min(maxChargeWh, input.ChargeAcForWh(maxCapacity - availEnergy))) : 0;
       int gridExportWh = exportAllowed ? net - battCharge : 0;
       return (battCharge, 0, 0, gridExportWh);
     }
     // PV deficit: discharge battery down to the absolute minimum, up to the rate limit; grid covers the rest
     int deficit = -net;
-    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, Math.Max(0, availEnergy - minEnergy)));
+    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, input.DischargeAcForWh(availEnergy - minEnergy)));
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 
@@ -1016,15 +1016,15 @@ public static class EnergySimulator
   /// <param name="targetSocPercent">Target SoC, %.</param>
   /// <returns>Battery charge, 0, grid import, 0, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceCharge(
-    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int batteryLimitWh, int targetSocPercent)
+    int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int batteryLimitWh, int targetSocPercent, SimulationInput input)
   {
     int targetEnergy = Soc.ToWh(Math.Min(targetSocPercent, 100), maxCapacity);
     int pvSurplus = Math.Max(0, pvWh - totalLoadWh);
     // How much grid charging is needed to hit the rate limit (limited by how far we are from target)
-    int gridChargeNeeded = Math.Min(maxChargeWh, Math.Max(0, targetEnergy - availEnergy));
+    int gridChargeNeeded = Math.Min(maxChargeWh, input.ChargeAcForWh(targetEnergy - availEnergy));
     // PV surplus also charges the battery on top of grid charging (capped by capacity and the path's
     // battery limit: in VPP the inverter limits the battery power, PV's share included)
-    int battCharge = Math.Min(Math.Min(gridChargeNeeded + pvSurplus, batteryLimitWh), maxCapacity - availEnergy);
+    int battCharge = Math.Min(Math.Min(gridChargeNeeded + pvSurplus, batteryLimitWh), input.ChargeAcForWh(maxCapacity - availEnergy));
     // Grid import covers the portion of battCharge not covered by PV, plus any load not covered by PV
     int gridImportWh = Math.Max(0, battCharge - pvSurplus) + Math.Max(0, totalLoadWh - pvWh);
     return (battCharge, 0, gridImportWh, 0);
@@ -1038,10 +1038,10 @@ public static class EnergySimulator
   /// <param name="maxChargeWh">Discharge limit of the slot, Wh.</param>
   /// <returns>0, battery discharge, grid import, grid export, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) ForceDischarge(
-    int pvWh, int totalLoadWh, int availEnergy, int minEnergy, int maxChargeWh)
+    int pvWh, int totalLoadWh, int availEnergy, int minEnergy, int maxChargeWh, SimulationInput input)
   {
     // Discharge at max rate, but never below the absolute minimum
-    int battDischarge = Math.Min(maxChargeWh, availEnergy - minEnergy);
+    int battDischarge = Math.Min(maxChargeWh, input.DischargeAcForWh(availEnergy - minEnergy));
     int gridExportWh = Math.Max(0, battDischarge + pvWh - totalLoadWh);
     int gridImportWh = Math.Max(0, totalLoadWh - pvWh - battDischarge);
     return (0, battDischarge, gridImportWh, gridExportWh);

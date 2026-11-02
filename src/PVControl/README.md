@@ -325,6 +325,9 @@ minimum before it is filled again), `CheaperThanLater` (a charge cheaper than th
 battery still covers the house).
 The greedy simulation keeps running for everything else (EV and warm-water planning, the sensors).
 `sensor.pv_control_info_predicted_soc` always shows the greedy plan, `sensor.pv_control_dp_shadow_predicted_soc` the DP.
+The DP plans with the battery's conversion losses (`InverterEfficiency` per direction: a charge stores × 0.95, a
+discharge draws ÷ 0.95 — a grid charge only pays where the later price beats the round trip, at a fixed price never
+beyond the minimums; the greedy simulation stays lossless and corrects for the round trip in its own rules).
 The DP plans normal, feedin_priority, grid_only and grid charges (where PV covers the house it never holds the
 battery with grid_only — feedin_priority instead): while it steers there is no grid charge at a negative import
 price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.

@@ -100,6 +100,43 @@ public class SimulationInput
   /// <summary>Share of energy left after a round trip through the battery (charge and discharge each through the inverter).</summary>
   public float RoundTripEfficiency => InverterEfficiency * InverterEfficiency;
 
+  // The battery's conversion losses (InverterEfficiency per direction, measured 2026-11-02: ~88 % round trip): the flows
+  // are AC energies (what the battery path takes from or gives to the house/grid side); the battery's own energy changes
+  // by what is stored or drawn. Only with BatteryLosses (the DP plans with them): the greedy rules size their charges with
+  // a lossless look-ahead and correct for the round trip in their own price comparisons.
+
+  /// <summary>The flows lose <see cref="InverterEfficiency"/> per direction (the DP); false: lossless (the greedy simulation).</summary>
+  public bool BatteryLosses { get; init; }
+
+  /// <summary>Efficiency of one direction in the flows: <see cref="InverterEfficiency"/> with <see cref="BatteryLosses"/>, else 1.</summary>
+  private double FlowEfficiency => BatteryLosses ? Math.Round(InverterEfficiency, 4) : 1.0;   // 0.95f is 0.9499999881
+
+  /// <summary>Copy whose flows lose energy (<see cref="BatteryLosses"/>).</summary>
+  public SimulationInput WithBatteryLosses() => BatteryLosses ? this : Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil, losses: true);
+
+  /// <summary>Energy stored in the battery by an AC charge, Wh (× the flow efficiency, rounded down).</summary>
+  /// <param name="chargeAcWh">AC energy into the battery path, Wh.</param>
+  public int StoredWh(int chargeAcWh) => (int)(chargeAcWh * FlowEfficiency + 1e-6);
+
+  /// <summary>Energy drawn from the battery for an AC discharge, Wh (÷ the flow efficiency, rounded up).</summary>
+  /// <param name="dischargeAcWh">AC energy out of the battery path, Wh.</param>
+  public int DrawnWh(int dischargeAcWh) => (int)Math.Ceiling(dischargeAcWh / FlowEfficiency - 1e-9);
+
+  /// <summary>AC charge that stores at most an amount of energy, Wh (the inverse of <see cref="StoredWh"/>).</summary>
+  /// <param name="storedWh">Energy to store, Wh.</param>
+  public int ChargeAcForWh(int storedWh) => storedWh <= 0 ? 0 : (int)(storedWh / FlowEfficiency + 1e-9);
+
+  /// <summary>AC discharge an amount of stored energy delivers, Wh (the inverse of <see cref="DrawnWh"/>).</summary>
+  /// <param name="storedWh">Energy available in the battery, Wh.</param>
+  public int DischargeAcForWh(int storedWh) => storedWh <= 0 ? 0 : (int)(storedWh * FlowEfficiency + 1e-9);
+
+  /// <summary>Battery energy after a slot's flows, Wh (clamped to 0…capacity).</summary>
+  /// <param name="energyWh">Energy in the battery, Wh.</param>
+  /// <param name="chargeAcWh">AC charge of the slot, Wh.</param>
+  /// <param name="dischargeAcWh">AC discharge of the slot, Wh.</param>
+  public int NextEnergyWh(int energyWh, int chargeAcWh, int dischargeAcWh) =>
+    Math.Clamp(energyWh + StoredWh(chargeAcWh) - DrawnWh(dischargeAcWh), 0, BatteryCapacityWh);
+
   private PriceList? _quarterHourlyImportPrices;
   /// <summary><see cref="ImportPrices"/> as 15-min entries (built once per input).</summary>
   internal PriceList QuarterHourlyImportPrices => _quarterHourlyImportPrices ??= ImportPrices.NormalizeToQuarterHourly();
@@ -286,8 +323,10 @@ public class SimulationInput
   /// <param name="export">Export prices.</param>
   /// <param name="publishedUntil">End of the published prices.</param>
   /// <returns>The copy.</returns>
-  private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil) => new()
+  /// <param name="losses">Replaces <see cref="BatteryLosses"/>; null keeps it.</param>
+  private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null) => new()
   {
+    BatteryLosses = losses ?? BatteryLosses,
     StartTime = StartTime,
     StartSocPercent = StartSocPercent,
     BatteryCapacityWh = BatteryCapacityWh,

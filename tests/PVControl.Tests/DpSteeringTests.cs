@@ -151,8 +151,8 @@ public class DpSteeringTests : TestBase
     Assert.Equal(ForceChargeReasons.AbsoluteMinimum, timeline.Single(s => s.Time == new DateTime(2026, 10, 31, 21, 0, 0)).State.ModeReason);
     // the night: the battery held while the EV runs from the grid
     Assert.Equal(ForceChargeReasons.LoadFromGrid, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 1, 0, 0)).State.ModeReason);
-    // 04:15–05:00 to ~47 %: nothing near a minimum afterwards — the night's 0.396 is cheaper than the afternoon's grid
-    Assert.Equal(ForceChargeReasons.CheaperThanLater, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 4, 30, 0)).State.ModeReason);
+    // 04:45: nothing near a minimum afterwards — the night's 0.396 beats the evening's 0.44 even after the round trip
+    Assert.Equal(ForceChargeReasons.CheaperThanLater, timeline.Single(s => s.Time == new DateTime(2026, 11, 1, 4, 45, 0)).State.ModeReason);
     Assert.DoesNotContain(timeline, s => s.State.ModeReason == ForceChargeReasons.DpPlan);
     Assert.All(timeline, s => Assert.Equal(s.State.Mode == InverterModes.normal, s.State.ModeReason == ForceChargeReasons.None));
   }

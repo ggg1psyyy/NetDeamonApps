@@ -34,10 +34,11 @@ public static class DpSteering
   public static List<SimulationSlot> ToTimeline(DpPlan dp, SimulationResult greedy)
   {
     var bySlot = greedy.Slots.ToDictionary(s => s.Time);
+    var dpInput = greedy.Input.WithBatteryLosses();   // the input the DP planned with
     return dp.Slots.Select((s, i) =>
     {
       bySlot.TryGetValue(s.Time, out var g);
-      var state = new InverterState(s.Mode, ReasonOf(dp, i, greedy.Input, bySlot),
+      var state = new InverterState(s.Mode, ReasonOf(dp, i, dpInput, bySlot),
         g?.State.BatteryChargeEnable ?? true, g?.State.ExportAllowed ?? true) { Bulk = s.Bulk };
       return new SimulationSlot(s.Time, s.SocPct, state, g?.PVWh ?? 0, g?.LoadWh ?? 0, g?.ExtraLoadWh ?? 0,
         s.BatteryChargeWh, s.BatteryDischargeWh, s.GridImportWh, s.GridExportWh);
@@ -69,7 +70,7 @@ public static class DpSteering
     if (HeldForLoad(s)) return ForceChargeReasons.LoadFromGrid;
     int addedWh = 0, end = i;
     for (; end < slots.Count && slots[end].Mode == s.Mode && !HeldForLoad(slots[end]); end++)
-      addedWh += s.Mode == InverterModes.force_charge ? slots[end].BatteryChargeWh
+      addedWh += s.Mode == InverterModes.force_charge ? input.StoredWh(slots[end].BatteryChargeWh)
         : greedyBySlot.TryGetValue(slots[end].Time, out var g) ? Math.Max(0, g.LoadWh - g.PVWh) : 0;
     int low = dp.EndSocPct;   // the horizon's end, if nothing fills the battery before
     for (int j = end; j < slots.Count; j++)

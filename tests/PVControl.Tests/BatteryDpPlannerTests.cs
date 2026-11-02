@@ -149,7 +149,8 @@ public class BatteryDpPlannerTests : TestBase
     var input = Input(Day.AddHours(22), 29);
     Assert.Equal(0.40f, PlanEvaluation.RefillPrice(input), 4);
     int floorWh = input.SocToWh(input.GetEffectiveMinSoC());
-    Assert.Equal(0.40f * input.RoundTripEfficiency, PlanEvaluation.EndValue(input, floorWh + 1000), 4);
+    // what 1 kWh above the floor delivers after the discharge loss (the DP's input; the charge loss is in its flows)
+    Assert.Equal(0.40f * 0.95f, PlanEvaluation.EndValue(input.WithBatteryLosses(), floorWh + 1000), 3);
     Assert.Equal(0f, PlanEvaluation.EndValue(input, floorWh - 500));
   }
 
@@ -166,7 +167,7 @@ public class BatteryDpPlannerTests : TestBase
   }
 
   /// <summary>An evening peak (0.51 until 21:00, 0.48 until 23:00) before a cheap night (0.39 from 23:00).</summary>
-  static SimulationInput EveningPeak(int soc)
+  internal static SimulationInput EveningPeak(int soc)
   {
     var b = Input(Day.AddHours(18), soc, loadWh: 80);
     float P(DateTime t) => (t.Date == Day ? t.Hour : t.Hour + 24) switch
@@ -204,9 +205,12 @@ public class BatteryDpPlannerTests : TestBase
     Assert.True(evening.All(s => s.Mode != InverterModes.force_charge), trace);
     Assert.True(evening.Min(s => s.SocPct) < 20, trace);
     Assert.True(plan.Slots.All(s => s.SocPct >= 12), trace);
-    // With a reserve worth ten times as much (0.005 € per % and quarter) the peak is bought instead.
+    // With a reserve worth ten times as much (0.005 € per % and quarter) the reserve is kept — by holding the battery
+    // in the peak, not by buying into it (with the conversion losses a peak charge costs more than the grid directly).
     var strict = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions(BandPenaltyPerPctQuarter: 0.005f));
-    Assert.Contains(strict.Slots.Where(s => s.Time < Day.AddHours(23)), s => s.Mode == InverterModes.force_charge);
+    var strictEvening = strict.Slots.Where(s => s.Time < Day.AddHours(23)).ToList();
+    Assert.True(strictEvening.Min(s => s.SocPct) >= 20, string.Join(", ", strictEvening.Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%")));
+    Assert.DoesNotContain(strictEvening, s => s.Mode == InverterModes.force_charge);
   }
 
   [Fact]
@@ -280,7 +284,7 @@ public class BatteryDpPlannerTests : TestBase
       foreach (var min in new[] { 1, 6, 10, 14 })
       {
         var plan = BatteryDpPlanner.Plan((snap with { StartTime = new DateTime(2026, 11, 2, 6, min, 0), StartSocPercent = soc }).ToInput(), O);
-        Assert.True(plan.Cost.EndShortfall < 0.1f, $"06:{min:00} at {soc} %: shortfall {plan.Cost.EndShortfall} €");
+        Assert.True(plan.Cost.EndShortfall < 0.25f, $"06:{min:00} at {soc} %: shortfall {plan.Cost.EndShortfall} €");   // a fraction of a %, never the 1-€ step
       }
   }
 
@@ -295,11 +299,53 @@ public class BatteryDpPlannerTests : TestBase
     var input = ForecastSnapshot.FromBytes(bytes).ToInput();
     var plan = BatteryDpPlanner.Plan(input, O);
     var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
-    Assert.Contains(timeline, s => s.State.Mode == InverterModes.feedin_priority && s.State.ModeReason == ForceChargeReasons.FeedInFirst);
+    // (with the conversion losses storing the surplus beats exporting it here: normal, not feedin_priority)
     Assert.DoesNotContain(timeline, s => s.State.Mode == InverterModes.grid_only && s.PVWh >= s.LoadWh + s.ExtraLoadWh);
     // feedin_priority only where PV covers the house (elsewhere it would be normal) and it never charges
     Assert.All(timeline.Where(s => s.State.Mode == InverterModes.feedin_priority),
       s => Assert.Equal(0, s.BatteryChargeWh));
+  }
+
+  [Fact]
+  public void LossHelpers_OnlyWithBatteryLosses()
+  {
+    // InverterEfficiency per direction (measured 2026-11-02: ~88 % round trip; 0.95 configured): 1000 Wh AC in stores
+    // 950, 950 Wh AC out draws 1000; the inverses give the AC flows that fit a room or an available energy exactly.
+    var lossless = Input(Day.AddHours(22), 50);
+    var lossy = lossless.WithBatteryLosses();
+    Assert.Equal((1000, 1000), (lossless.StoredWh(1000), lossless.DrawnWh(1000)));
+    Assert.Equal((950, 1000), (lossy.StoredWh(1000), lossy.DrawnWh(950)));
+    Assert.Equal((1000, 950), (lossy.ChargeAcForWh(950), lossy.DischargeAcForWh(1000)));
+    Assert.True(lossy.StoredWh(lossy.ChargeAcForWh(777)) <= 777 && lossy.DrawnWh(lossy.DischargeAcForWh(777)) <= 777);
+    Assert.Equal(5000 + 950 - 1000, lossy.NextEnergyWh(5000, 1000, 950));
+    Assert.Same(lossy, lossy.WithBatteryLosses());
+  }
+
+  [Fact]
+  public void FlatPrice_NoGridCharge_WhileTheBatteryHolds()
+  {
+    // A fixed-price contract (2026-11: 14.125 ct netto): every quarter costs the same, so a grid charge only loses the
+    // round trip. Live 2026-11-02 07:00 at 86 %, the import flat: the lossless model charged in 8 quarters (ties).
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_0700.json.gz"));
+    var snap = ForecastSnapshot.FromBytes(bytes);
+    var flat = snap with { ImportPrices = snap.ImportPrices.Select(p => p with { Price = 0.30f }).ToList() };
+    var plan = BatteryDpPlanner.Plan(flat.ToInput(), O);
+    Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.force_charge);
+  }
+
+  [Fact]
+  public void SmallSpread_NoCharge_TheRoundTripCostsMore()
+  {
+    // Night 0.40, day 0.42 (5 % dearer): charging at night for the day loses ~10 % on the way — no grid charge while the
+    // day can be bought directly (the battery runs down to the minimum and holds); with 0.50 by day (25 %) it pays.
+    SimulationInput With(float day)
+    {
+      var b = Input(Day.AddHours(22), 60, pvWh: 0);
+      var prices = b.ImportPrices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.StartTime.Hour is >= 22 or < 6 ? 0.40f : day)).ToList();
+      return b.WithPrices(new PriceList(prices), b.ExportPrices);
+    }
+    Assert.DoesNotContain(BatteryDpPlanner.Plan(With(0.42f), O).Slots, s => s.Mode == InverterModes.force_charge);
+    Assert.Contains(BatteryDpPlanner.Plan(With(0.50f), O).Slots, s => s.Mode == InverterModes.force_charge);
   }
 }
 

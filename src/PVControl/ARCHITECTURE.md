@@ -1124,3 +1124,20 @@ surplus exported, nothing into the battery) but lets the battery cover the dips,
 grid_only — equally cheap actions go to the first. The inverter then has to run it without EEPROM writes: the solax-modbus
 mode-8 sub-mode "Enabled Feedin Priority" (RAM), not the work mode "Feedin Priority".
 
+### Conversion losses in the DP
+
+The flows (`EnergySimulator.ComputeEnergyFlows`) were lossless: 1 kWh charged from the grid stored 1 kWh, 1 kWh of load
+took 1 kWh out of the battery. The greedy rules correct for the round trip where they compare (`ChargingBeatsHolding`,
+`NetGridCostVs`), the DP only valued the energy left at the horizon's end after the round trip — within the horizon
+"charge now, use later" was free. With a flat price (the fixed-price contract from late 2026-11) every grid charge was a
+tie and the DP charged in 8–19 tiny quarters; with market prices it bought spreads under the loss (2026-10-31 night:
+0.396 to avoid 0.412). Measured 2026-11-02 from the DataLogger: the inverter's battery counters plus the SoC change give
+0.86–0.89 round trip per month (Aug–Oct; incl. the battery's standby draw), night charges store 92–96 % of the counted
+charge; the inverter's AC↔DC conversion isn't measurable (house load is the inverter's balance figure). So 0.95 per
+direction stays. The losses live in `SimulationInput` (`StoredWh`, `DrawnWh` and their inverses, `NextEnergyWh`) and
+apply with `BatteryLosses` only — the DP plans with them, the greedy simulation stays lossless: its look-ahead and
+charge sizing are lossless, and lossy flows under them sized charges too small (repeated charges, spills; 11 greedy
+tests), and the greedy run still plans the EV and warm water. The greedy plan is judged under the same lossy model for
+the comparison (its flows replayed against a lossy battery). The end value is what the energy delivers after the
+discharge loss at the refill price.
+

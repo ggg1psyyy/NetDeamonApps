@@ -58,7 +58,7 @@ public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndS
 /// (<see cref="SimulationInput.GridCostOf"/>), a penalty per % and quarter below the preferred minimum (only without
 /// EnforcePreferredSoc: there the band is a reserve the plan keeps) and below the hard floor, and the energy left above
 /// the hard floor at the end, valued at what refilling it would cost — the cheapest import price of the horizon's last
-/// 24 h after the round trip. Without a value a plan would empty the battery at the horizon's end for free; at the mean
+/// 24 h, for what it delivers after the discharge loss. Without a value a plan would empty the battery at the horizon's end for free; at the mean
 /// price (peaks included) it bought energy for after the horizon (live 2026-10-30: 5.5 kWh at 0.41 at the very end).
 /// </summary>
 public static class PlanEvaluation
@@ -90,7 +90,8 @@ public static class PlanEvaluation
   public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o) =>
     (float)Math.Max(0, input.GetPreferredMinSoC() - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
 
-  /// <summary>Value of the energy in the battery at the end, €: above the hard floor, at <see cref="RefillPrice"/> after the round trip.</summary>
+  /// <summary>Value of the energy in the battery at the end, €: above the hard floor, what it delivers (after the discharge
+  /// loss — the charge loss is in the flows) at <see cref="RefillPrice"/>.</summary>
   /// <param name="input">Simulation input.</param>
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   public static float EndValue(SimulationInput input, int endEnergyWh) => EndValue(input, endEnergyWh, RefillPrice(input));
@@ -100,7 +101,7 @@ public static class PlanEvaluation
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   /// <param name="refillPrice"><see cref="RefillPrice"/>, €/kWh.</param>
   public static float EndValue(SimulationInput input, int endEnergyWh, float refillPrice) =>
-    Math.Max(0, endEnergyWh - input.SocToWh(input.GetEffectiveMinSoC())) / 1000f * refillPrice * input.RoundTripEfficiency;
+    input.DischargeAcForWh(endEnergyWh - input.SocToWh(input.GetEffectiveMinSoC())) / 1000f * refillPrice;
 
   /// <summary>What refilling the battery after the horizon costs: the cheapest import price of its last 24 h, €/kWh
   /// (<see cref="PriceList.GetPriceOrMean"/>: estimated where no price is published yet).</summary>
@@ -133,15 +134,22 @@ public static class PlanEvaluation
     return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh), EndShortfall(input, endEnergyWh, o));
   }
 
-  /// <summary>Cost of the greedy simulation's plan under the one model.</summary>
+  /// <summary>Cost of the greedy simulation's plan under the one model: its flows (the greedy simulation's own, lossless)
+  /// against a battery with the conversion losses (<see cref="SimulationInput.WithBatteryLosses"/>) — the SoC path and the
+  /// end those decisions really lead to, so both plans are judged alike.</summary>
   /// <param name="result">The simulation.</param>
   /// <param name="o">Options.</param>
   public static PlanCost Evaluate(SimulationResult result, DpOptions o)
   {
-    var input = result.Input;
-    var last = result.Slots[^1];
-    int endWh = Math.Clamp(input.SocToWh(last.SoC) + last.BatteryChargeWh - last.BatteryDischargeWh, 0, input.BatteryCapacityWh);
-    return Evaluate(input, result.Slots.Select(s => (s.Time, (double)s.SoC, s.GridImportWh, s.GridExportWh)), endWh, o);
+    var input = result.Input.WithBatteryLosses();
+    int energy = input.SocToWh(input.StartSocPercent);
+    var slots = new List<(DateTime, double, int, int)>(result.Slots.Count);
+    foreach (var s in result.Slots)
+    {
+      slots.Add((s.Time, input.WhToSoc(energy), s.GridImportWh, s.GridExportWh));
+      energy = input.NextEnergyWh(energy, s.BatteryChargeWh, s.BatteryDischargeWh);
+    }
+    return Evaluate(input, slots, energy, o);
   }
 }
 
@@ -168,6 +176,7 @@ public static class BatteryDpPlanner
   /// <returns>The plan.</returns>
   public static DpPlan Plan(SimulationInput input, DpOptions? options = null)
   {
+    input = input.WithBatteryLosses();   // the DP plans with the battery's conversion losses
     var o = options ?? new DpOptions();
     var start = input.StartTime.RoundToNearestQuarterHour();
     var end = HorizonEnd(input);
@@ -218,7 +227,7 @@ public static class BatteryDpPlanner
         {
           if (a.Mode == InverterModes.force_charge && a.TargetSocPct <= pct) continue;   // nothing to charge
           var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, wh, fractions[i]);
-          int next = Math.Clamp(wh + ch - dis, 0, input.BatteryCapacityWh);
+          int next = input.NextEnergyWh(wh, ch, dis);
           float rest = input.GridCostOf(times[i], imp, exp) + band + floor + ValueAt(value[i + 1], next)
                        + (a.Mode == InverterModes.force_charge && a.Bulk ? o.BulkPenaltyPerQuarter : 0);
           if (rest < best - 1e-6f) { best = rest; bestAction = a; }
@@ -237,7 +246,7 @@ public static class BatteryDpPlanner
       var a = policy[i][StateOf(energy)];
       var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
       slots.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis));
-      energy = Math.Clamp(energy + ch - dis, 0, input.BatteryCapacityWh);
+      energy = input.NextEnergyWh(energy, ch, dis);
     }
     var cost = PlanEvaluation.Evaluate(input, slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh)), energy, o);
     return new DpPlan(slots, cost, input.WhToSoc(energy));
