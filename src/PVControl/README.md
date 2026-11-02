@@ -166,6 +166,8 @@ Price sources (`CurrentImportPriceEntities`, ha_epex_spot sensors) are all equal
 
 The sources are the integration's **market price** sensors (raw EPEX price; its surcharge and tax stay 0 — PVControl adds markup, network fee and tax itself). The integration polls its sources on its own schedule; [`HA/PriceFetch.yaml`](HA/PriceFetch.yaml) calls `epex_spot.fetch_data` every 5 min from 12:45 until one source reaches the end of tomorrow, so the prices arrive minutes after the auction results instead of in the afternoon.
 
+**Fixed-price contract** (`ImportPriceFixed: true`): the import energy price is `ImportPriceFixedEntity` (else `ImportPriceFixedValue`), netto — without tax and network fee — instead of the market price × `ImportPriceMultiplier` + `ImportPriceAddition`; the network fee (incl. `ImportPriceNetworkPeriods`) and `ImportPriceTax` stay. The market price sources still give the time slots (and the export price with `ExportPriceSameAsImport`), and no risk premium is added past the published data.
+
 The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive in the afternoon. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 
 ## Cost tracking entities
@@ -372,7 +374,7 @@ dotnet test tests/PVControl.Tests
 | `PriceListTests` | Hourly/quarter-hourly price normalization, list comparison (a replan only on a real price change), hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
 | `DailyTargetChargeTests` | Daily target charge: the target by the end of the day's PV, only what PV won't deliver, in the cheapest quarters under the limit |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) and their first/last year |
-| `EnergyCostTests` | Gross import price composition (markup, network fee, tax) |
+| `EnergyCostTests` | Gross import price composition (markup, network fee, tax; a fixed-price contract's energy price) |
 | `PVControlExtensionsTests` | PVControl's helpers: prediction windows, quarter hours, daily running sums, running averages |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `ChargeAbovePriceLimitTests` | Above the force-charge price limit a grid charge only protects the floor, never the forecast margin alone |

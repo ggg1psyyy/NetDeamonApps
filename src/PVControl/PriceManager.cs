@@ -91,9 +91,19 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>The fixed energy price of a fixed-price contract (<see cref="PVConfig.ImportPriceFixed"/>), netto, €/kWh:
+    /// the entity's value, else the configured one; null without a fixed price.</summary>
+    public float? ImportPriceFixedNetto =>
+      !PVCC_Config.ImportPriceFixed ? null
+      : PVCC_Config.ImportPriceFixedEntity is not null && PVCC_Config.ImportPriceFixedEntity.TryGetStateValue(out float v, numericalGetBaseValue: false)
+        ? v : PVCC_Config.ImportPriceFixedValue;
+
     /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/> — i.e. <see cref="PriceListNetto"/>
-    /// after applying <see cref="PVConfig.ImportPriceResolution"/> (so it reconciles with the shown brutto price).</summary>
-    public PriceList PriceListNettoImport => PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
+    /// after applying <see cref="PVConfig.ImportPriceResolution"/>, or the fixed energy price in its slots (so it
+    /// reconciles with the shown brutto price).</summary>
+    public PriceList PriceListNettoImport => ImportPriceFixedNetto is { } fixedPrice
+      ? new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, fixedPrice)))
+      : PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
 
     /// <summary>Network fee component of <see cref="PriceListImport"/> (tax-inclusive), per slot,
     /// with any active <see cref="PVConfig.ImportPriceNetworkPeriods"/> override applied.</summary>
@@ -166,13 +176,25 @@ namespace NetDeamon.apps.PVControl
     public static float GrossPrice(float netto, float multiplier, float addition, float network, float tax) =>
       (netto * multiplier + addition + network) * (1 + tax);
 
-    /// <summary>Gross import price (<see cref="GrossPrice"/> with the import tariff).</summary>
-    /// <param name="nettoPrice">Netto market price in €/kWh.</param>
+    /// <summary>Gross import price of a tariff: the market price × multiplier + addition, or a fixed contract's energy
+    /// price as it is (the supplier's margin is in it); network fee and tax on both (<see cref="GrossPrice"/>).</summary>
+    /// <param name="marketNetto">Netto market price, €/kWh (ignored with a fixed price).</param>
+    /// <param name="fixedNetto">Fixed energy price, netto, €/kWh; null = market price.</param>
+    /// <param name="multiplier">Factor on the market price.</param>
+    /// <param name="addition">Supplier addition on the market price, €/kWh.</param>
+    /// <param name="network">Network fee, €/kWh; 0 to exclude it.</param>
+    /// <param name="tax">Tax rate, e.g. 0.2.</param>
+    /// <returns>Gross price in €/kWh.</returns>
+    public static float GrossImportPrice(float marketNetto, float? fixedNetto, float multiplier, float addition, float network, float tax) =>
+      fixedNetto is { } f ? GrossPrice(f, 1, 0, network, tax) : GrossPrice(marketNetto, multiplier, addition, network, tax);
+
+    /// <summary>Gross import price (<see cref="GrossImportPrice"/> with the import tariff).</summary>
+    /// <param name="nettoPrice">Netto market price in €/kWh (ignored with a fixed price).</param>
     /// <param name="inclNetworkPrice">Include the network fee.</param>
     /// <param name="at">Time for the network price period; null = now.</param>
     /// <returns>Gross price in €/kWh.</returns>
     public float CalculateBruttoPriceImport(float nettoPrice, bool inclNetworkPrice, System.DateTime? at = null) =>
-      GrossPrice(nettoPrice, PVCC_Config.ImportPriceMultiplier, PVCC_Config.ImportPriceAddition,
+      GrossImportPrice(nettoPrice, ImportPriceFixedNetto, PVCC_Config.ImportPriceMultiplier, PVCC_Config.ImportPriceAddition,
         inclNetworkPrice ? NetworkPriceAt(at ?? System.DateTime.Now) : 0, PVCC_Config.ImportPriceTax);
 
     /// <summary>Gross export price (<see cref="GrossPrice"/> with the export tariff).</summary>

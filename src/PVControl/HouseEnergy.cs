@@ -410,7 +410,9 @@ namespace NetDeamon.apps.PVControl
         InverterEfficiency = Battery.InverterEfficiency,
         // Unpublished hours (tomorrow before ~13:00): estimated from the day before, so plans see
         // tomorrow's daily pattern instead of nothing (scans) or the flat mean (cost comparisons).
-        ImportPrices = Prices.PriceListImport.WithEstimatedPrices(now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium),
+        // A fixed price is known, not estimated: no risk premium on the slots past the published data.
+        ImportPrices = Prices.PriceListImport.WithEstimatedPrices(now.Date.AddDays(2),
+          Prices.ImportPriceFixedNetto is null ? PVCC_Config.EstimatedPricePremium : 0),
         ExportPrices = Prices.PriceListExport.WithEstimatedPrices(now.Date.AddDays(2), -PVCC_Config.EstimatedPricePremium),
         PublishedPricesUntil = Prices.PriceListImport.End,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,

@@ -254,4 +254,16 @@ public class EnergyCostTests : TestBase
     if (slotAt18 != null)
       Assert.NotEqual(InverterModes.force_charge, slotAt18.State.Mode);
   }
+
+  [Fact]
+  public void GrossImportPrice_FixedContract_EnergyPriceAsItIs()
+  {
+    // Market: (0.10 × 1.1 + 0.015 + network 0.0688) × 1.2; a fixed contract replaces the energy part — the supplier's
+    // margin is in its price, so no multiplier or addition — network fee and tax stay.
+    Assert.Equal((0.10f * 1.1f + 0.015f + 0.0688f) * 1.2f, PriceManager.GrossImportPrice(0.10f, null, 1.1f, 0.015f, 0.0688f, 0.2f), 5);
+    Assert.Equal((0.12f + 0.0688f) * 1.2f, PriceManager.GrossImportPrice(0.10f, 0.12f, 1.1f, 0.015f, 0.0688f, 0.2f), 5);
+    Assert.Equal((0.12f + 0.0688f) * 1.2f, PriceManager.GrossImportPrice(0.45f, 0.12f, 1.1f, 0.015f, 0.0688f, 0.2f), 5);   // the market doesn't matter
+    Assert.Equal(0.12f * 1.2f, PriceManager.GrossImportPrice(0.10f, 0.12f, 1.1f, 0.015f, 0, 0.2f), 5);                     // energy only
+  }
 }
+
