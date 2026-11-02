@@ -97,6 +97,22 @@ public class DpShadowTests : TestBase, IDisposable
   }
 
   [Fact]
+  public async Task RequestRun_DueAtOnce_ClearedByTheRun()
+  {
+    // A user change asks for a run: due before the interval has passed, cleared when the run starts.
+    var shadow = new DpShadow(new DpShadowConfig { IntervalMinutes = 5 }, _db);
+    var sim = EnergySimulator.Simulate(Input(Day.AddHours(22), 29));
+    await shadow.RunAsync(sim, Day.AddHours(22));
+    Assert.False(shadow.Due(Day.AddHours(22).AddSeconds(30), steering: true));
+    shadow.RequestRun();
+    Assert.True(shadow.RunRequested);
+    Assert.True(shadow.Due(Day.AddHours(22).AddSeconds(30), steering: true));
+    await shadow.RunAsync(sim, Day.AddHours(22).AddSeconds(30));
+    Assert.False(shadow.RunRequested);
+    Assert.False(shadow.Due(Day.AddHours(22).AddSeconds(45), steering: true));
+  }
+
+  [Fact]
   public void Disabled_NeverDue() =>
     Assert.False(new DpShadow(new DpShadowConfig { Enabled = false }, _db).Due(Day));
 

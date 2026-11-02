@@ -308,8 +308,10 @@ namespace NetDeamon.apps.PVControl
       if (entity == null)
         return;
       PVCC_Logger.LogDebug("Entering UserStateChanged - Entity: {ent}, newState: {state}", entity.EntityId, newState);
-      // Any user change can affect a load's decision — search all windows again right away.
+      // Any user change can affect a load's decision — search all windows again right away; the DP plans right after the
+      // greedy cycle this change triggers (not up to a minute later).
       _house.RequestReplan($"user changed {entity.EntityId}");
+      _dpShadow?.RequestRun();
       newState = newState.ToLower();
 
       if (entity.EntityId == _plannerEntity.EntityId)
@@ -1466,6 +1468,7 @@ namespace NetDeamon.apps.PVControl
           || !shadow.Due(now, steering: _planner == Optimizer.Planner.dp) || _house.SimulationState is not { } sim)
         return;
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
+      bool requested = shadow.RunRequested;
       _ = Task.Run(async () =>
       {
         try
@@ -1477,6 +1480,9 @@ namespace NetDeamon.apps.PVControl
             var soc = Optimizer.DpShadow.PredictedSoc(plan, todayAndTomorrow, sim);
             await PVCC_EntityManager.SetStateAsync(socEntity.EntityId, plan.Slots[0].SocPct.ToString(CultureInfo.InvariantCulture));
             await PVCC_EntityManager.SetAttributesAsync(socEntity.EntityId, Optimizer.DpShadow.PredictedSocAttributes(soc, now, report.ComputedAt));
+            // A run asked for by a user change: one more cycle, so the inverter command follows the new plan right away.
+            if (requested && _planner == Optimizer.Planner.dp)
+              await ScheduledOperations();
           }
         }
         catch (Exception ex)

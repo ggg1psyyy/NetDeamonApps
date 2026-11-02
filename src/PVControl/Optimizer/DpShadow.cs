@@ -63,6 +63,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
     private DateTime _lastRun = DateTime.MinValue;
     private DateTime _lastLoggedQuarter = DateTime.MinValue;
     private int _running;
+    private int _requested;
 
     /// <summary>The last comparison; null before the first run.</summary>
     public DpShadowReport? Last { get; private set; }
@@ -73,11 +74,19 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>Minutes between two runs while the DP plan steers.</summary>
     public const int SteeringIntervalMinutes = 1;
 
-    /// <summary>Whether a run is due: the interval passed (every minute while the DP steers) and none is running.</summary>
+    /// <summary>Asks for a run at the end of the next cycle, regardless of the interval (a user change: the greedy cycle it
+    /// triggers has the new settings — the DP follows right after instead of up to a minute later).</summary>
+    public void RequestRun() => Volatile.Write(ref _requested, 1);
+
+    /// <summary>A run was asked for (<see cref="RequestRun"/>) and hasn't started yet.</summary>
+    public bool RunRequested => Volatile.Read(ref _requested) == 1;
+
+    /// <summary>Whether a run is due: asked for (<see cref="RequestRun"/>) or the interval passed (every minute while the DP
+    /// steers), and none is running.</summary>
     /// <param name="now">Current time.</param>
     /// <param name="steering">The DP plan is selected to steer.</param>
     public bool Due(DateTime now, bool steering = false) => config.Enabled && Volatile.Read(ref _running) == 0
-      && now - _lastRun >= TimeSpan.FromMinutes(steering ? SteeringIntervalMinutes : config.IntervalMinutes);
+      && (RunRequested || now - _lastRun >= TimeSpan.FromMinutes(steering ? SteeringIntervalMinutes : config.IntervalMinutes));
 
     /// <summary>Runs the DP in the background on the greedy run's input and compares; logs the quarter's row.</summary>
     /// <param name="greedy">The greedy simulation of this cycle.</param>
@@ -88,6 +97,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
       if (Interlocked.Exchange(ref _running, 1) == 1) return null;
       try
       {
+        Volatile.Write(ref _requested, 0);
         _lastRun = now;
         var sw = Stopwatch.StartNew();
         var dp = await Task.Run(() => BatteryDpPlanner.Plan(greedy.Input, config.Options));
