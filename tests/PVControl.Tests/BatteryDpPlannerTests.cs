@@ -420,7 +420,7 @@ public class BatteryDpPlannerTests : TestBase
     var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_1215.json.gz"));
     var input = ForecastSnapshot.FromBytes(bytes).ToInput();
     var plain = BatteryDpPlanner.Plan(input, O);
-    var reserve = BatteryDpPlanner.Plan(input, O with { LoadMargin = 0.15 });
+    var reserve = BatteryDpPlanner.Plan(input.WithLoadMargin(0.15), O);
     var midnight = new DateTime(2026, 11, 3);
     Assert.True(reserve.Slots.Single(s => s.Time == midnight).SocPct >= plain.Slots.Single(s => s.Time == midnight).SocPct + 5,
       $"{plain.Slots.Single(s => s.Time == midnight).SocPct} → {reserve.Slots.Single(s => s.Time == midnight).SocPct} %");

@@ -57,6 +57,10 @@ NetDeamon.apps.PVControl.PVConfig:
   # day earlier. Risk premium on those estimates: import × 1.05, export × 0.95 — an estimated slot
   # only wins over a published one when it's clearly better.
   EstimatedPricePremium: 0.05
+  # Both planners (greedy and DP) plan with the house load forecast raised by the 80th percentile of the night forecast's
+  # error over the scored nights (sensor.pv_control_load_forecast, 0–30 %) — a reserve for a load above the forecast.
+  # This value (%) until 7 nights are scored.
+  LoadMarginPct: 15
   # How to determine the export (feed-in) price, checked in order:
   #   1. ExportPriceSameAsImport: true  -> reuse the resolved import netto price (scaled below)
   #   2. ExportPriceFixed: true         -> use a fixed feed-in tariff (entity takes priority over value)
@@ -231,5 +235,4 @@ NetDeamon.apps.PVControl.PVConfig:
     Enabled: true
     IntervalMinutes: 5
     BandPenaltyPerPctQuarter: 0.0005   # ≈ 1.7 ct per kWh of reserve and hour: bridges a peak to a clearly cheaper charge
-    LoadMarginPct: 15                  # load margin until 7 nights are scored; then the 80th percentile of the night forecast's error
     DBLocation: "dp_shadow.db"

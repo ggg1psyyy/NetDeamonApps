@@ -1066,6 +1066,7 @@ namespace NetDeamon.apps.PVControl
         await weather.RefreshIfDueAsync(now);
       PVCC_Logger.LogTrace("Updating Predictions");
       // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
+      _house.LoadMargin = LoadModel.NightForecastTracker.LoadMargin(_nightTracker.Nights) ?? PVCC_Config.LoadMarginPct / 100;
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
@@ -1467,7 +1468,6 @@ namespace NetDeamon.apps.PVControl
       if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || _dpShadowSocEntity is not { } socEntity
           || !shadow.Due(now, steering: _planner == Optimizer.Planner.dp) || _house.SimulationState is not { } sim)
         return;
-      shadow.LoadMargin = LoadModel.NightForecastTracker.LoadMargin(_nightTracker.Nights);
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       bool requested = shadow.RunRequested;
       _ = Task.Run(async () =>

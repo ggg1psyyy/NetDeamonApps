@@ -182,6 +182,9 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Risk premium on estimated (not yet published) prices in the simulation: import
     /// × (1 + premium), export × (1 − premium) — an estimated slot must be clearly better to win.</summary>
     public float EstimatedPricePremium { get; set; } = 0.05f;
+    /// <summary>Load margin of the planning (greedy and DP) while the night forecast has too few scored nights
+    /// (<see cref="LoadModel.NightForecastTracker.MinNightsForMargin"/>), %.</summary>
+    public double LoadMarginPct { get; set; } = 15;
     public bool ExportPriceSameAsImport { get; set; } = true;
     public bool ExportPriceFixed { get; set; } = default;
     public Entity? ExportPriceFixedEntity { get; set; }

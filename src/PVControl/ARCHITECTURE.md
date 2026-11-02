@@ -1163,10 +1163,11 @@ The DP plans with the forecast as if it were certain, so its optimum is "exactly
 arrive at the cheap 23:00 hour at 19–20 %, with no midday dip the next day. A load above the forecast then reaches the
 floor early and the rest is bought at 0.44–0.53 — about 14 ct per missing kWh against ~1 ct of round-trip loss for a kWh
 of reserve bought cheap. The weather model's night error over its 11 scored nights (2026-10-22…11-01): median +6 %,
-80th percentile +15 %, worst +28 % (low in 7 of 11 nights). The DP plans with the house load raised by that 80th
-percentile (`NightForecastTracker.LoadMargin`, recomputed from the last 30 nights, 0–30 %, the YAML's 15 % until 7 are
-scored); extra loads (EV, warm water) stay as planned. With the load as forecast the battery runs above the plan and
+80th percentile +15 %, worst +28 % (low in 7 of 11 nights). The planning input's house load is raised by that 80th
+percentile (`NightForecastTracker.LoadMargin`, recomputed from the last 30 nights, 0–30 %, the YAML's `LoadMarginPct`
+until 7 are scored) where it is built (`HouseEnergy`), so the greedy simulation and the DP plan alike and their curves
+compare (first only the DP had it); extra loads (EV, warm water) stay as planned. With the load as forecast the battery runs above the plan and
 the minute's replan uses it; that night the charge bought 1.4 kWh more and the battery went into the expensive day at
-77 % instead of 66 % (~6 ct round-trip loss if not needed). The DP's grid cost (`dp_grid_eur`) contains the margin's
-assumed load, so it reads higher than the money really spent, and the comparison with the greedy plan is skewed by it.
+77 % instead of 66 % (~6 ct round-trip loss if not needed). Both plans' grid costs (`grid_eur`, `dp_grid_eur`) contain the
+margin's assumed load, so they read higher than the money really spent.
 

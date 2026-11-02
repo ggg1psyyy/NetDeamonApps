@@ -426,7 +426,7 @@ namespace NetDeamon.apps.PVControl
         ChargeVoltageV = PVCC_Config.BatteryVoltageV,
         MaxGridImportW = PVCC_Config.MaxGridImportW,
         VppChargePowerW = VppCurve.MaxW,
-      };
+      }.WithLoadMargin(LoadMargin);   // both planners plan for a load above the forecast (the DP takes this input)
 
       // Run the baseline simulation once — its grid import and PV window boundaries
       // are used by every FindLoadWindow call to compare against test simulations.
@@ -1335,6 +1335,11 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>The simulation timeline (now → end of tomorrow) from the last RunSimulation() call.</summary>
     public IReadOnlyList<SimulationSlot> SimulationTimeline => _simulationResult?.Slots ?? [];
+
+    /// <summary>Share the planning input's house load is raised by (<see cref="LoadModel.NightForecastTracker.LoadMargin"/>,
+    /// else <see cref="PVConfig.LoadMarginPct"/>): a reserve for a load above the forecast, for the greedy simulation and
+    /// the DP alike.</summary>
+    public double LoadMargin { get; set; }
 
     /// <summary>The DP plan as slots while it steers (select.pv_control_planner = dp and fresh, Optimizer.DpSteering);
     /// null: the greedy simulation steers.</summary>
