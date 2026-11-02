@@ -77,6 +77,9 @@ namespace NetDeamon.apps
     CheaperThanLater,
     /// <summary>DP: battery held for a dearer time later.</summary>
     SavedForLater,
+    /// <summary>DP: PV surplus fed in now instead of stored (feedin_priority) — the battery fills anyway or the export is
+    /// worth more now; it still covers the house when PV falls short.</summary>
+    FeedInFirst,
   }
 
   public enum PriceResolution

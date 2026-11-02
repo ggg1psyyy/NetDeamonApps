@@ -148,7 +148,7 @@ public static class PlanEvaluation
 /// <summary>
 /// Global battery plan by dynamic programming (shadow: computed and published next to the greedy simulation, never
 /// steering). States: the battery's energy on a grid of <see cref="DpOptions.StatesPerPercent"/> per %; per quarter
-/// the actions normal, grid_only and grid charges to targets every <see cref="DpOptions.ChargeStepPct"/> % on the VPP and
+/// the actions normal, feedin_priority, grid_only and grid charges to targets every <see cref="DpOptions.ChargeStepPct"/> % on the VPP and
 /// the bulk path. Each transition's flows come from the simulation's own <see cref="EnergySimulator.ComputeEnergyFlows"/>
 /// (same limits, efficiency, import cap); a quarter with a load that never draws the battery holds it as the simulation
 /// does. Backwards from the end (<see cref="PlanEvaluation.EndValue"/>) the cheapest rest is computed for every state,
@@ -246,12 +246,22 @@ public static class BatteryDpPlanner
   /// <summary>An action of a quarter: a mode, and for a grid charge its path and target.</summary>
   private readonly record struct Action(InverterModes Mode, bool Bulk, int TargetSocPct);
 
-  /// <summary>The actions of a quarter: normal (grid_only where a load never draws the battery), grid_only, and grid
-  /// charges to every <see cref="DpOptions.ChargeStepPct"/> % target on both paths.</summary>
+  /// <summary>
+  /// The actions of a quarter: normal (grid_only where a load never draws the battery), feedin_priority, grid_only,
+  /// and grid charges to every <see cref="DpOptions.ChargeStepPct"/> % target on both paths. The order breaks ties
+  /// (the first of equally cheap actions wins): with PV covering the house, feedin_priority and grid_only have the same
+  /// quarter flows (the surplus exported, nothing from the battery), but feedin_priority lets the battery cover the
+  /// dips within the quarter that grid_only buys from the grid (live 2026-11-02 08:45/14:00: grid_only held the battery
+  /// at 0.51 for 0.1 ct); with PV under the house load feedin_priority is normal, which comes first.
+  /// </summary>
   private static List<Action> Actions(SimulationInput input, DpOptions o, bool held)
   {
     var list = new List<Action> { new(held ? InverterModes.grid_only : InverterModes.normal, false, 0) };
-    if (!held) list.Add(new(InverterModes.grid_only, false, 0));
+    if (!held)
+    {
+      list.Add(new(InverterModes.feedin_priority, false, 0));
+      list.Add(new(InverterModes.grid_only, false, 0));
+    }
     for (int target = o.ChargeStepPct; target <= 100; target += o.ChargeStepPct)
     {
       list.Add(new(InverterModes.force_charge, false, target));

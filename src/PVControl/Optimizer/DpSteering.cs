@@ -63,6 +63,7 @@ public static class DpSteering
     var slots = dp.Slots;
     var s = slots[i];
     if (s.Mode == InverterModes.normal) return ForceChargeReasons.None;
+    if (s.Mode == InverterModes.feedin_priority) return ForceChargeReasons.FeedInFirst;
     bool HeldForLoad(DpSlot x) => x.Mode == InverterModes.grid_only && greedyBySlot.TryGetValue(x.Time, out var g)
       && input.BatteryHeldForLoad(x.Time, g.PVWh, g.LoadWh + g.ExtraLoadWh);
     if (HeldForLoad(s)) return ForceChargeReasons.LoadFromGrid;

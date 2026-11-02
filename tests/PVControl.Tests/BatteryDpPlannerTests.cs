@@ -283,5 +283,23 @@ public class BatteryDpPlannerTests : TestBase
         Assert.True(plan.Cost.EndShortfall < 0.1f, $"06:{min:00} at {soc} %: shortfall {plan.Cost.EndShortfall} €");
       }
   }
+
+  [Fact]
+  public void SurplusQuarters_FeedinPriority_NotGridOnly()
+  {
+    // Live 2026-11-02 07:00 (the stored planning situation, battery 86 %, full by the afternoon anyway): the DP held the
+    // battery with grid_only at 08:45 and 14:00 (0.51/0.50) to export 36 Wh each at the morning's export price — in a
+    // quarter where PV covers the house the flows are the same, but grid_only buys every dip from the grid. Now
+    // feedin_priority (the battery covers dips, never charges), and no grid_only where PV covers the house.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_0700.json.gz"));
+    var input = ForecastSnapshot.FromBytes(bytes).ToInput();
+    var plan = BatteryDpPlanner.Plan(input, O);
+    var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
+    Assert.Contains(timeline, s => s.State.Mode == InverterModes.feedin_priority && s.State.ModeReason == ForceChargeReasons.FeedInFirst);
+    Assert.DoesNotContain(timeline, s => s.State.Mode == InverterModes.grid_only && s.PVWh >= s.LoadWh + s.ExtraLoadWh);
+    // feedin_priority only where PV covers the house (elsewhere it would be normal) and it never charges
+    Assert.All(timeline.Where(s => s.State.Mode == InverterModes.feedin_priority),
+      s => Assert.Equal(0, s.BatteryChargeWh));
+  }
 }
 

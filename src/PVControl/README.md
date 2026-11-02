@@ -317,10 +317,12 @@ none yet) never steers: the greedy plan takes over and `sensor.pv_control_health
 from the DP's own plan (`DpSteering.ReasonOf`): `LoadFromGrid` (held while the EV runs from the grid),
 `AbsoluteMinimum` / `PreferredMinimum` (without the rest of this charge or hold the battery would go under that
 minimum before it is filled again), `CheaperThanLater` (a charge cheaper than the grid it replaces later),
-`SavedForLater` (held for a dearer time).
+`SavedForLater` (held for a dearer time), `FeedInFirst` (feedin_priority: PV surplus fed in instead of stored, the
+battery still covers the house).
 The greedy simulation keeps running for everything else (EV and warm-water planning, the sensors).
 `sensor.pv_control_info_predicted_soc` always shows the greedy plan, `sensor.pv_control_dp_shadow_predicted_soc` the DP.
-The DP only plans normal, grid_only and grid charges: while it steers there is no grid charge at a negative import
+The DP plans normal, feedin_priority, grid_only and grid charges (where PV covers the house it never holds the
+battery with grid_only — feedin_priority instead): while it steers there is no grid charge at a negative import
 price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per

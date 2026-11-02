@@ -1086,7 +1086,7 @@ the HA reconciler stay exactly as they are. The greedy simulation keeps running 
 planning, the predicted-SoC sensor and the comparison need it, and it is the fallback — a DP plan older than 10 min
 (a failed or hanging run) never steers, the greedy plan takes over and health says so. While the DP steers it runs
 every minute (~1 s in the background) so a changed SoC or forecast reaches the command quickly. Known gap: the DP's
-actions are normal, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
+actions are normal, feedin_priority, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
 target charge exist in the greedy rules only.
 
 ### The DP's reasons
@@ -1099,4 +1099,14 @@ night charge alone never matters, the charge does. The DP's reasons are their ow
 the greedy simulation reads the running mode's reason (`IsNeedCharge`'s hysteresis, the floor hold's release margin)
 and would otherwise take a running DP charge for its own NeedToCharge. Appended to the enum — snapshots and the
 published command store it as a number.
+
+### feedin_priority instead of grid_only in surplus quarters
+
+On 2026-11-02 (battery 86 % at 07:00, full by the afternoon anyway) the DP held the battery with grid_only at 08:45 and
+14:00 at 0.50–0.51: PV covered the house, so the hold only exported 36 Wh each at the morning's export price instead of
+storing them and exporting the same energy at midday's lower one — 0.1 ct. On quarter averages that's free; within the
+quarter every dip of PV under the house load is bought from the grid. feedin_priority has the same quarter flows (the
+surplus exported, nothing into the battery) but lets the battery cover the dips, so it is a DP action listed before
+grid_only — equally cheap actions go to the first. The inverter then has to run it without EEPROM writes: the solax-modbus
+mode-8 sub-mode "Enabled Feedin Priority" (RAM), not the work mode "Feedin Priority".
 
