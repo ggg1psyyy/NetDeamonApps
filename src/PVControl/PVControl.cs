@@ -63,9 +63,6 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
     private Entity _plannerEntity = null!;
-    // switch/number.pv_control_import_price_fixed: a fixed-price supply contract and its netto energy price.
-    private Entity _importPriceFixedEntity = null!;
-    private Entity _importPriceFixedValueEntity = null!;
     // select.pv_control_planner: the selected planner, the one in effect this cycle, and whether the DP couldn't steer.
     private Optimizer.Planner _planner = Optimizer.Planner.greedy;
     private Optimizer.Planner _effectivePlanner = Optimizer.Planner.greedy;
@@ -165,10 +162,6 @@ namespace NetDeamon.apps.PVControl
         _house.OverrideMode = mode;
       if (_plannerEntity.TryGetStateValue(out Optimizer.Planner planner))
         _planner = planner;
-      if (_importPriceFixedEntity.TryGetStateValue(out bool importFixed))
-        _house.Prices.ImportPriceFixed = importFixed;
-      if (_importPriceFixedValueEntity.TryGetStateValue(out float fixedPrice))
-        _house.Prices.ImportPriceFixedValue = fixedPrice;
       if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
         _house.Battery.PreferredMinBatterySoC = prefSoC;
       if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
@@ -220,8 +213,6 @@ namespace NetDeamon.apps.PVControl
       await SubscribeCommandAsync(_forceChargeEntity);
       await SubscribeCommandAsync(_overrideModeEntity);
       await SubscribeCommandAsync(_plannerEntity);
-      await SubscribeCommandAsync(_importPriceFixedEntity);
-      await SubscribeCommandAsync(_importPriceFixedValueEntity);
       await SubscribeCommandAsync(_enableOpportunisticExport);
 
       PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
@@ -354,17 +345,6 @@ namespace NetDeamon.apps.PVControl
       {
         _house.OpportunisticDischarge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.OpportunisticDischarge ? "ON" : "OFF");
-      }
-      if (entity.EntityId == _importPriceFixedEntity.EntityId && entity.State is not null)
-      {
-        _house.Prices.ImportPriceFixed = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.Prices.ImportPriceFixed ? "ON" : "OFF");
-      }
-      if (entity.EntityId == _importPriceFixedValueEntity.EntityId && entity.State is not null)
-      {
-        if (float.TryParse(newState, System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out float value) && value >= 0)
-          _house.Prices.ImportPriceFixedValue = value;
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.Prices.ImportPriceFixedValue.ToString(CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == _forceChargeMaxPriceEntity.EntityId && entity.State is not null)
       {
@@ -1632,22 +1612,6 @@ namespace NetDeamon.apps.PVControl
       _plannerEntity = await RegisterSensor("select.pv_control_planner", "Planner", "select", "mdi:chart-timeline-variant-shimmer",
         addConfig: new { options = Enum.GetNames<Optimizer.Planner>() },
         defaultValue: Optimizer.Planner.greedy.ToString(),
-        reRegister: reset);
-
-      // A fixed-price supply contract instead of the market price (manual: the supplier allows switching any day).
-      _importPriceFixedEntity = await RegisterSensor("switch.pv_control_import_price_fixed", "Fixed import price", "switch", "mdi:lock-outline",
-        defaultValue: PVCC_Config.ImportPriceFixed ? "ON" : "OFF",
-        reRegister: reset);
-      _importPriceFixedValueEntity = await RegisterSensor("number.pv_control_import_price_fixed", "Fixed import price (netto)", "monetary", "mdi:currency-eur",
-        addConfig: new
-        {
-          min = 0,
-          max = 1,
-          step = 0.00001,
-          unit_of_measurement = "€/kWh",
-          mode = "box",
-        },
-        defaultValue: PVCC_Config.ImportPriceFixedValue.ToString(CultureInfo.InvariantCulture),
         reRegister: reset);
 
       _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Force charge at cheapest price", "switch", "mdi:transmission-tower",
