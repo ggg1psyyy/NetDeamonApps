@@ -1054,6 +1054,9 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   horizon moves on at midnight, but a plan that counts on an empty battery at its end isn't one to show or follow
   (the user, 2026-10-31). Each % missing at the end costs the hard floor's rate — practically a rule, still solvable
   where it can't be reached; it applies with an enforced floor too and judges the greedy plan the same way.
+  Measured from the exact SoC (`Soc.FromWhExact`), not whole %: rounded down, a plan ending at 19.9 % paid the full
+  1 €, while the DP, whose states lie between whole %, expected only part of it — replans a few minutes apart differed
+  by exactly 1 € (live 2026-11-02 06:00, the situation is test data).
 - **VPP over bulk when it charges as cheaply (`BulkPenaltyPerQuarter`, 1 ct per bulk quarter):** the 2026-10-31
   19:45 plan charged 04:30 VPP and 04:45 bulk — the VPP limit falls with the SoC, so bulk filled the last quarter.
   Starting a quarter earlier in VPP costs exactly the same (04:00–05:00 is one hourly price block); the DP had no

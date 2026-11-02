@@ -80,13 +80,15 @@ public static class PlanEvaluation
   /// Penalty for ending the horizon under the preferred minimum, €: per % missing at the end at the hard floor's rate —
   /// practically a rule (the user, 2026-10-31: the horizon ends at least at the preferred minimum; the plan is redone
   /// every few minutes and the horizon moves on at midnight, but the plan up to there doesn't count on an empty
-  /// battery), still solvable where it can't be reached. Applies with EnforcePreferredSoc as well.
+  /// battery), still solvable where it can't be reached. Applies with EnforcePreferredSoc as well. Measured from the
+  /// exact SoC, not whole %: rounded down, a plan ending at 19.9 % paid the full 1 € — and the DP, whose states lie
+  /// between whole %, expected only part of it (live 2026-11-02: plans a minute apart differed by 1 €).
   /// </summary>
   /// <param name="input">Simulation input.</param>
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   /// <param name="o">Options (the floor's rate).</param>
   public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o) =>
-    Math.Max(0, input.GetPreferredMinSoC() - input.WhToSoc(endEnergyWh)) * o.FloorPenaltyPerPctQuarter;
+    (float)Math.Max(0, input.GetPreferredMinSoC() - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
 
   /// <summary>Value of the energy in the battery at the end, €: above the hard floor, at <see cref="RefillPrice"/> after the round trip.</summary>
   /// <param name="input">Simulation input.</param>

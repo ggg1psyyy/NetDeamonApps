@@ -219,7 +219,7 @@ public class BatteryDpPlannerTests : TestBase
     Assert.True(plan.EndSocPct >= 20, $"end {plan.EndSocPct} %");
     Assert.Equal(0f, plan.Cost.EndShortfall);
     // the same rule judges the greedy plan: under the minimum at the end it pays the shortfall
-    Assert.Equal(Math.Max(0, 20 - 17) * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17) + 5, O), 4);   // +5 Wh: SocToWh rounds down, back it would read 16 %
+    Assert.Equal(3 * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17), O), 2);
   }
 
   [Fact]
@@ -257,6 +257,31 @@ public class BatteryDpPlannerTests : TestBase
     var slot = BatteryDpPlanner.Plan(input, O).Slots.Single(s => s.Time == cheap);
     Assert.Equal(InverterModes.force_charge, slot.Mode);
     Assert.True(slot.Bulk, $"{slot}");
+  }
+
+  [Fact]
+  public void EndShortfall_FromTheExactSoc_NoStepAtWholePercent()
+  {
+    // 19.9 % at the end is 0.1 % short, not 1 % (whole % rounded it down).
+    var input = Input(Day.AddHours(22), 29);
+    int wh = (int)(input.BatteryCapacityWh * 0.199);
+    Assert.Equal(0.1f * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, wh, O), 2);
+    Assert.Equal(0f, PlanEvaluation.EndShortfall(input, input.SocToWh(20) + 1, O));
+  }
+
+  [Fact]
+  public void EndShortfall_NoEuroJumpBetweenNeighbouringRuns()
+  {
+    // Live 2026-11-02 06:00 (the stored planning situation) replanned a few minutes later at 88–90 %: with the
+    // shortfall in whole % some runs paid 1 € for ending at ~19.9 %, their neighbours nothing. Now none is near 1 €.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_0600.json.gz"));
+    var snap = ForecastSnapshot.FromBytes(bytes);
+    foreach (var soc in new[] { 88, 89, 90 })
+      foreach (var min in new[] { 1, 6, 10, 14 })
+      {
+        var plan = BatteryDpPlanner.Plan((snap with { StartTime = new DateTime(2026, 11, 2, 6, min, 0), StartSocPercent = soc }).ToInput(), O);
+        Assert.True(plan.Cost.EndShortfall < 0.1f, $"06:{min:00} at {soc} %: shortfall {plan.Cost.EndShortfall} €");
+      }
   }
 }
 

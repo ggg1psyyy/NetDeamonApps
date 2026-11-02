@@ -83,7 +83,7 @@ public static class DpSteering
       }
       low = Math.Min(low, slots[j].SocPct);
     }
-    double without = low - addedWh * 100.0 / input.BatteryCapacityWh;
+    double without = low - Soc.FromWhExact(addedWh, input.BatteryCapacityWh);
     if (without < input.AbsoluteMinSocPercent) return ForceChargeReasons.AbsoluteMinimum;
     if (without < input.GetPreferredMinSoC()) return ForceChargeReasons.PreferredMinimum;
     return s.Mode == InverterModes.force_charge ? ForceChargeReasons.CheaperThanLater : ForceChargeReasons.SavedForLater;

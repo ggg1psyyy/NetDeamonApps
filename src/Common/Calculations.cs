@@ -148,6 +148,12 @@ namespace NetDeamon.apps
     /// <returns>State of charge in % (integer division).</returns>
     public static int FromWh(int wh, int capacityWh) => wh * 100 / capacityWh;
 
+    /// <summary>State of charge of an energy, exact (not rounded to whole %).</summary>
+    /// <param name="wh">Energy in the battery (or a difference) in Wh.</param>
+    /// <param name="capacityWh">Battery capacity in Wh.</param>
+    /// <returns>State of charge in %.</returns>
+    public static double FromWhExact(int wh, int capacityWh) => wh * 100.0 / capacityWh;
+
     /// <summary>Time to charge (or discharge) between two states of charge: (end − start) × capacity × efficiency / power.</summary>
     /// <param name="startSoc">Start state of charge in %.</param>
     /// <param name="endSoc">End state of charge in %; below <paramref name="startSoc"/> for discharging.</param>
