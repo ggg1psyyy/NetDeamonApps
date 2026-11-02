@@ -12,15 +12,15 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// <param name="FloorPenaltyPerPctQuarter">Penalty per % below the hard floor per quarter, € — practically forbidden.</param>
 /// <param name="StatesPerPercent">SoC grid of the program: states per % (4 = 0.25 % steps).</param>
 /// <param name="ChargeStepPct">Charge targets a grid charge can stop at within a quarter, every this many %.</param>
-/// <param name="BulkPenaltyPerQuarter">Cost of a bulk quarter in the DP's choice only, €: VPP wins where it does as well
-/// (the same hourly price block), bulk only where it saves more. Not part of <see cref="PlanCost"/> — the comparison
-/// stays in real euros.</param>
+/// <param name="TieEur">Actions whose rest costs differ by no more than this are a tie, €: the earlier action in the list
+/// wins (normal, feedin_priority, grid_only, then each charge target VPP before bulk) — VPP where it charges as
+/// cheaply, bulk only where it saves something; 0.01 ct covers the interpolation's noise.</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
   int StatesPerPercent = 4,
   int ChargeStepPct = 2,
-  float BulkPenaltyPerQuarter = 0.01f);
+  float TieEur = 0.0001f);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -228,9 +228,8 @@ public static class BatteryDpPlanner
           if (a.Mode == InverterModes.force_charge && a.TargetSocPct <= pct) continue;   // nothing to charge
           var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, wh, fractions[i]);
           int next = input.NextEnergyWh(wh, ch, dis);
-          float rest = input.GridCostOf(times[i], imp, exp) + band + floor + ValueAt(value[i + 1], next)
-                       + (a.Mode == InverterModes.force_charge && a.Bulk ? o.BulkPenaltyPerQuarter : 0);
-          if (rest < best - 1e-6f) { best = rest; bestAction = a; }
+          float rest = input.GridCostOf(times[i], imp, exp) + band + floor + ValueAt(value[i + 1], next);
+          if (rest < best - o.TieEur) { best = rest; bestAction = a; }   // a tie goes to the earlier action
         }
         value[i][s] = best;
         policy[i][s] = bestAction;

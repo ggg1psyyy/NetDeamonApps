@@ -231,5 +231,4 @@ NetDeamon.apps.PVControl.PVConfig:
     Enabled: true
     IntervalMinutes: 5
     BandPenaltyPerPctQuarter: 0.0005   # ≈ 1.7 ct per kWh of reserve and hour: bridges a peak to a clearly cheaper charge
-    BulkPenaltyPerQuarter: 0.01        # € per bulk quarter in the DP's choice: VPP where it does as well, bulk only where it saves more
     DBLocation: "dp_shadow.db"

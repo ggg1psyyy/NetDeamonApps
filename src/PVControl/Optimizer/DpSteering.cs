@@ -35,14 +35,46 @@ public static class DpSteering
   {
     var bySlot = greedy.Slots.ToDictionary(s => s.Time);
     var dpInput = greedy.Input.WithBatteryLosses();   // the input the DP planned with
+    var bulk = BlockPaths(dp.Slots, greedy.Input.CurrentMode, s => dpInput.ChargeLimitWh(false, s.SocPct, dpInput.SlotFraction(s.Time)), dpInput.SocToWh(1));
     return dp.Slots.Select((s, i) =>
     {
       bySlot.TryGetValue(s.Time, out var g);
       var state = new InverterState(s.Mode, ReasonOf(dp, i, dpInput, bySlot),
-        g?.State.BatteryChargeEnable ?? true, g?.State.ExportAllowed ?? true) { Bulk = s.Bulk };
+        g?.State.BatteryChargeEnable ?? true, g?.State.ExportAllowed ?? true) { Bulk = bulk[i] };
       return new SimulationSlot(s.Time, s.SocPct, state, g?.PVWh ?? 0, g?.LoadWh ?? 0, g?.ExtraLoadWh ?? 0,
         s.BatteryChargeWh, s.BatteryDischargeWh, s.GridImportWh, s.GridExportWh);
     }).ToList();
+  }
+
+  /// <summary>
+  /// One path per grid charge: every contiguous block of force_charge quarters runs entirely as bulk or entirely as VPP
+  /// (a switch between Manual Mode and VPP writes EEPROM every time; the DP chooses per quarter and may alternate). Bulk
+  /// only where VPP falls short of the block's planned charge by more than a tolerance (1 % SoC; the user, 2026-11-02: no
+  /// bulk if VPP is enough) — the DP's choice per quarter tips to bulk for a few Wh (2026-10-31 04:45: 1213 Wh planned,
+  /// VPP 1196), the next replan takes up such a rest. A charge that runs now keeps its path for its block (as in the greedy simulation). The import cap
+  /// only throttles a bulk charge's current, never switches the path.
+  /// </summary>
+  /// <param name="slots">The DP plan's quarters.</param>
+  /// <param name="current">The mode running now.</param>
+  /// <param name="vppLimitWh">VPP's charge limit in a quarter, Wh (<see cref="SimulationInput.ChargeLimitWh"/>).</param>
+  /// <param name="toleranceWh">How much of the block's charge VPP may miss and still run it, Wh.</param>
+  /// <returns>Per quarter: bulk.</returns>
+  public static bool[] BlockPaths(IReadOnlyList<DpSlot> slots, InverterState current, Func<DpSlot, int> vppLimitWh, int toleranceWh)
+  {
+    var bulk = new bool[slots.Count];
+    for (int i = 0; i < slots.Count;)
+    {
+      if (slots[i].Mode != InverterModes.force_charge) { i++; continue; }
+      int end = i;
+      while (end < slots.Count && slots[end].Mode == InverterModes.force_charge) end++;
+      var block = Enumerable.Range(i, end - i).Select(k => slots[k]).ToList();
+      bool path = i == 0 && current.Mode == InverterModes.force_charge
+        ? current.Bulk
+        : block.Any(s => s.Bulk) && block.Sum(s => s.BatteryChargeWh) > block.Sum(vppLimitWh) + toleranceWh;
+      for (int k = i; k < end; k++) bulk[k] = path;
+      i = end;
+    }
+    return bulk;
   }
 
   /// <summary>

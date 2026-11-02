@@ -229,15 +229,13 @@ public class BatteryDpPlannerTests : TestBase
   [Fact]
   public void Bulk_NotWhereVppChargesAsCheaply()
   {
-    // Live 2026-10-31 19:45 (the stored planning situation): without a cost the night charge took 04:45 in bulk —
-    // VPP from 04:15 in the same hourly price block costs the same. With it: VPP only, the grid cost unchanged.
+    // Live 2026-10-31 19:45 (the stored planning situation): the night charge's 04:45 quarter tips to bulk in the DP for
+    // a few Wh above VPP's limit (1213 vs 1196) — VPP in the same hourly price block is enough. What steers is VPP
+    // (DpSteering.BlockPaths: bulk only where VPP can't deliver the block's charge).
     var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-10-31_1945.json.gz"));
     var input = ForecastSnapshot.FromBytes(bytes).ToInput();
-    var free = BatteryDpPlanner.Plan(input, O with { BulkPenaltyPerQuarter = 0 });
-    var plan = BatteryDpPlanner.Plan(input, O);
-    Assert.Contains(free.Slots, s => s.Mode == InverterModes.force_charge && s.Bulk);
-    Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.force_charge && s.Bulk);
-    Assert.Equal(free.Cost.GridCost, plan.Cost.GridCost, 3);
+    var timeline = DpSteering.ToTimeline(BatteryDpPlanner.Plan(input, O), EnergySimulator.Simulate(input));
+    Assert.DoesNotContain(timeline, s => s.State.Mode == InverterModes.force_charge && s.State.Bulk);
   }
 
   [Fact]
@@ -367,6 +365,24 @@ public class BatteryDpPlannerTests : TestBase
     var night = Day.AddDays(1).AddHours(2);
     Assert.False(input.IsInPVPeriod(night));
     Assert.True(BatteryDpPlanner.HoldAllowed(input, night, pvWh: 0, totalLoadWh: 50));     // night: always
+  }
+
+  [Fact]
+  public void Bulk_WhenTheCheapHourIsFullOnVpp()
+  {
+    // Live 2026-11-02 12:15 (the stored planning situation): the 23:00 hour (0.394) is full on VPP (1196 → 918 Wh per
+    // quarter). Running the house on the battery until 22:00 (0.444) and refilling at 23:00 saves ~2 ct but needs bulk —
+    // a 1-ct cost per bulk quarter (the earlier tie-breaker) held the battery from 21:00 instead. Bulk where it saves.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_1215.json.gz"));
+    var input = ForecastSnapshot.FromBytes(bytes).ToInput();
+    var plan = BatteryDpPlanner.Plan(input, O);
+    var at21 = plan.Slots.Single(s => s.Time == new DateTime(2026, 11, 2, 21, 0, 0));
+    Assert.Equal(InverterModes.normal, at21.Mode);
+    // what steers: the whole 23:00 block in bulk (VPP can't deliver it), no switching within it
+    var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
+    var night = timeline.Where(s => s.State.Mode == InverterModes.force_charge && s.Time.Hour == 23).ToList();
+    Assert.NotEmpty(night);
+    Assert.All(night, s => Assert.True(s.State.Bulk));
   }
 }
 

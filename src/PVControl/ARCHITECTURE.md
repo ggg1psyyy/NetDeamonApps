@@ -1071,12 +1071,19 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
   Measured from the exact SoC (`Soc.FromWhExact`), not whole %: rounded down, a plan ending at 19.9 % paid the full
   1 €, while the DP, whose states lie between whole %, expected only part of it — replans a few minutes apart differed
   by exactly 1 € (live 2026-11-02 06:00, the situation is test data).
-- **VPP over bulk when it charges as cheaply (`BulkPenaltyPerQuarter`, 1 ct per bulk quarter):** the 2026-10-31
-  19:45 plan charged 04:30 VPP and 04:45 bulk — the VPP limit falls with the SoC, so bulk filled the last quarter.
-  Starting a quarter earlier in VPP costs exactly the same (04:00–05:00 is one hourly price block); the DP had no
-  reason to prefer either and took bulk. The user prefers VPP (several VPP top-ups are fine, bulk only where it pays).
-  The cost only enters the DP's choice, not `PlanCost`: any value from 0.2 ct to 1 € gave the same plan at the same
-  grid cost that night; 1 ct leaves bulk where it saves more (a cheap block too short for VPP).
+- **VPP over bulk when it charges as cheaply — a tie rule, not a cost (`DpOptions.TieEur`, 0.01 ct):** the 2026-10-31
+  19:45 plan charged 04:30 VPP and 04:45 bulk; VPP from 04:15 in the same hourly price block cost exactly the same and
+  the DP took bulk by the float's noise. First a cost of 1 ct per bulk quarter broke that tie — too much: on 2026-11-02
+  the 23:00 hour (0.394) was full on VPP, running the house on the battery until 22:00 (0.444) and refilling with bulk
+  saved ~2 ct, and two bulk quarters' 2 ct held the battery from 21:00 instead (the user: bulk is fine where VPP can't
+  get it into the price slot). Now equally cheap actions (within 0.01 ct) go to the earlier one — VPP before bulk.
+- **One path per charge block (`DpSteering.BlockPaths`):** the DP chooses the path per quarter and may alternate
+  (bulk, VPP, bulk, VPP); every switch between Manual Mode and VPP writes EEPROM. A contiguous charge block runs bulk
+  only where VPP falls short of its planned charge by more than 1 % SoC — the DP also tips single quarters to bulk for
+  a few Wh (2026-10-31 04:45: 1213 Wh, VPP 1196), the next replan takes up such a rest (the user: no bulk if VPP is
+  enough); otherwise VPP. A running charge keeps its path for its block (as in the greedy simulation); the import cap throttles bulk's current, it never switches the path. With
+  quarter-hourly prices (the user's next spot tariff) bulk gets more frequent — 2–3 EEPROM writes per charge, the only
+  ones left (2026-11-02: the rest runs in RAM).
 - **Interpolated, not rounded:** the cost of the rest at an exact energy is interpolated between the two grid states
   around it; rounding to the nearest state turned every quarter's small drain (100 Wh = 3.47 steps) into 3 steps, the
   DP believed the battery lasted longer and its plan came out dearer than the greedy one under the same model — the

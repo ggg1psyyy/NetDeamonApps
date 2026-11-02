@@ -156,5 +156,34 @@ public class DpSteeringTests : TestBase
     Assert.DoesNotContain(timeline, s => s.State.ModeReason == ForceChargeReasons.DpPlan);
     Assert.All(timeline, s => Assert.Equal(s.State.Mode == InverterModes.normal, s.State.ModeReason == ForceChargeReasons.None));
   }
+
+  [Fact]
+  public void BlockPaths_OneBlockOnePath_ARunningChargeKeepsItsPath()
+  {
+    // The DP may alternate bulk and VPP within a charge (2026-11-02 12:15: B, VPP, B, VPP); every switch between Manual
+    // Mode and VPP writes EEPROM. A block runs bulk throughout where VPP (1000 Wh per quarter here) can't deliver its
+    // planned charge by more than 115 Wh (1 %), else VPP — also where the DP tipped a quarter to bulk for a few Wh (2026-10-31 04:45: 1213 Wh vs
+    // VPP 1196); a charge running now keeps its path for its block.
+    var t0 = Day.AddHours(23);
+    DpSlot S(int q, InverterModes m, bool bulk, int ch) => new(t0.AddMinutes(15 * q), 30, m, bulk, 0, 0, 0, ch, 0);
+    int Vpp(DpSlot s) => 1000;
+    var slots = new List<DpSlot>
+    {
+      S(0, InverterModes.force_charge, true, 1800), S(1, InverterModes.force_charge, false, 900), S(2, InverterModes.force_charge, true, 1800),
+      S(3, InverterModes.grid_only, false, 0),
+      S(4, InverterModes.force_charge, false, 900), S(5, InverterModes.force_charge, false, 900),
+      S(6, InverterModes.normal, false, 0),
+      S(7, InverterModes.force_charge, true, 1017),   // bulk for 17 Wh: VPP is enough
+    };
+    Assert.Equal([true, true, true, false, false, false, false, false],
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.normal), Vpp, 115));
+    // the first block is the running charge, on VPP: it stays VPP
+    Assert.Equal([false, false, false, false, false, false, false, false],
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.force_charge) { Bulk = false }, Vpp, 115));
+    // a running bulk charge stays bulk although the DP planned VPP for its block
+    Assert.Equal([true, true],
+      DpSteering.BlockPaths([S(0, InverterModes.force_charge, false, 500), S(1, InverterModes.force_charge, false, 500)],
+        new InverterState(InverterModes.force_charge) { Bulk = true }, Vpp, 115));
+  }
 }
 

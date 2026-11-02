@@ -19,13 +19,11 @@ namespace NetDeamon.apps.PVControl.Optimizer
     public int IntervalMinutes { get; set; } = 5;
     /// <summary>Penalty per % below the preferred minimum per quarter, € (<see cref="DpOptions.BandPenaltyPerPctQuarter"/>).</summary>
     public float BandPenaltyPerPctQuarter { get; set; } = 0.0005f;
-    /// <summary>Cost of a bulk quarter in the DP's choice, € (<see cref="DpOptions.BulkPenaltyPerQuarter"/>).</summary>
-    public float BulkPenaltyPerQuarter { get; set; } = 0.01f;
     /// <summary>The shadow log (one row per quarter); relative = in the plugin's folder.</summary>
     public string DBLocation { get; set; } = "dp_shadow.db";
 
     /// <summary>The planner's options from this config.</summary>
-    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter, BulkPenaltyPerQuarter: BulkPenaltyPerQuarter);
+    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter);
   }
 
   /// <summary>An entry of the DP's predicted SoC (the format of sensor.pv_control_info_predicted_soc's <c>data_actual</c>).</summary>

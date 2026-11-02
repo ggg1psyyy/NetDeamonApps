@@ -334,8 +334,9 @@ price, no feed-in before a negative export price, no opportunistic discharge and
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
 quarter; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
-charge, not to save fractions of a cent), `BulkPenaltyPerQuarter` (€ per bulk quarter, only in the DP's choice —
-not in the reported cost: VPP where it charges as cheaply, bulk only where it saves more; default 0.01), `DBLocation`.
+charge, not to save fractions of a cent), `DBLocation`. Ties in the DP (within 0.01 ct) go to VPP before bulk; every
+contiguous charge block runs on one path (bulk only where VPP falls short of its planned charge by more than 1 % SoC; a
+running charge keeps its path).
 
 ## Build, test, run
 
