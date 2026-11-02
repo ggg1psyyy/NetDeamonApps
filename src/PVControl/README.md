@@ -27,7 +27,7 @@ Deployed, PVControl lies in `apps/plugins/PVControl/` with `PVControl.yaml` and 
 | `normal` | Normal self-consumption operation |
 | `force_charge` | Charge battery from grid — scheduled cheap window |
 | `force_charge_grid_only` | Negative import price: PV disconnected, grid charges the battery and powers the house |
-| `grid_only` | Grid powers the house, battery idle — holds the battery at its minimum until the scheduled charge window, or while a PriorityPlus session that needs grid runs without enough PV (`charge_Reason` `LoadFromGrid`) |
+| `grid_only` | Grid powers the house, battery idle — holds the battery at its minimum until the scheduled charge window, or while a PriorityPlus session that needs grid runs without enough PV (`charge_Reason` `LoadFromGrid`; only while that load really draws power — otherwise `normal`) |
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
 
@@ -353,7 +353,7 @@ dotnet test tests/PVControl.Tests
 | `FindWindowConditionTests` | Simulation conditions behind the load scheduling rules (PV surplus, overnight minimum, new/cheap grid, grid charge sized into the cheap band) |
 | `CheapWindowShorterThanSessionTests` | PriorityPlus with a cheap window shorter than the session (live 2026-10-25): charges the window, longest passing end, min window, follow-up |
 | `SessionPlannerTests` | PriorityPlus price scan: cheapest vs earliest start, minimum saving, sticky plan, ready-by deadline (same choice rules over the price limit), follow-up sessions, net grid cost |
-| `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis |
+| `LoadSchedulingDecisionTests` | Priority/PriorityPlus live SoC gate with restart hysteresis; the battery held for a grid session only while the load draws |
 | `ReplanPolicyTests` | When a load's schedule search runs again, house-load deviation trigger, min-off latch (a moved session keeps its energy and supply) |
 | `LevelEnergyLearnerTests` | Learning energy per level and charge power |
 | `BatteryDpPlannerTests`, `DpShadowTests` | DP shadow: never dearer than the greedy plan under the one cost model, tonight's two lows in one charge, no charge at the horizon's end (refill price), the horizon ends at least at the preferred minimum, hard floor, enforced floor, flows add up, the greedy plan's cost equals the simulation's own, run time; charge blocks, the comparison, one log row per quarter, the predicted SoC in the greedy sensor's format |

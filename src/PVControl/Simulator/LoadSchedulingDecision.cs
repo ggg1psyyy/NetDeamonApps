@@ -28,4 +28,18 @@ public static class LoadSchedulingDecision
       return true;
     return currentSoC >= socFloor + pvBypassMinSocBufferPct && netPvW >= chargeRateW;
   }
+
+  /// <summary>
+  /// The battery hold for a load that never draws it (<see cref="ForceChargeReasons.LoadFromGrid"/>) applies live only
+  /// while such a load draws power: the plan holds it for the planned session, but a car that isn't charging (not
+  /// plugged in, full, still ramping up) leaves only the house on the grid — the battery covers it in normal mode.
+  /// </summary>
+  /// <param name="planned">The plan's mode for the running quarter.</param>
+  /// <param name="fromGridLoadDrawing">A load whose session runs from the grid now draws power.</param>
+  /// <returns>The mode to run.</returns>
+  public static InverterState LiveLoadHold(InverterState planned, bool fromGridLoadDrawing) =>
+    planned is { Mode: InverterModes.grid_only, ModeReason: ForceChargeReasons.LoadFromGrid } && !fromGridLoadDrawing
+      ? new InverterState(InverterModes.normal, ForceChargeReasons.None, planned.BatteryChargeEnable, planned.ExportAllowed)
+      : planned;
 }
+

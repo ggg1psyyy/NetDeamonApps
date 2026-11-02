@@ -1,3 +1,5 @@
+using NetDeamon.apps;
+using NetDeamon.apps.PVControl;
 using NetDeamon.apps.PVControl.Simulator;
 using Xunit;
 
@@ -90,4 +92,22 @@ public class LoadSchedulingDecisionTests
     => Assert.False(LoadSchedulingDecision.PrioritySoCGateOk(
         currentlyActive: false, currentSoC: 19, socFloor: 20, netPvW: 10_000, chargeRateW: 1_800,
         hysteresisMarginPct: 5, pvBypassMinSocBufferPct: 3));
+
+  [Fact]
+  public void LiveLoadHold_OnlyWhileTheLoadDraws()
+  {
+    // Live 2026-11-02 06:06: the EV's ready-by session started from the grid, the plan held the battery (90 %) — but
+    // the car drew nothing, so the house ran from the grid at 0.474 for minutes. Held only while the load draws.
+    var hold = new InverterState(InverterModes.grid_only, ForceChargeReasons.LoadFromGrid, true, false);
+    Assert.Equal(hold, LoadSchedulingDecision.LiveLoadHold(hold, fromGridLoadDrawing: true));
+    var released = LoadSchedulingDecision.LiveLoadHold(hold, fromGridLoadDrawing: false);
+    Assert.Equal((InverterModes.normal, ForceChargeReasons.None, true, false),
+      (released.Mode, released.ModeReason, released.BatteryChargeEnable, released.ExportAllowed));
+    // every other mode stays as planned — a floor hold, a charge
+    var floorHold = new InverterState(InverterModes.grid_only, ForceChargeReasons.GoingUnderAbsoluteMinima);
+    var charge = new InverterState(InverterModes.force_charge, ForceChargeReasons.CheaperThanLater);
+    Assert.Equal(floorHold, LoadSchedulingDecision.LiveLoadHold(floorHold, false));
+    Assert.Equal(charge, LoadSchedulingDecision.LiveLoadHold(charge, false));
+  }
 }
+
