@@ -301,6 +301,10 @@ public class BatteryDpPlannerTests : TestBase
     var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
     // (with the conversion losses storing the surplus beats exporting it here: normal, not feedin_priority)
     Assert.DoesNotContain(timeline, s => s.State.Mode == InverterModes.grid_only && s.PVWh >= s.LoadWh + s.ExtraLoadWh);
+    // nor where PV nearly covers it (08:30/14:15: 2 Wh short): a hold needs a deficit of at least 1 % SoC
+    var lossy = input.WithBatteryLosses();
+    Assert.DoesNotContain(timeline, s => s.State is { Mode: InverterModes.grid_only, ModeReason: not ForceChargeReasons.LoadFromGrid }
+      && !BatteryDpPlanner.HoldAllowed(lossy, s.Time, s.PVWh, s.LoadWh + s.ExtraLoadWh));
     // feedin_priority only where PV covers the house (elsewhere it would be normal) and it never charges
     Assert.All(timeline.Where(s => s.State.Mode == InverterModes.feedin_priority),
       s => Assert.Equal(0, s.BatteryChargeWh));
@@ -346,6 +350,23 @@ public class BatteryDpPlannerTests : TestBase
     }
     Assert.DoesNotContain(BatteryDpPlanner.Plan(With(0.42f), O).Slots, s => s.Mode == InverterModes.force_charge);
     Assert.Contains(BatteryDpPlanner.Plan(With(0.50f), O).Slots, s => s.Mode == InverterModes.force_charge);
+  }
+
+  [Fact]
+  public void HoldAllowed_OnlyForADeficitOfAtLeastOnePercent()
+  {
+    // In the PV period (the test input's PV runs 10–15 h): 1 % of 11.52 kWh = 115 Wh from the battery = 110 Wh AC at
+    // 0.95 — below that a hold only buys PV's dips. Outside it every hold is allowed (no PV to dip).
+    var input = Input(Day.AddHours(22), 50).WithBatteryLosses();
+    var noon = Day.AddDays(1).AddHours(12);
+    Assert.True(input.IsInPVPeriod(noon));
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 129, totalLoadWh: 131));   // PV 2 Wh short (live 2026-11-02 08:30)
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 300, totalLoadWh: 130));   // PV covers the house
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 20, totalLoadWh: 120));    // 106 Wh drawn: under 1 %
+    Assert.True(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 20, totalLoadWh: 140));     // 127 Wh drawn
+    var night = Day.AddDays(1).AddHours(2);
+    Assert.False(input.IsInPVPeriod(night));
+    Assert.True(BatteryDpPlanner.HoldAllowed(input, night, pvWh: 0, totalLoadWh: 50));     // night: always
   }
 }
 

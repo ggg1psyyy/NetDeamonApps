@@ -1141,3 +1141,12 @@ tests), and the greedy run still plans the EV and warm water. The greedy plan is
 the comparison (its flows replayed against a lossy battery). The end value is what the energy delivers after the
 discharge loss at the refill price.
 
+### A hold within the PV period needs a 1 % deficit
+
+With the losses the DP still held the battery at 08:30 and 14:15 on 2026-11-02 (0.53) where PV was 2 Wh short of the
+house load — on quarter averages a saving of 2 Wh, within the quarter every dip of PV is bought from the grid while
+feedin_priority would cover it from the battery. Within the PV period (`SimulationInput.IsInPVPeriod`) grid_only is
+therefore only an action where the house's deficit under PV would draw at least 1 % SoC in the quarter
+(`BatteryDpPlanner.HoldAllowed`; the user's threshold, 2026-11-02); outside it every hold stays possible — at night
+everything comes from the grid or the battery anyway, and holding there is what saves the battery for the dearer day.
+

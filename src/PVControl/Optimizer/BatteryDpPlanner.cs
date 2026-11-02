@@ -215,7 +215,7 @@ public static class BatteryDpPlanner
       var (pv, load, extra) = energies[i];
       int totalLoad = load + extra;
       bool held = input.BatteryHeldForLoad(times[i], pv, totalLoad);
-      var actions = Actions(input, o, held);
+      var actions = Actions(input, o, held, HoldAllowed(input, times[i], pv, totalLoad));
       for (int s = 0; s < states; s++)
       {
         int wh = WhOf(s);
@@ -256,20 +256,21 @@ public static class BatteryDpPlanner
   private readonly record struct Action(InverterModes Mode, bool Bulk, int TargetSocPct);
 
   /// <summary>
-  /// The actions of a quarter: normal (grid_only where a load never draws the battery), feedin_priority, grid_only,
+  /// The actions of a quarter: normal (grid_only where a load never draws the battery), feedin_priority, grid_only (only
+  /// where <see cref="HoldAllowed"/>),
   /// and grid charges to every <see cref="DpOptions.ChargeStepPct"/> % target on both paths. The order breaks ties
   /// (the first of equally cheap actions wins): with PV covering the house, feedin_priority and grid_only have the same
   /// quarter flows (the surplus exported, nothing from the battery), but feedin_priority lets the battery cover the
   /// dips within the quarter that grid_only buys from the grid (live 2026-11-02 08:45/14:00: grid_only held the battery
   /// at 0.51 for 0.1 ct); with PV under the house load feedin_priority is normal, which comes first.
   /// </summary>
-  private static List<Action> Actions(SimulationInput input, DpOptions o, bool held)
+  private static List<Action> Actions(SimulationInput input, DpOptions o, bool held, bool holdAllowed)
   {
     var list = new List<Action> { new(held ? InverterModes.grid_only : InverterModes.normal, false, 0) };
     if (!held)
     {
       list.Add(new(InverterModes.feedin_priority, false, 0));
-      list.Add(new(InverterModes.grid_only, false, 0));
+      if (holdAllowed) list.Add(new(InverterModes.grid_only, false, 0));
     }
     for (int target = o.ChargeStepPct; target <= 100; target += o.ChargeStepPct)
     {
@@ -278,6 +279,20 @@ public static class BatteryDpPlanner
     }
     return list;
   }
+
+  /// <summary>
+  /// Whether the DP may hold the battery (grid_only) in a quarter: outside the PV period always (everything comes from
+  /// the grid or the battery anyway); within it only where the house's deficit under PV would take at least 1 % SoC out
+  /// of the battery in the quarter (the user, 2026-11-02). Where PV covers the house or nearly does, a hold only buys the
+  /// dips within the quarter from the grid (live 2026-11-02 08:30/14:15: PV 2 Wh short of the load, held at 0.53);
+  /// feedin_priority exports the same surplus and lets the battery cover the dips.
+  /// </summary>
+  /// <param name="input">Simulation input (capacity, losses, PV period).</param>
+  /// <param name="slot">Quarter start.</param>
+  /// <param name="pvWh">PV of the quarter, Wh.</param>
+  /// <param name="totalLoadWh">Load incl. extra loads, Wh.</param>
+  public static bool HoldAllowed(SimulationInput input, DateTime slot, int pvWh, int totalLoadWh) =>
+    !input.IsInPVPeriod(slot) || input.DrawnWh(Math.Max(0, totalLoadWh - pvWh)) >= input.SocToWh(1);
 
   /// <summary>The flows of an action, by the simulation's own function.</summary>
   private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction)
