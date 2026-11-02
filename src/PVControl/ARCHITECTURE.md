@@ -773,6 +773,10 @@ house + load, the battery is held (`grid_only`; the inverter can't feed the hous
 the load runs along a force_charge the house needs in that quarter anyway; the look-ahead doesn't count
 it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge
 (`SimulationInput.RoundTripEfficiency`, also used by `ChargingBeatsHolding`).
+The plan holds the battery for the planned session; live the hold applies only while a load whose session runs
+from the grid draws power (`LoadSchedulingDecision.LiveLoadHold`, either planner). Live 2026-11-02 06:06 the EV's
+ready-by session (29 → 30 % by 06:30) started at 0.474, the car drew nothing, and the house ran from the grid for
+minutes with the battery at 90 %.
 
 **The charge limit changes as rarely as possible.** The Solax charge current register
 (`battery_charge_max_current`) is stored in EEPROM (~100,000 write cycles, per the solax-modbus

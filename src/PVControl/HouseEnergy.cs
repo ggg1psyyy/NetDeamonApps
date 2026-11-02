@@ -1262,6 +1262,10 @@ namespace NetDeamon.apps.PVControl
         if (OverrideMode != InverterModes.automatic)
           return new InverterState(OverrideMode, ForceChargeReasons.UserMode);
 
+        // ── Battery held for a load from the grid: only while it really draws (live 2026-11-02 06:06) ──
+        planned = LoadSchedulingDecision.LiveLoadHold(planned,
+          SchedulableLoads.Any(l => l.IsDrawingPower && l.ExtraLoads.Any(e => e.FromGrid && e.Covers(now))));
+
         // ── Inverter bug fix ──────────────────────────────────────────────────────────────
         // An inverter that fails to switch to the battery in "normal" mode at low house loads
         // (50–300 W) and draws from the grid instead. This can't be predicted or simulated —
