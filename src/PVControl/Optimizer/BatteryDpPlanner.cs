@@ -15,12 +15,15 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// <param name="TieEur">Actions whose rest costs differ by no more than this are a tie, €: the earlier action in the list
 /// wins (normal, feedin_priority, grid_only, then each charge target VPP before bulk) — VPP where it charges as
 /// cheaply, bulk only where it saves something; 0.01 ct covers the interpolation's noise.</param>
+/// <param name="LoadMargin">The DP plans with the house load forecast raised by this share (a reserve for a load above the
+/// forecast; <see cref="LoadModel.NightForecastTracker.LoadMargin"/>); 0 = the forecast as it is.</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
   int StatesPerPercent = 4,
   int ChargeStepPct = 2,
-  float TieEur = 0.0001f);
+  float TieEur = 0.0001f,
+  double LoadMargin = 0);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -176,8 +179,8 @@ public static class BatteryDpPlanner
   /// <returns>The plan.</returns>
   public static DpPlan Plan(SimulationInput input, DpOptions? options = null)
   {
-    input = input.WithBatteryLosses();   // the DP plans with the battery's conversion losses
     var o = options ?? new DpOptions();
+    input = input.WithBatteryLosses().WithLoadMargin(o.LoadMargin);   // the battery's conversion losses, a load above the forecast
     var start = input.StartTime.RoundToNearestQuarterHour();
     var end = HorizonEnd(input);
     var times = new List<DateTime>();

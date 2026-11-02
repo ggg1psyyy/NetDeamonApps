@@ -1157,3 +1157,16 @@ therefore only an action where the house's deficit under PV would draw at least 
 (`BatteryDpPlanner.HoldAllowed`; the user's threshold, 2026-11-02); outside it every hold stays possible — at night
 everything comes from the grid or the battery anyway, and holding there is what saves the battery for the dearer day.
 
+### A reserve for a load above the forecast (`LoadMargin`)
+
+The DP plans with the forecast as if it were certain, so its optimum is "exactly enough": on 2026-11-02 it planned to
+arrive at the cheap 23:00 hour at 19–20 %, with no midday dip the next day. A load above the forecast then reaches the
+floor early and the rest is bought at 0.44–0.53 — about 14 ct per missing kWh against ~1 ct of round-trip loss for a kWh
+of reserve bought cheap. The weather model's night error over its 11 scored nights (2026-10-22…11-01): median +6 %,
+80th percentile +15 %, worst +28 % (low in 7 of 11 nights). The DP plans with the house load raised by that 80th
+percentile (`NightForecastTracker.LoadMargin`, recomputed from the last 30 nights, 0–30 %, the YAML's 15 % until 7 are
+scored); extra loads (EV, warm water) stay as planned. With the load as forecast the battery runs above the plan and
+the minute's replan uses it; that night the charge bought 1.4 kWh more and the battery went into the expensive day at
+77 % instead of 66 % (~6 ct round-trip loss if not needed). The DP's grid cost (`dp_grid_eur`) contains the margin's
+assumed load, so it reads higher than the money really spent, and the comparison with the greedy plan is skewed by it.
+

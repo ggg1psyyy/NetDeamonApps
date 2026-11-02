@@ -384,5 +384,48 @@ public class BatteryDpPlannerTests : TestBase
     Assert.NotEmpty(night);
     Assert.All(night, s => Assert.True(s.State.Bulk));
   }
+
+  [Fact]
+  public void LoadMargin_80thPercentileOfTheNightError()
+  {
+    // The 11 scored nights of 2026-10-22…11-01 (relative error of the weather model): 80th percentile +15 %.
+    var errors = new[] { 0.01, 0.06, 0.09, 0.09, 0.28, -0.38, -0.02, 0.15, -0.02, 0.21, -0.21 };
+    NetDeamon.apps.PVControl.LoadModel.NightResult N(int i, double e) => new(Day.AddDays(-i), 4000, 4000, 4000 * (1 + e));
+    Assert.Equal(0.15, NetDeamon.apps.PVControl.LoadModel.NightForecastTracker.LoadMargin(errors.Select((e, i) => N(i, e)))!.Value, 3);
+    // too few nights: none (the YAML default applies); never below 0 or above 30 %
+    Assert.Null(NetDeamon.apps.PVControl.LoadModel.NightForecastTracker.LoadMargin(errors.Take(6).Select((e, i) => N(i, e))));
+    Assert.Equal(0, NetDeamon.apps.PVControl.LoadModel.NightForecastTracker.LoadMargin(Enumerable.Range(0, 8).Select(i => N(i, -0.1)))!.Value, 6);
+    Assert.Equal(0.3, NetDeamon.apps.PVControl.LoadModel.NightForecastTracker.LoadMargin(Enumerable.Range(0, 8).Select(i => N(i, 0.5)))!.Value, 6);
+    // unscored nights don't count
+    Assert.Null(NetDeamon.apps.PVControl.LoadModel.NightForecastTracker.LoadMargin(
+      Enumerable.Range(0, 10).Select(i => new NetDeamon.apps.PVControl.LoadModel.NightResult(Day.AddDays(-i), 4000, 4000, null))));
+  }
+
+  [Fact]
+  public void WithLoadMargin_RaisesTheHouseLoadOnly()
+  {
+    var input = Input(Day.AddHours(22), 50, loadWh: 100);
+    var raised = input.WithLoadMargin(0.15);
+    Assert.All(raised.LoadPredictionWh, kv => Assert.Equal(115, kv.Value));
+    Assert.Same(input.ExtraLoads, raised.ExtraLoads);
+    Assert.Same(input, input.WithLoadMargin(0));
+  }
+
+  [Fact]
+  public void LoadMargin_MoreReserveIntoTheExpensiveDay()
+  {
+    // Live 2026-11-02 12:15 (the stored planning situation; no cheap midday tomorrow): planning for 15 % more load the
+    // night charge buys more and the battery goes into the expensive day fuller — the reserve for a load above the
+    // forecast (one night in five) instead of buying at 0.44–0.53.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_1215.json.gz"));
+    var input = ForecastSnapshot.FromBytes(bytes).ToInput();
+    var plain = BatteryDpPlanner.Plan(input, O);
+    var reserve = BatteryDpPlanner.Plan(input, O with { LoadMargin = 0.15 });
+    var midnight = new DateTime(2026, 11, 3);
+    Assert.True(reserve.Slots.Single(s => s.Time == midnight).SocPct >= plain.Slots.Single(s => s.Time == midnight).SocPct + 5,
+      $"{plain.Slots.Single(s => s.Time == midnight).SocPct} → {reserve.Slots.Single(s => s.Time == midnight).SocPct} %");
+    Assert.True(reserve.Slots.Where(s => s.Mode == InverterModes.force_charge).Sum(s => s.BatteryChargeWh)
+      > plain.Slots.Where(s => s.Mode == InverterModes.force_charge).Sum(s => s.BatteryChargeWh));
+  }
 }
 

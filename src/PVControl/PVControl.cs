@@ -1467,6 +1467,7 @@ namespace NetDeamon.apps.PVControl
       if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || _dpShadowSocEntity is not { } socEntity
           || !shadow.Due(now, steering: _planner == Optimizer.Planner.dp) || _house.SimulationState is not { } sim)
         return;
+      shadow.LoadMargin = LoadModel.NightForecastTracker.LoadMargin(_nightTracker.Nights);
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       bool requested = shadow.RunRequested;
       _ = Task.Run(async () =>

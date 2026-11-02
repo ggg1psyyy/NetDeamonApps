@@ -78,6 +78,22 @@ public sealed class NightForecastTracker
     return changed;
   }
 
+  /// <summary>Scored nights needed before <see cref="LoadMargin"/> trusts them.</summary>
+  public const int MinNightsForMargin = 7;
+
+  /// <summary>
+  /// How much more load to plan with: the 80th percentile of the weather model's relative night error (actual − forecast)
+  /// over the scored nights, clamped to 0…30 % — in 4 of 5 nights the load stays within the forecast plus this.
+  /// (2026-11-02, 11 nights: median +6 %, 80th percentile +15 %, worst +28 %.)
+  /// </summary>
+  /// <param name="nights">Recorded nights.</param>
+  /// <returns>The margin as a share (0.15 = 15 %); null with fewer than <see cref="MinNightsForMargin"/> scored nights.</returns>
+  public static double? LoadMargin(IEnumerable<NightResult> nights)
+  {
+    var errors = nights.Where(n => n.Actual is not null && n.Model > 0).Select(n => (n.Actual!.Value - n.Model) / n.Model).ToList();
+    return errors.Count < MinNightsForMargin ? null : Math.Clamp(Mean.Percentile(errors, 0.8), 0, 0.3);
+  }
+
   /// <summary>Mean absolute night error of both forecasts over the scored nights.</summary>
   /// <returns>Errors of the model and the average, Wh, and the number of scored nights.</returns>
   public (double Model, double Average, int Nights) MeanAbsoluteError()

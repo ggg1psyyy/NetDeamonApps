@@ -19,11 +19,13 @@ namespace NetDeamon.apps.PVControl.Optimizer
     public int IntervalMinutes { get; set; } = 5;
     /// <summary>Penalty per % below the preferred minimum per quarter, € (<see cref="DpOptions.BandPenaltyPerPctQuarter"/>).</summary>
     public float BandPenaltyPerPctQuarter { get; set; } = 0.0005f;
+    /// <summary>Load margin while the night forecast has too few scored nights (<see cref="LoadModel.NightForecastTracker.MinNightsForMargin"/>), %.</summary>
+    public double LoadMarginPct { get; set; } = 15;
     /// <summary>The shadow log (one row per quarter); relative = in the plugin's folder.</summary>
     public string DBLocation { get; set; } = "dp_shadow.db";
 
     /// <summary>The planner's options from this config.</summary>
-    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter);
+    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter, LoadMargin: LoadMarginPct / 100);
   }
 
   /// <summary>An entry of the DP's predicted SoC (the format of sensor.pv_control_info_predicted_soc's <c>data_actual</c>).</summary>
@@ -65,6 +67,13 @@ namespace NetDeamon.apps.PVControl.Optimizer
     private int _running;
     private int _requested;
 
+    /// <summary>The load margin from the scored nights (<see cref="LoadModel.NightForecastTracker.LoadMargin"/>); null: the
+    /// configured default.</summary>
+    public double? LoadMargin { get; set; }
+
+    /// <summary>The planner's options: the config's, with the measured load margin where there is one.</summary>
+    public DpOptions Options => LoadMargin is { } m ? config.Options with { LoadMargin = m } : config.Options;
+
     /// <summary>The last comparison; null before the first run.</summary>
     public DpShadowReport? Last { get; private set; }
 
@@ -100,9 +109,10 @@ namespace NetDeamon.apps.PVControl.Optimizer
         Volatile.Write(ref _requested, 0);
         _lastRun = now;
         var sw = Stopwatch.StartNew();
-        var dp = await Task.Run(() => BatteryDpPlanner.Plan(greedy.Input, config.Options));
+        var options = Options;
+        var dp = await Task.Run(() => BatteryDpPlanner.Plan(greedy.Input, options));
         LastPlan = dp;
-        Last = Report(greedy, dp, now, (int)sw.ElapsedMilliseconds, config.Options);
+        Last = Report(greedy, dp, now, (int)sw.ElapsedMilliseconds, options);
         var quarter = TimeRange.Floor(now, TimeRange.SlotMinutes);
         if (quarter > _lastLoggedQuarter)
         {

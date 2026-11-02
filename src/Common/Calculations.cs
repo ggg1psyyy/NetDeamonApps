@@ -168,6 +168,20 @@ namespace NetDeamon.apps
   /// <summary>Means.</summary>
   public static class Mean
   {
+    /// <summary>Percentile of values (linear between the two nearest ranks).</summary>
+    /// <param name="values">Values (any order).</param>
+    /// <param name="p">Percentile as a share, 0…1 (0.8 = 80th).</param>
+    /// <returns>The percentile; NaN without values.</returns>
+    public static double Percentile(IEnumerable<double> values, double p)
+    {
+      var v = new List<double>(values);
+      v.Sort();
+      if (v.Count == 0) return double.NaN;
+      double rank = Math.Clamp(p, 0, 1) * (v.Count - 1);
+      int lo = (int)Math.Floor(rank), hi = (int)Math.Ceiling(rank);
+      return v[lo] + (v[hi] - v[lo]) * (rank - lo);
+    }
+
     /// <summary>Weighted mean of two values.</summary>
     /// <param name="a">First value.</param>
     /// <param name="weightA">Weight of <paramref name="a"/>.</param>

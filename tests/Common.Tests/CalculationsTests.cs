@@ -63,6 +63,9 @@ public class CalculationsTests
     Assert.Equal(2560, Soc.ToWh(25, 10240));
     Assert.Equal(25, Soc.FromWh(2600, 10240));
     Assert.Equal(25.390625, Soc.FromWhExact(2600, 10240), 6);
+    Assert.Equal(2.5, Mean.Percentile([4, 1, 3, 2], 0.5), 6);
+    Assert.Equal(3.4, Mean.Percentile([1, 2, 3, 4], 0.8), 6);
+    Assert.True(double.IsNaN(Mean.Percentile([], 0.8)));
     // 20 → 80 % of 10.24 kWh × 0.95 at 3680 W (16 A × 230 V): 6144 × 0.95 / 3680 h = 95 min
     Assert.Equal(95, Soc.ChargeMinutes(20, 80, 10240, 0.95, 3680));
     // Discharging: falling SoC at negative power gives the time until the lower SoC.

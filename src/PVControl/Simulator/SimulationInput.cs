@@ -111,6 +111,17 @@ public class SimulationInput
   /// <summary>Efficiency of one direction in the flows: <see cref="InverterEfficiency"/> with <see cref="BatteryLosses"/>, else 1.</summary>
   private double FlowEfficiency => BatteryLosses ? Math.Round(InverterEfficiency, 4) : 1.0;   // 0.95f is 0.9499999881
 
+  /// <summary>Copy whose house load forecast is raised by a margin (the DP plans for a load above the forecast: an
+  /// unforeseen load then still finds the battery, not the expensive hours). Extra loads stay as planned.</summary>
+  /// <param name="margin">Share, e.g. 0.15; 0 returns this input.</param>
+  public SimulationInput WithLoadMargin(double margin)
+  {
+    if (margin <= 0) return this;
+    var copy = Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil,
+      load: LoadPredictionWh.ToDictionary(kv => kv.Key, kv => (int)Math.Round(kv.Value * (1 + margin))));
+    return copy;
+  }
+
   /// <summary>Copy whose flows lose energy (<see cref="BatteryLosses"/>).</summary>
   public SimulationInput WithBatteryLosses() => BatteryLosses ? this : Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil, losses: true);
 
@@ -324,7 +335,9 @@ public class SimulationInput
   /// <param name="publishedUntil">End of the published prices.</param>
   /// <returns>The copy.</returns>
   /// <param name="losses">Replaces <see cref="BatteryLosses"/>; null keeps it.</param>
-  private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null) => new()
+  /// <param name="load">Replaces <see cref="LoadPredictionWh"/>; null keeps it.</param>
+  private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null,
+    Dictionary<DateTime, int>? load = null) => new()
   {
     BatteryLosses = losses ?? BatteryLosses,
     StartTime = StartTime,
@@ -338,7 +351,7 @@ public class SimulationInput
     ImportPrices = import,
     ExportPrices = export,
     PublishedPricesUntil = publishedUntil,
-    LoadPredictionWh = LoadPredictionWh,
+    LoadPredictionWh = load ?? LoadPredictionWh,
     PVPredictionWh = PVPredictionWh,
     ExtraLoads = loads,
     EnableCheapForceCharge = EnableCheapForceCharge,
