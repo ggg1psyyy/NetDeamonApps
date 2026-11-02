@@ -143,7 +143,7 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | PVControl mode | Inverter |
 |---|---|
 | `normal` | Self Use, VPP off |
-| `feedin_priority` | Feedin Priority, VPP off |
+| `feedin_priority` | Self Use + the solax-modbus mode-8 loop "Enabled Feedin Priority" (`select.solax_remotecontrol_power_control_mode`, autorepeat, RAM): battery 0 W while PV covers the house, else the deficit down to `min_soc_pct`; the surplus is exported |
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
 | `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
 | `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (the inverter limits it by the SoC) |

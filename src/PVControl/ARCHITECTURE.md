@@ -870,9 +870,15 @@ Always starting with the block was the first version — it moved charges earlie
 later as well. A charge that needs full power anyway keeps its natural start (live-like case: 38 %
 at 00:00, target 100 % until PV — bulk from 00:00 or 00:15 alike).
 
-`feedin_priority` and "battery charging off" stay EEPROM work-mode / charge-current writes: both
-mean "cover the load from the battery, never charge it", which a fixed VPP power can't follow and
-no SolaX VPP mode offers (6 charges and discharges, 7 only charges). HA keeps state history for
+"Battery charging off" stays an EEPROM charge-current write. `feedin_priority` was one too (work mode
+Feedin Priority): "cover the load from the battery, never charge it" is something a fixed VPP power
+can't follow and no SolaX VPP mode offers (6 charges and discharges, 7 only charges). Since
+2026-11-02 it runs as the solax-modbus integration's mode-8 loop "Enabled Feedin Priority": every fast
+poll (2 s) the integration sets the push power to 0 while PV covers the house, else to the deficit
+(down to the loop's minimum SoC = PV Control's hard floor, `min_soc_pct`) — RAM only, and when its
+autorepeat ends it switches mode 8 off itself. The DP had started to pick it (instead of grid_only
+with PV covering the house), and from spring it matters daily; community-maintained beats our own
+loop. The apply script stops that loop before writing mode 8 itself, so the two never fight. HA keeps state history for
 ~10 days only, and no log held the mode, so how often they run over a year was unknown; in
 2026-10-17…26 neither ran once, while the work mode was written 249 times (117 force charges, up
 to 71 writes on a seesaw day). DataLogger v9 logs the mode, its minutes and the EEPROM writes per
