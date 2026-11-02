@@ -45,7 +45,9 @@ template:
           {% set bulk = state_attr('sensor.pv_control_mode', 'bulk') == true %}
           {% set manual = mode == 'force_charge' and bulk %}
           {% set vpp = not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] %}
-          {% set loop = 'Enabled Feedin Priority' if mode == 'feedin_priority' else 'Disabled' %}
+          {% set charge_enabled = state_attr('sensor.pv_control_mode', 'charge_enabled') != false %}
+          {% set export_allowed = state_attr('sensor.pv_control_mode', 'export_allowed') != false %}
+          {% set loop = ('Negative Injection Price' if not export_allowed else 'Enabled Feedin Priority' if mode == 'feedin_priority' or not charge_enabled else 'Disabled') if mode in ['normal', 'feedin_priority'] else 'Disabled' %}
           {% set loop_state = states('select.solax_remotecontrol_power_control_mode') %}
           {% set base = 'Self Use Mode' %}
           {% set vpp_state = states('sensor.solax_modbus_power_control') %}

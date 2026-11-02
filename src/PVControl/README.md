@@ -31,10 +31,11 @@ Deployed, PVControl lies in `apps/plugins/PVControl/` with `PVControl.yaml` and 
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
 
-Whether PV surplus may currently be exported is a separate, orthogonal decision — see
-`binary_sensor.pv_control_export_allowed` below. It's independent of `sensor.pv_control_mode`
-so a cheap grid-charge or safety-net top-up can still run even while export is suppressed
-(e.g. during a negative export price window).
+Whether the battery may charge from PV and whether PV surplus may be exported are separate decisions —
+`binary_sensor.pv_control_battery_charging_enabled` / `binary_sensor.pv_control_export_allowed` below, and the
+attributes `charge_enabled` / `export_allowed` of `sensor.pv_control_mode` (part of the command's version). In
+`normal` and `feedin_priority` HA applies them as the integration's mode-8 loops (table below); in the grid-charge,
+grid_only and discharge modes they have no effect on the inverter.
 
 Before negative export prices later the same day, PV surplus is fed in while the price is still
 positive (battery charging off, reason `RoomForNegativeExport`) as long as 70 % of the PV surplus
@@ -138,11 +139,12 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | [`HA/ApplyMode.yaml`](HA/ApplyMode.yaml) | `script.pv_control_apply_mode`, the only writer of the inverter state: base work mode (only when it changes), Manual Force Charge for `bulk`, else the mode 8 block (PV limit, battery push power, run time 1200 s, NextMotion back to the base mode) or VPP off; records the applied `seq` |
 | [`HA/InverterSync.yaml`](HA/InverterSync.yaml) | Reconciler: applies a new `seq`, re-applies when the inverter left the commanded state (at most 5 times per version, then blocked + notification), refreshes the mode-8 run time after 600 s; only while PV Control runs (mode 8 then returns to Self Use by itself; Manual Mode is switched back to Self Use after 5 min without PV Control) |
 | [`HA/Mode.yaml`](HA/Mode.yaml) | Mode change notifications |
-| [`HA/Battery.yaml`](HA/Battery.yaml) | Charging on/off: maximum (`max_current_a`, 30 A) / 0 A — not during a bulk charge, whose current the apply script sets |
 
 | PVControl mode | Inverter |
 |---|---|
-| `normal` | Self Use, VPP off |
+| `normal` | Self Use, VPP off (charge current at the maximum) |
+| `normal`, charging off | Self Use + loop "Enabled Feedin Priority" (as `feedin_priority`) |
+| `normal`/`feedin_priority`, export off | Self Use + loop "Negative Injection Price": PV to house and battery (target 100 %, charge limit 100 % — 0 % with charging off or in `feedin_priority`), PV limited so nothing is exported, a deficit from the battery |
 | `feedin_priority` | Self Use + the solax-modbus mode-8 loop "Enabled Feedin Priority" (`select.solax_remotecontrol_power_control_mode`, autorepeat, RAM): battery 0 W while PV covers the house, else the deficit down to `min_soc_pct`; the surplus is exported |
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
 | `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it by the SoC) |

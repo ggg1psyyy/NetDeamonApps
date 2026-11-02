@@ -870,8 +870,8 @@ Always starting with the block was the first version — it moved charges earlie
 later as well. A charge that needs full power anyway keeps its natural start (live-like case: 38 %
 at 00:00, target 100 % until PV — bulk from 00:00 or 00:15 alike).
 
-"Battery charging off" stays an EEPROM charge-current write. `feedin_priority` was one too (work mode
-Feedin Priority): "cover the load from the battery, never charge it" is something a fixed VPP power
+"Battery charging off" (0 A charge current) and "no export" (export limit 10 W) were EEPROM writes, and so was
+`feedin_priority` (work mode Feedin Priority): "cover the load from the battery, never charge it" is something a fixed VPP power
 can't follow and no SolaX VPP mode offers (6 charges and discharges, 7 only charges). Since
 2026-11-02 it runs as the solax-modbus integration's mode-8 loop "Enabled Feedin Priority": every fast
 poll (2 s) the integration sets the push power to 0 while PV covers the house, else to the deficit
@@ -881,7 +881,12 @@ with PV covering the house), and from spring it matters daily; community-maintai
 loop. The apply script stops that loop before writing mode 8 itself, so the two never fight. The
 integration's docs note the inverter sometimes drops to "Self Consume - C/D" by itself when the battery
 is full; the loop writes mode 8 again at the next poll, so in-sync accepts that state while the loop runs
-(else the reconciler would re-apply and block after 5 tries). HA keeps state history for
+(else the reconciler would re-apply and block after 5 tries). The same day the two flags followed: "charging
+off" is feed-in priority's meaning (the loop), "no export" the loop "Negative Injection Price" (PV into the
+battery, then the PV limit lowered to the house load) — so the flags are part of the command's version
+(`charge_enabled`/`export_allowed`) and the two automations that wrote the registers are gone. In the grid-charge,
+grid_only and discharge modes the flags no longer reach the inverter (the export limit stays at 8 kW): a negative
+export price with a grid charge runs force_charge_grid_only (PV 0 W) anyway. HA keeps state history for
 ~10 days only, and no log held the mode, so how often they run over a year was unknown; in
 2026-10-17…26 neither ran once, while the work mode was written 249 times (117 force charges, up
 to 71 writes on a seesaw day). DataLogger v9 logs the mode, its minutes and the EEPROM writes per

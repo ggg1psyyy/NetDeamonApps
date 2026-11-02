@@ -10,11 +10,15 @@
 #    current (number.solax_battery_charge_max_current): 30 A, or the import cap's limit in whole amps — set
 #    before Manual Mode starts, back to the maximum (0 A with charging disabled) once the bulk charge ends.
 #    Work mode and charge current are EEPROM, so they're only written when they change.
-#  - feedin_priority: the integration's mode-8 loop, sub-mode "Enabled Feedin Priority"
-#    (select.solax_remotecontrol_power_control_mode + button.solax_powercontrolmode8_trigger, autorepeat): every fast
-#    poll it sets the battery to 0 while PV covers the house and to the deficit while it doesn't — the battery never
-#    charges, covers the house down to the loop's minimum SoC, the surplus is exported. RAM, no EEPROM. When the
-#    autorepeat ends the integration switches mode 8 off itself (back to Self Use).
+#  - normal/feedin_priority with a flag off run as one of the solax-modbus integration's mode-8 loops
+#    (select.solax_remotecontrol_power_control_mode + button.solax_powercontrolmode8_trigger, autorepeat; every fast
+#    poll the integration recomputes and writes the mode-8 block — RAM, no EEPROM; when the autorepeat ends it switches
+#    mode 8 off itself, back to Self Use):
+#      feedin_priority, or normal with charging off → "Enabled Feedin Priority": battery 0 W while PV covers the
+#        house, else the deficit (down to the loop's minimum SoC); the surplus is exported.
+#      export not allowed → "Negative Injection Price": PV feeds the house and charges the battery (up to the
+#        target SoC, at most the charge limit — 0 % with charging off or feedin_priority), the PV limit is lowered so
+#        nothing is exported; a deficit comes from the battery.
 #  - Everything else: base work mode Self Use and VPP mode 8 (_direct, fixed push power) or off. The loop is
 #    stopped first (sub-mode Disabled) whenever another mode is applied, so the two never write mode 8 together.
 # Another inverter = another version of this script; PV Control and the reconciler stay the same.
@@ -35,11 +39,17 @@ fields:
     description: Version of the command
   duration_s:
     description: Run time of a mode-8 command, s (default 1200; the reconciler refreshes it after 600 s)
+  charge_enabled:
+    description: The battery may charge from PV (sensor.pv_control_mode's charge_enabled)
+  export_allowed:
+    description: PV may be exported (sensor.pv_control_mode's export_allowed)
 sequence:
   - variables:
       manual: "{{ mode == 'force_charge' and (bulk | default(false)) | bool }}"
       vpp: "{{ not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
-      loop: "{{ 'Enabled Feedin Priority' if mode == 'feedin_priority' else 'Disabled' }}"
+      charge_enabled: "{{ charge_enabled | default(true) | bool }}"
+      export_allowed: "{{ export_allowed | default(true) | bool }}"
+      loop: "{{ ('Negative Injection Price' if not export_allowed else 'Enabled Feedin Priority' if mode == 'feedin_priority' or not charge_enabled else 'Disabled') if mode in ['normal', 'feedin_priority'] else 'Disabled' }}"
       base: "{{ 'Manual Mode' if manual else 'Self Use Mode' }}"
       # SolaX push power: positive discharges, negative charges. Passed as PVControl commands it
       # (≤ 30 A × voltage, less while the import cap throttles): the inverter limits VPP itself.
@@ -49,7 +59,8 @@ sequence:
       # Battery charge current: a bulk charge's (whole amps), else what "PV Control - Battery Settings" keeps.
       max_a: "{{ state_attr('sensor.pv_control_mode', 'max_current_a') | int(30) }}"
       bulk_a: "{{ [current_a | float(max_a) | int, max_a] | min }}"
-      normal_a: "{{ max_a if is_state('binary_sensor.pv_control_battery_charging_enabled', 'on') else 0 }}"
+      # Outside a bulk charge always the maximum: "charging off" runs as the feed-in loop (RAM), not as 0 A (EEPROM).
+      normal_a: "{{ max_a }}"
       # Run time of one command: the reconciler refreshes it while PV Control runs; if HA or PV Control
       # stops, the inverter returns to its base work mode by itself within this time.
       duration_s: "{{ duration_s | default(1200) | int }}"
@@ -148,6 +159,18 @@ sequence:
               entity_id: number.solax_remotecontrol_pv_power_limit
             data:
               value: 30000
+          # Negative Injection Price: charge up to 100 %, at most this share of the BMS charge power (0 = PV only
+          # covers the house, the rest is curtailed).
+          - action: number.set_value
+            target:
+              entity_id: number.solax_remotecontrol_target_soc_8_9
+            data:
+              value: 100
+          - action: number.set_value
+            target:
+              entity_id: number.solax_inverter_export_first_battery_charge_limit_mode_8_9
+            data:
+              value: "{{ 100 if charge_enabled and mode == 'normal' else 0 }}"
           - action: number.set_value
             target:
               entity_id: number.solax_remotecontrol_autorepeat_duration

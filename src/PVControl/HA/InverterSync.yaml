@@ -45,6 +45,8 @@ variables:
   power_w: "{{ state_attr('sensor.pv_control_mode', 'battery_power_w') | int(0) }}"
   bulk: "{{ state_attr('sensor.pv_control_mode', 'bulk') == true }}"
   current_a: "{{ state_attr('sensor.pv_control_mode', 'battery_current_a') | float(30) }}"
+  charge_enabled: "{{ state_attr('sensor.pv_control_mode', 'charge_enabled') != false }}"
+  export_allowed: "{{ state_attr('sensor.pv_control_mode', 'export_allowed') != false }}"
   applied_seq: "{{ states('input_number.pv_control_applied_seq') | int(-1) }}"
   vpp: "{{ not (mode == 'force_charge' and bulk) and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
   applied_age_s: >-
@@ -53,7 +55,8 @@ variables:
   new_version: "{{ command_ok and seq != applied_seq }}"
   fell_back: "{{ command_ok and seq == applied_seq and is_state('binary_sensor.pv_control_inverter_in_sync', 'off') }}"
   # Mode 8 (and the feedin_priority loop's autorepeat) runs 1200 s; refresh after 600 s.
-  refresh_due: "{{ command_ok and seq == applied_seq and (vpp or mode == 'feedin_priority') and not fell_back and applied_age_s > 600 }}"
+  loop: "{{ mode in ['normal', 'feedin_priority'] and (mode == 'feedin_priority' or not charge_enabled or not export_allowed) }}"
+  refresh_due: "{{ command_ok and seq == applied_seq and (vpp or loop) and not fell_back and applied_age_s > 600 }}"
 actions:
   - choose:
       - conditions:
@@ -91,6 +94,8 @@ actions:
               power_w: "{{ power_w }}"
               bulk: "{{ bulk }}"
               current_a: "{{ current_a }}"
+              charge_enabled: "{{ charge_enabled }}"
+              export_allowed: "{{ export_allowed }}"
               seq: "{{ seq }}"
       - conditions:
           - condition: template
@@ -126,6 +131,8 @@ actions:
                   power_w: "{{ power_w }}"
                   bulk: "{{ bulk }}"
                   current_a: "{{ current_a }}"
+                  charge_enabled: "{{ charge_enabled }}"
+                  export_allowed: "{{ export_allowed }}"
                   seq: "{{ seq }}"
       - conditions:
           - condition: template
@@ -137,4 +144,6 @@ actions:
               power_w: "{{ power_w }}"
               bulk: "{{ bulk }}"
               current_a: "{{ current_a }}"
+              charge_enabled: "{{ charge_enabled }}"
+              export_allowed: "{{ export_allowed }}"
               seq: "{{ seq }}"

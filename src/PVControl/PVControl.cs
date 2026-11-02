@@ -676,7 +676,8 @@ namespace NetDeamon.apps.PVControl
       int vppW = _house.VppCurve.MaxW(_house.Battery.BatterySoc);
       double pathW = bulk ? maxA * voltage : Math.Min(maxA * voltage, vppW);
       _chargeThrottled = gridCharging && limitA * voltage < pathW;
-      var command = InverterCommand.Next(_inverterCommand, mode, _chargeThrottled ? limitA : maxA, bulk, voltage, _restoredCommandSeq);
+      var command = InverterCommand.Next(_inverterCommand, mode, _chargeThrottled ? limitA : maxA, bulk, voltage, _restoredCommandSeq,
+        state.BatteryChargeEnable, state.ExportAllowed);
       if (command != _inverterCommand)
         _inverterCommandIssued = now;
       _inverterCommand = command;
@@ -690,6 +691,8 @@ namespace NetDeamon.apps.PVControl
     {
       ["battery_power_w"] = command.BatteryPowerW,
       ["bulk"] = command.Bulk,
+      ["charge_enabled"] = command.ChargeEnabled,
+      ["export_allowed"] = command.ExportAllowed,
       ["charge_energy_wh"] = charge?.EnergyWh ?? 0,
       ["charge_target_soc"] = charge?.TargetSocPercent,
       ["charge_start"] = charge?.Start.ToISO8601(),
@@ -766,6 +769,10 @@ namespace NetDeamon.apps.PVControl
       // running grid charge: the first cycle after a restart mustn't raise a limit the cap had lowered.
       if (_inverterCommand is { } restored && _modeEntity.TryGetJsonAttribute("battery_current_a", out var a) && a.TryGetDouble(out double currentA))
         _inverterCommand = restored with { CurrentA = currentA };
+      // The flags as published (missing = on): an unchanged command keeps its version over the restart.
+      static bool Flag(Entity e, string name) => !(e.TryGetJsonAttribute(name, out var f) && f.ValueKind == System.Text.Json.JsonValueKind.False);
+      if (_inverterCommand is { } flagged)
+        _inverterCommand = flagged with { ChargeEnabled = Flag(_modeEntity, "charge_enabled"), ExportAllowed = Flag(_modeEntity, "export_allowed") };
       if (_inverterCommand is { Mode: InverterModes.force_charge or InverterModes.force_charge_grid_only, CurrentA: > 0 } charging)
         _chargeLimitA = charging.CurrentA;
       _inverterCommandIssued = _modeEntity.TryGetJsonAttribute("issued", out var issued) && issued.ValueKind == System.Text.Json.JsonValueKind.String

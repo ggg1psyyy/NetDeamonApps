@@ -151,4 +151,21 @@ public class InverterCommandTests
     Assert.Equal(HealthLevel.degraded, Assert.Single(HealthChecks.InverterSync(true, now.AddMinutes(-3), false, now)).Level);
     Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.InverterSync(true, null, true, now)).Level);
   }
+
+  [Fact]
+  public void Next_NewVersion_WhenChargeOrExportFlagChanges()
+  {
+    // HA runs "charging off" and "no export" as the feed-in / negative-injection loops of the mode it applies:
+    // a flag change alone must be a new version, or the script never re-applies.
+    var normal = InverterCommand.Next(null, InverterModes.normal, 30, false, 230);
+    Assert.Equal(normal, InverterCommand.Next(normal, InverterModes.normal, 30, false, 230));
+    var noCharge = InverterCommand.Next(normal, InverterModes.normal, 30, false, 230, chargeEnabled: false);
+    Assert.Equal(normal.Seq + 1, noCharge.Seq);
+    Assert.False(noCharge.ChargeEnabled);
+    var noExport = InverterCommand.Next(noCharge, InverterModes.normal, 30, false, 230, chargeEnabled: false, exportAllowed: false);
+    Assert.Equal(noCharge.Seq + 1, noExport.Seq);
+    Assert.Equal((false, false), (noExport.ChargeEnabled, noExport.ExportAllowed));
+    Assert.Equal(noExport, InverterCommand.Next(noExport, InverterModes.normal, 30, false, 230, chargeEnabled: false, exportAllowed: false));
+  }
 }
+

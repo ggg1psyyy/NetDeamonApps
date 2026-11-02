@@ -13,15 +13,18 @@ namespace NetDeamon.apps.PVControl;
 /// <param name="Mode">Inverter mode.</param>
 /// <param name="BatteryPowerW">Battery power, W: positive charges, negative discharges, 0 holds (or the inverter's own control in normal).</param>
 /// <param name="Bulk">A large grid charge at full power (HA may use a faster path than for small top-ups).</param>
-/// <param name="Seq">Version; increases with every change of mode, current or <see cref="Bulk"/>.</param>
+/// <param name="Seq">Version; increases with every change of mode, current, <see cref="Bulk"/> or the two flags.</param>
 /// <param name="CurrentA">Battery current the power was made from, A (0 when the battery is held or on its own).</param>
-public readonly record struct InverterCommand(InverterModes Mode, int BatteryPowerW, bool Bulk, int Seq, double CurrentA = 0)
+/// <param name="ChargeEnabled">The battery may charge from PV (normal mode; off: feed-in instead, room for later).</param>
+/// <param name="ExportAllowed">PV may be exported (off at a negative export price: PV into the battery, then curtailed).</param>
+public readonly record struct InverterCommand(InverterModes Mode, int BatteryPowerW, bool Bulk, int Seq, double CurrentA = 0,
+  bool ChargeEnabled = true, bool ExportAllowed = true)
 {
   /// <summary>Currents closer than this are the same command, A (the cap's limit moves in whole amps).</summary>
   public const double SameCurrentA = 0.5;
 
   /// <summary>
-  /// The command of this cycle: the previous one if mode, bulk and current are unchanged, else a new
+  /// The command of this cycle: the previous one if mode, bulk, current and the flags are unchanged, else a new
   /// version with the power from the current at the battery voltage now. The voltage is measured and
   /// steps by 5 V with the SoC; it only goes into a command that changes anyway, so a running charge
   /// isn't re-applied with every step.
@@ -32,13 +35,17 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
   /// <param name="bulk">Bulk charge now.</param>
   /// <param name="voltageV">Battery voltage now, V.</param>
   /// <param name="restoredSeq">Last version before a restart (continues counting from it).</param>
+  /// <param name="chargeEnabled">The battery may charge from PV.</param>
+  /// <param name="exportAllowed">PV may be exported.</param>
   /// <returns>The command.</returns>
-  public static InverterCommand Next(InverterCommand? previous, InverterModes mode, double currentA, bool bulk, int voltageV, int restoredSeq = 0)
+  public static InverterCommand Next(InverterCommand? previous, InverterModes mode, double currentA, bool bulk, int voltageV, int restoredSeq = 0,
+    bool chargeEnabled = true, bool exportAllowed = true)
   {
     int powerW = PowerFor(mode, currentA, voltageV);
     if (powerW == 0) currentA = 0;
-    if (previous is { } p && p.Mode == mode && p.Bulk == bulk && Math.Abs(p.CurrentA - currentA) < SameCurrentA) return p;
-    return new InverterCommand(mode, powerW, bulk, (previous?.Seq ?? restoredSeq) + 1, currentA);
+    if (previous is { } p && p.Mode == mode && p.Bulk == bulk && Math.Abs(p.CurrentA - currentA) < SameCurrentA
+        && p.ChargeEnabled == chargeEnabled && p.ExportAllowed == exportAllowed) return p;
+    return new InverterCommand(mode, powerW, bulk, (previous?.Seq ?? restoredSeq) + 1, currentA, chargeEnabled, exportAllowed);
   }
 
   /// <summary>The command as published before a restart (the sensor's state and attributes), so an unchanged

@@ -15,8 +15,11 @@ HA_FILES = os.path.join(ROOT, 'src', 'PVControl', 'HA')
 # Never overwritten in the add-on folder: the live settings and every app's data.
 KEEP = ['appsettings*.json', '*.db', '*.db-shm', '*.db-wal', '*.db.bak*']
 # PVControl's automations in automations.yaml, by id: replaced, or appended when missing.
-AUTOMATIONS = {'1726401911432': 'Mode.yaml', '1746880755128': 'Battery.yaml', '1792585055022': 'Health.yaml',
+AUTOMATIONS = {'1726401911432': 'Mode.yaml', '1792585055022': 'Health.yaml',
                '1793042000001': 'InverterSync.yaml', '1793042000002': 'PriceFetch.yaml'}
+# Retired PVControl automations, removed by id: "charging off" (0 A) and "no export" (export limit) wrote EEPROM; the
+# apply script runs both as the integration's mode-8 loops now.
+RETIRED = {'1746880755128': 'PV Control - Battery Settings', '1790496917953': 'PV Control - Export Settings'}
 SCRIPT = ('pv_control_apply_mode', 'ApplyMode.yaml')              # in scripts.yaml
 PACKAGE = ('packages/pv_control_inverter.yaml', 'InverterHelpers.yaml')
 # Writes at every quarter boundary (DataLogger rows, the cost log, the quarter tracking): no restart from
@@ -147,9 +150,19 @@ def ha_files(cfg, write):
 
     auto_path, script_path, pkg_path = (os.path.join(conf, 'automations.yaml'), os.path.join(conf, 'scripts.yaml'),
                                         os.path.join(conf, *PACKAGE[0].split('/')))
+    def remove_entry(text, aid):
+        lines = text.splitlines(True)
+        start = next((i for i, l in enumerate(lines) if l.startswith(f"- id: '{aid}'")), None)
+        if start is None:
+            return text
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('- ')), len(lines))
+        return ''.join(lines[:start] + lines[end:])
+
     auto = rd(auto_path); auto2 = auto
     for aid, f in AUTOMATIONS.items():
         auto2 = replace_entry(auto2, aid, f)
+    for aid in RETIRED:
+        auto2 = remove_entry(auto2, aid)
     scr = rd(script_path); lines = scr.splitlines(True)
     s = next(i for i, l in enumerate(lines) if l.startswith(SCRIPT[0] + ':'))
     e = next((i for i in range(s + 1, len(lines)) if re.match(r'^[A-Za-z0-9_]+:', lines[i])), len(lines))
@@ -161,7 +174,9 @@ def ha_files(cfg, write):
     a, a0 = yaml.safe_load(auto2), yaml.safe_load(auto)
     ids = [x['id'] for x in a]
     assert len(ids) == len(set(ids)), 'duplicate automation id'
-    assert len(a) == len(a0) + sum(1 for aid in AUTOMATIONS if f"'{aid}'" not in auto), 'unexpected automation count'
+    assert len(a) == len(a0) + sum(1 for aid in AUTOMATIONS if f"'{aid}'" not in auto)         - sum(1 for aid in RETIRED if f"'{aid}'" in auto), 'unexpected automation count'
+    for x in a0:
+        if x['id'] in RETIRED: print('  removed', x['id'], x.get('alias', ''))
     assert set(yaml.safe_load(scr2)) == set(yaml.safe_load(scr)), 'script keys changed'
     yaml.safe_load(pkg2)
     for x in a:
