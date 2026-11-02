@@ -705,8 +705,8 @@ namespace NetDeamon.apps.PVControl
       ["voltage_v"] = PVCC_Config.BatteryVoltageV,
       ["battery_current_a"] = command.CurrentA,
       ["max_current_a"] = PVCC_Config.MaxBatteryChargePower,
-      // the hard floor: the feedin_priority loop (HA) discharges the battery down to it
-      ["min_soc_pct"] = _house.Battery.AbsoluteMinimalSoC,
+      // the hard floor (the preferred minimum when enforced): the feedin_priority loop (HA) discharges down to it
+      ["min_soc_pct"] = _house.Battery.EnforcePreferredSoC ? _house.Battery.PreferredMinimalSoC : _house.Battery.AbsoluteMinimalSoC,
     };
 
     /// <summary>The grid charge the plan runs now or next (<see cref="InverterCommand.NextCharge"/>) — the one lookup

@@ -54,7 +54,7 @@ template:
           {% set actual_ok = loop_state == loop and (
                              (manual and use_mode == 'Manual Mode' and is_state('select.solax_manual_mode_select', 'Force Charge') and vpp_state == 'Disabled' and current_ok)
                           or (vpp and use_mode != 'Manual Mode' and vpp_state == 'Individual Setting - Duration Mode')
-                          or (loop != 'Disabled' and use_mode == base and vpp_state == 'Individual Setting - Duration Mode' and states('sensor.solax_remotecontrol_autorepeat_remaining') | int(0) > 0)
+                          or (loop != 'Disabled' and use_mode == base and vpp_state in ['Individual Setting - Duration Mode', 'Self Consume - C/D Mode'] and states('sensor.solax_remotecontrol_autorepeat_remaining') | int(0) > 0)
                           or (not manual and not vpp and loop == 'Disabled' and use_mode == base and vpp_state == 'Disabled')) %}
           {{ seq == states('input_number.pv_control_applied_seq') | int(-2) and actual_ok }}
         attributes:

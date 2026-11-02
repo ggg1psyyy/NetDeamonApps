@@ -878,7 +878,10 @@ poll (2 s) the integration sets the push power to 0 while PV covers the house, e
 (down to the loop's minimum SoC = PV Control's hard floor, `min_soc_pct`) — RAM only, and when its
 autorepeat ends it switches mode 8 off itself. The DP had started to pick it (instead of grid_only
 with PV covering the house), and from spring it matters daily; community-maintained beats our own
-loop. The apply script stops that loop before writing mode 8 itself, so the two never fight. HA keeps state history for
+loop. The apply script stops that loop before writing mode 8 itself, so the two never fight. The
+integration's docs note the inverter sometimes drops to "Self Consume - C/D" by itself when the battery
+is full; the loop writes mode 8 again at the next poll, so in-sync accepts that state while the loop runs
+(else the reconciler would re-apply and block after 5 tries). HA keeps state history for
 ~10 days only, and no log held the mode, so how often they run over a year was unknown; in
 2026-10-17…26 neither ran once, while the work mode was written 249 times (117 force charges, up
 to 71 writes on a seesaw day). DataLogger v9 logs the mode, its minutes and the EEPROM writes per
