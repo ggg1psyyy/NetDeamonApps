@@ -91,12 +91,15 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
-    /// <summary>The fixed energy price of a fixed-price contract (<see cref="PVConfig.ImportPriceFixed"/>), netto, €/kWh:
-    /// the entity's value, else the configured one; null without a fixed price.</summary>
-    public float? ImportPriceFixedNetto =>
-      !PVCC_Config.ImportPriceFixed ? null
-      : PVCC_Config.ImportPriceFixedEntity is not null && PVCC_Config.ImportPriceFixedEntity.TryGetStateValue(out float v, numericalGetBaseValue: false)
-        ? v : PVCC_Config.ImportPriceFixedValue;
+    /// <summary>A fixed-price supply contract is active (switch.pv_control_import_price_fixed; the supplier allows switching
+    /// between spot and fixed price, so it's a manual switch, not a date).</summary>
+    public bool ImportPriceFixed { get; set; } = PVCC_Config?.ImportPriceFixed ?? false;
+
+    /// <summary>The contract's energy price, netto (without tax and network fee), €/kWh (number.pv_control_import_price_fixed).</summary>
+    public float ImportPriceFixedValue { get; set; } = PVCC_Config?.ImportPriceFixedValue ?? 0;
+
+    /// <summary>The fixed energy price while <see cref="ImportPriceFixed"/>, netto, €/kWh; null: the market price.</summary>
+    public float? ImportPriceFixedNetto => ImportPriceFixed ? ImportPriceFixedValue : null;
 
     /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/> — i.e. <see cref="PriceListNetto"/>
     /// after applying <see cref="PVConfig.ImportPriceResolution"/>, or the fixed energy price in its slots (so it

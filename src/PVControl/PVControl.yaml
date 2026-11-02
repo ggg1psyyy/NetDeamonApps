@@ -41,12 +41,13 @@ NetDeamon.apps.PVControl.PVConfig:
       EndYear: 2099
       Price: 0.06882
   ImportPriceTax: 0.2
-  # Fixed-price supply contract: the energy price below (netto: without tax and network fee, €/kWh) instead of the
-  # market price × ImportPriceMultiplier + ImportPriceAddition; the network fee (incl. its periods) and the tax stay.
-  # The market price entities still give the time slots (and the export price with ExportPriceSameAsImport).
+  # Fixed-price supply contract — switched in HA (switch.pv_control_import_price_fixed, price in
+  # number.pv_control_import_price_fixed); these are only their defaults. The energy price (netto: without tax and network
+  # fee, €/kWh) replaces the market price × ImportPriceMultiplier + ImportPriceAddition; the network fee (incl. its
+  # periods) and the tax stay. The market price entities still give the time slots (and the export price with
+  # ExportPriceSameAsImport).
   ImportPriceFixed: false
-  # ImportPriceFixedEntity: input_number.fixed_energy_price
-  # ImportPriceFixedValue: 0.12
+  ImportPriceFixedValue: 0.14125
   # How the raw price data is interpreted:
   #   QuarterHourly = use each 15-min price as-is
   #   Hourly        = average the four 15-min prices within each hour and apply that

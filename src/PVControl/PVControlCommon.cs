@@ -172,12 +172,10 @@ namespace NetDeamon.apps.PVControl
     public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
     public PriceResolution ImportPriceResolution { get; set; } = PriceResolution.Hourly;
-    /// <summary>A fixed-price supply contract: the energy price is <see cref="ImportPriceFixedEntity"/> (else
-    /// <see cref="ImportPriceFixedValue"/>) instead of the market price × multiplier + addition; network fee and tax stay.</summary>
+    /// <summary>Default of switch.pv_control_import_price_fixed (a fixed-price supply contract: the energy price is
+    /// number.pv_control_import_price_fixed instead of the market price × multiplier + addition; network fee and tax stay).</summary>
     public bool ImportPriceFixed { get; set; } = default;
-    /// <summary>Entity with the fixed energy price, netto (without tax and network fee), €/kWh; takes priority over the value.</summary>
-    public Entity? ImportPriceFixedEntity { get; set; }
-    /// <summary>Fixed energy price, netto (without tax and network fee), €/kWh.</summary>
+    /// <summary>Default of number.pv_control_import_price_fixed: the fixed energy price, netto (without tax and network fee), €/kWh.</summary>
     public float ImportPriceFixedValue { get; set; } = default;
     /// <summary>Risk premium on estimated (not yet published) prices in the simulation: import
     /// × (1 + premium), export × (1 − premium) — an estimated slot must be clearly better to win.</summary>
