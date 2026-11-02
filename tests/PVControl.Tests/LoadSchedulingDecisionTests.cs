@@ -105,7 +105,7 @@ public class LoadSchedulingDecisionTests
       (released.Mode, released.ModeReason, released.BatteryChargeEnable, released.ExportAllowed));
     // every other mode stays as planned — a floor hold, a charge
     var floorHold = new InverterState(InverterModes.grid_only, ForceChargeReasons.GoingUnderAbsoluteMinima);
-    var charge = new InverterState(InverterModes.force_charge, ForceChargeReasons.CheaperThanLater);
+    var charge = new InverterState(InverterModes.force_charge, ForceChargeReasons.GoingUnderAbsoluteMinima);
     Assert.Equal(floorHold, LoadSchedulingDecision.LiveLoadHold(floorHold, false));
     Assert.Equal(charge, LoadSchedulingDecision.LiveLoadHold(charge, false));
   }
