@@ -167,6 +167,7 @@ public class DpSteeringTests : TestBase
     var t0 = Day.AddHours(23);
     DpSlot S(int q, InverterModes m, bool bulk, int ch) => new(t0.AddMinutes(15 * q), 30, m, bulk, 0, 0, 0, ch, 0);
     int Vpp(DpSlot s) => 1000;
+    float Price(DateTime t) => (float)(t - t0).TotalMinutes;   // every quarter its own price: no room next to a block
     var slots = new List<DpSlot>
     {
       S(0, InverterModes.force_charge, true, 1800), S(1, InverterModes.force_charge, false, 900), S(2, InverterModes.force_charge, true, 1800),
@@ -176,14 +177,31 @@ public class DpSteeringTests : TestBase
       S(7, InverterModes.force_charge, true, 1017),   // bulk for 17 Wh: VPP is enough
     };
     Assert.Equal([true, true, true, false, false, false, false, false],
-      DpSteering.BlockPaths(slots, new InverterState(InverterModes.normal), Vpp, 115));
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.normal), Vpp, 115, Price));
     // the first block is the running charge, on VPP: it stays VPP
     Assert.Equal([false, false, false, false, false, false, false, false],
-      DpSteering.BlockPaths(slots, new InverterState(InverterModes.force_charge) { Bulk = false }, Vpp, 115));
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.force_charge) { Bulk = false }, Vpp, 115, Price));
     // a running bulk charge stays bulk although the DP planned VPP for its block
     Assert.Equal([true, true],
       DpSteering.BlockPaths([S(0, InverterModes.force_charge, false, 500), S(1, InverterModes.force_charge, false, 500)],
-        new InverterState(InverterModes.force_charge) { Bulk = true }, Vpp, 115));
+        new InverterState(InverterModes.force_charge) { Bulk = true }, Vpp, 115, Price));
+  }
+
+  [Fact]
+  public void BlockPaths_VppMayUseTheRestOfThePriceSlot()
+  {
+    // 2026-10-31 night: 03:00 bulk 1455 Wh + 03:15 VPP 1179 Wh against VPP 1296 + 1179 — short by 159 Wh, but 03:30 and
+    // 03:45 cost the same 0.396 and are free: VPP is enough within the price slot (the next replan charges there).
+    var t0 = Day.AddHours(3);
+    DpSlot S(int q, InverterModes m, bool bulk, int ch) => new(t0.AddMinutes(15 * q), 20, m, bulk, 0, 0, 0, ch, 0);
+    var slots = new List<DpSlot> { S(0, InverterModes.force_charge, true, 1455), S(1, InverterModes.force_charge, false, 1179),
+      S(2, InverterModes.grid_only, false, 0), S(3, InverterModes.grid_only, false, 0), S(4, InverterModes.normal, false, 0) };
+    int Vpp(DpSlot s) => 1240;
+    Assert.Equal([false, false, false, false, false],
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.normal), Vpp, 115, t => t.Hour == 3 ? 0.396f : 0.45f));
+    // the hour after is dearer: no room there, VPP falls short — bulk
+    Assert.Equal([true, true, false, false, false],
+      DpSteering.BlockPaths(slots, new InverterState(InverterModes.normal), Vpp, 115, t => t < t0.AddMinutes(30) ? 0.396f : 0.45f));
   }
 }
 

@@ -15,12 +15,16 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// <param name="TieEur">Actions whose rest costs differ by no more than this are a tie, €: the earlier action in the list
 /// wins (normal, feedin_priority, grid_only, then each charge target VPP before bulk) — VPP where it charges as
 /// cheaply, bulk only where it saves something; 0.01 ct covers the interpolation's noise.</param>
+/// <param name="KeepModeEur">In the current quarter the mode running now (normal, feedin_priority or grid_only) stays
+/// while the best action is cheaper by no more than this, € — no switching every minute between options worth less than
+/// 0.1 ct (2026-11-03: flat 0.50 prices, 9 switches in 1.5 h).</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
   int StatesPerPercent = 4,
   int ChargeStepPct = 2,
-  float TieEur = 0.0001f);
+  float TieEur = 0.0001f,
+  float KeepModeEur = 0.001f);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -215,7 +219,8 @@ public static class BatteryDpPlanner
       var (pv, load, extra) = energies[i];
       int totalLoad = load + extra;
       bool held = input.BatteryHeldForLoad(times[i], pv, totalLoad);
-      var actions = Actions(input, o, held, HoldAllowed(input, times[i], pv, totalLoad));
+      bool holdOk = HoldAllowed(input, pv, totalLoad);
+      var actions = Actions(input, o, held, holdOk);
       for (int s = 0; s < states; s++)
       {
         int wh = WhOf(s);
@@ -227,6 +232,9 @@ public static class BatteryDpPlanner
         {
           if (a.Mode == InverterModes.force_charge && a.TargetSocPct <= pct) continue;   // nothing to charge
           var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, wh, fractions[i]);
+          // A "charge" that stores under 1 % is a hold under another name (the battery doesn't discharge): the hold rule
+          // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
+          if (a.Mode == InverterModes.force_charge && !holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
           int next = input.NextEnergyWh(wh, ch, dis);
           float rest = input.GridCostOf(times[i], imp, exp) + band + floor + ValueAt(value[i + 1], next);
           if (rest < best - o.TieEur) { best = rest; bestAction = a; }   // a tie goes to the earlier action
@@ -242,13 +250,38 @@ public static class BatteryDpPlanner
     for (int i = 0; i < n; i++)
     {
       var (pv, load, extra) = energies[i];
-      var a = policy[i][StateOf(energy)];
+      var a = i == 0 ? FirstAction(input, o, policy[0][StateOf(energy)], times[0], pv, load + extra, energy, fractions[0], e => ValueAt(value[1], e))
+        : policy[i][StateOf(energy)];
       var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
       slots.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis));
       energy = input.NextEnergyWh(energy, ch, dis);
     }
     var cost = PlanEvaluation.Evaluate(input, slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh)), energy, o);
     return new DpPlan(slots, cost, input.WhToSoc(energy));
+  }
+
+  /// <summary>
+  /// The current quarter's action at the exact energy now: the best one, except that the mode running now (normal,
+  /// feedin_priority, grid_only) stays while the best is cheaper by no more than <see cref="DpOptions.KeepModeEur"/> — a
+  /// hysteresis on the current quarter only, the rest of the plan stays free.
+  /// </summary>
+  private static Action FirstAction(SimulationInput input, DpOptions o, Action planned, DateTime time, int pv, int totalLoad,
+    int energy, double fraction, Func<int, float> restValue)
+  {
+    var current = input.CurrentMode.Mode;
+    if (current is not (InverterModes.normal or InverterModes.feedin_priority or InverterModes.grid_only) || planned.Mode == current)
+      return planned;
+    var keep = new Action(current, false, 0);
+    bool held = input.BatteryHeldForLoad(time, pv, totalLoad);
+    if (!Actions(input, o, held, HoldAllowed(input, pv, totalLoad)).Contains(keep))
+      return planned;
+    float Rest(Action a)
+    {
+      var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, energy, fraction);
+      var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(energy), o);
+      return input.GridCostOf(time, imp, exp) + band + floor + restValue(input.NextEnergyWh(energy, ch, dis));
+    }
+    return Rest(keep) <= Rest(planned) + o.KeepModeEur ? keep : planned;
   }
 
   /// <summary>An action of a quarter: a mode, and for a grid charge its path and target.</summary>
@@ -280,18 +313,19 @@ public static class BatteryDpPlanner
   }
 
   /// <summary>
-  /// Whether the DP may hold the battery (grid_only) in a quarter: outside the PV period always (everything comes from
-  /// the grid or the battery anyway); within it only where the house's deficit under PV would take at least 1 % SoC out
-  /// of the battery in the quarter (the user, 2026-11-02). Where PV covers the house or nearly does, a hold only buys the
+  /// Whether the DP may hold the battery (grid_only) in a quarter: without PV always (everything comes from the grid or
+  /// the battery anyway); with any PV forecast only where the house's deficit under PV would take at least 1 % SoC out of
+  /// the battery in the quarter (the user, 2026-11-02). Where PV covers the house or nearly does, a hold only buys PV's
   /// dips within the quarter from the grid (live 2026-11-02 08:30/14:15: PV 2 Wh short of the load, held at 0.53);
-  /// feedin_priority exports the same surplus and lets the battery cover the dips.
+  /// feedin_priority exports the same surplus and lets the battery cover the dips. "Any PV", not the PV period
+  /// (<see cref="SimulationInput.IsInPVPeriod"/>: PV above the load): on a dull day there is none, yet PV produces and
+  /// dips (2026-11-03: forecast 330 W against a 700-W load, real 570 W against 515 W).
   /// </summary>
-  /// <param name="input">Simulation input (capacity, losses, PV period).</param>
-  /// <param name="slot">Quarter start.</param>
+  /// <param name="input">Simulation input (capacity, losses).</param>
   /// <param name="pvWh">PV of the quarter, Wh.</param>
   /// <param name="totalLoadWh">Load incl. extra loads, Wh.</param>
-  public static bool HoldAllowed(SimulationInput input, DateTime slot, int pvWh, int totalLoadWh) =>
-    !input.IsInPVPeriod(slot) || input.DrawnWh(Math.Max(0, totalLoadWh - pvWh)) >= input.SocToWh(1);
+  public static bool HoldAllowed(SimulationInput input, int pvWh, int totalLoadWh) =>
+    pvWh <= 0 || input.DrawnWh(Math.Max(0, totalLoadWh - pvWh)) >= input.SocToWh(1);
 
   /// <summary>The flows of an action, by the simulation's own function.</summary>
   private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction)

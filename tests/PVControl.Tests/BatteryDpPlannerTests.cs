@@ -302,7 +302,7 @@ public class BatteryDpPlannerTests : TestBase
     // nor where PV nearly covers it (08:30/14:15: 2 Wh short): a hold needs a deficit of at least 1 % SoC
     var lossy = input.WithBatteryLosses();
     Assert.DoesNotContain(timeline, s => s.State is { Mode: InverterModes.grid_only, ModeReason: not ForceChargeReasons.LoadFromGrid }
-      && !BatteryDpPlanner.HoldAllowed(lossy, s.Time, s.PVWh, s.LoadWh + s.ExtraLoadWh));
+      && !BatteryDpPlanner.HoldAllowed(lossy, s.PVWh, s.LoadWh + s.ExtraLoadWh));
     // feedin_priority only where PV covers the house (elsewhere it would be normal) and it never charges
     Assert.All(timeline.Where(s => s.State.Mode == InverterModes.feedin_priority),
       s => Assert.Equal(0, s.BatteryChargeWh));
@@ -353,18 +353,15 @@ public class BatteryDpPlannerTests : TestBase
   [Fact]
   public void HoldAllowed_OnlyForADeficitOfAtLeastOnePercent()
   {
-    // In the PV period (the test input's PV runs 10–15 h): 1 % of 11.52 kWh = 115 Wh from the battery = 110 Wh AC at
-    // 0.95 — below that a hold only buys PV's dips. Outside it every hold is allowed (no PV to dip).
+    // With any PV: 1 % of 11.52 kWh = 115 Wh from the battery = 110 Wh AC at 0.95 — below that a hold only buys PV's dips.
+    // Without PV every hold is allowed.
     var input = Input(Day.AddHours(22), 50).WithBatteryLosses();
-    var noon = Day.AddDays(1).AddHours(12);
-    Assert.True(input.IsInPVPeriod(noon));
-    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 129, totalLoadWh: 131));   // PV 2 Wh short (live 2026-11-02 08:30)
-    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 300, totalLoadWh: 130));   // PV covers the house
-    Assert.False(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 20, totalLoadWh: 120));    // 106 Wh drawn: under 1 %
-    Assert.True(BatteryDpPlanner.HoldAllowed(input, noon, pvWh: 20, totalLoadWh: 140));     // 127 Wh drawn
-    var night = Day.AddDays(1).AddHours(2);
-    Assert.False(input.IsInPVPeriod(night));
-    Assert.True(BatteryDpPlanner.HoldAllowed(input, night, pvWh: 0, totalLoadWh: 50));     // night: always
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, pvWh: 129, totalLoadWh: 131));   // PV 2 Wh short (live 2026-11-02 08:30)
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, pvWh: 300, totalLoadWh: 130));   // PV covers the house
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, pvWh: 20, totalLoadWh: 120));    // 106 Wh drawn: under 1 %
+    Assert.True(BatteryDpPlanner.HoldAllowed(input, pvWh: 20, totalLoadWh: 140));     // 127 Wh drawn
+    Assert.False(BatteryDpPlanner.HoldAllowed(input, pvWh: 86, totalLoadWh: 173));    // dull day, no PV period (live 2026-11-03 13:00)
+    Assert.True(BatteryDpPlanner.HoldAllowed(input, pvWh: 0, totalLoadWh: 50));       // no PV: always
   }
 
   [Fact]
@@ -426,6 +423,40 @@ public class BatteryDpPlannerTests : TestBase
       $"{plain.Slots.Single(s => s.Time == midnight).SocPct} → {reserve.Slots.Single(s => s.Time == midnight).SocPct} %");
     Assert.True(reserve.Slots.Where(s => s.Mode == InverterModes.force_charge).Sum(s => s.BatteryChargeWh)
       > plain.Slots.Where(s => s.Mode == InverterModes.force_charge).Sum(s => s.BatteryChargeWh));
+  }
+
+  [Fact]
+  public void DullDay_NoHoldWhilePvProduces_TheRunningModeStaysOnATie()
+  {
+    // Live 2026-11-03 12:30: flat 0.50 prices until 21:00, the battery (60 %) too small for the evening — the DP buys
+    // ~3 kWh in the 0.50 hours either way and held in the "cheapest" of them, worth tenths of a cent: 9 switches in
+    // 1.5 h, holds in daylight where PV (no PV period: forecast below the load) covered the house in reality.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-03_1230.json.gz"));
+    var snap = ForecastSnapshot.FromBytes(bytes);
+    var input = snap.ToInput();
+    var plan = BatteryDpPlanner.Plan(input, O);
+    // no hold in a quarter with PV and a deficit under 1 %
+    var lossy = input.WithBatteryLosses();
+    var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
+    Assert.DoesNotContain(timeline, s => s.State is { Mode: InverterModes.grid_only, ModeReason: not ForceChargeReasons.LoadFromGrid }
+      && s.PVWh > 0 && !BatteryDpPlanner.HoldAllowed(lossy, s.PVWh, s.LoadWh + s.ExtraLoadWh));
+    // nor a "charge" under 1 % in its place (a hold under another name; 2026-10-31's next day had 1–34 Wh ones)
+    foreach (var f in new[] { "forecast_snapshot_2026-11-03_1230.json.gz", "forecast_snapshot_2026-10-31_1945.json.gz" })
+    {
+      var inp = ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", f))).ToInput();
+      var l = inp.WithBatteryLosses();
+      var tl = DpSteering.ToTimeline(BatteryDpPlanner.Plan(inp, O), EnergySimulator.Simulate(inp));
+      Assert.DoesNotContain(tl, s => s.State.Mode == InverterModes.force_charge
+        && l.StoredWh(s.BatteryChargeWh) < l.SocToWh(1) && !BatteryDpPlanner.HoldAllowed(l, s.PVWh, s.LoadWh + s.ExtraLoadWh));
+    }
+    // the running mode stays in the current quarter where switching is worth under 0.1 ct
+    foreach (var running in new[] { InverterModes.normal, InverterModes.grid_only })
+    {
+      var night = (snap with { StartTime = new DateTime(2026, 11, 3, 16, 5, 0), CurrentMode = running }).ToInput();
+      var first = BatteryDpPlanner.Plan(night, O).Slots[0];
+      var free = BatteryDpPlanner.Plan(night, O with { KeepModeEur = 0 }).Slots[0];
+      if (first.Mode != free.Mode) Assert.Equal(running, first.Mode);
+    }
   }
 }
 

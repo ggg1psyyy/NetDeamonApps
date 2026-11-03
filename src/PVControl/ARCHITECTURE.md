@@ -1171,3 +1171,18 @@ the minute's replan uses it; that night the charge bought 1.4 kWh more and the b
 77 % instead of 66 % (~6 ct round-trip loss if not needed). Both plans' grid costs (`grid_eur`, `dp_grid_eur`) contain the
 margin's assumed load, so they read higher than the money really spent.
 
+### Holds on a dull day, and the running mode on a tie
+
+2026-11-03: prices flat at 0.50 until 21:00, the battery (60 %) too small to reach the 23:00 charge — the DP buys
+~3 kWh in the 0.50 hours either way and placed the holds in their "cheapest" quarters (0.497 vs 0.510). Worth tenths of
+a cent, so every minute's replan moved them: 9 normal/grid_only switches in 1.5 h. And they fell into daylight: the
+1 % hold rule only applied in the PV period (`IsInPVPeriod`: PV forecast above the load), and with a forecast of 330 W
+against a 700-W load (with the margin; 600 W without) there was none — while really PV (570 W) covered the house
+(515 W) and every dip was bought at 0.50. Two changes: the 1 % rule applies in every quarter with PV forecast
+(`HoldAllowed`), and in the current quarter the running mode (normal, feedin_priority, grid_only) stays while the best
+action is cheaper by no more than 0.1 ct (`DpOptions.KeepModeEur`, `FirstAction`) — a hysteresis on that quarter
+only, the rest of the plan stays free. Two consequences: a force_charge that stores under 1 % is a hold under
+another name (the battery doesn't discharge) — with holds ruled out the DP had used 1–34-Wh "charges" in their place,
+so the same rule applies to them; and a charge block's VPP check counts the free quarters at the block's price next to
+it (the user's rule is "bulk only if VPP can't get it into the price slot"; the next replan charges there).
+
