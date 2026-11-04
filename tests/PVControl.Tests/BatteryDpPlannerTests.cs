@@ -458,5 +458,23 @@ public class BatteryDpPlannerTests : TestBase
       if (first.Mode != free.Mode) Assert.Equal(running, first.Mode);
     }
   }
+
+  [Fact]
+  public void ChargeInTheCurrentPriceBlock_StartsNow_VppUnlessFarShort()
+  {
+    // Live 2026-11-04 12:00 (the stored planning situation): the cheap hour 12:00–13:00 (0.421). The replans moved the
+    // charge's start within it (12:00 VPP, 12:01 normal, 12:01:30 bulk, 12:08 normal → 12:15): a charge the plan has
+    // later in the current price block starts now; and VPP fell short by just over 1 % — bulk only beyond 5 %.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-04_1200.json.gz"));
+    var snap = ForecastSnapshot.FromBytes(bytes);
+    foreach (var (minute, running) in new[] { (1, InverterModes.force_charge), (5, InverterModes.normal) })
+    {
+      var input = (snap with { StartTime = new DateTime(2026, 11, 4, 12, minute, 30), CurrentMode = running, CurrentBulk = false }).ToInput();
+      var plan = BatteryDpPlanner.Plan(input, O);
+      Assert.Equal(InverterModes.force_charge, plan.Slots[0].Mode);
+      var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
+      Assert.DoesNotContain(timeline.Where(s => s.Time.Hour == 12), s => s.State.Mode == InverterModes.force_charge && s.State.Bulk);
+    }
+  }
 }
 

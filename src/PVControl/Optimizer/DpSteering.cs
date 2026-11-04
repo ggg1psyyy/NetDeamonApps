@@ -35,7 +35,7 @@ public static class DpSteering
   {
     var bySlot = greedy.Slots.ToDictionary(s => s.Time);
     var dpInput = greedy.Input.WithBatteryLosses();   // the input the DP planned with
-    var bulk = BlockPaths(dp.Slots, greedy.Input.CurrentMode, s => dpInput.ChargeLimitWh(false, s.SocPct, dpInput.SlotFraction(s.Time)), dpInput.SocToWh(1),
+    var bulk = BlockPaths(dp.Slots, greedy.Input.CurrentMode, s => dpInput.ChargeLimitWh(false, s.SocPct, dpInput.SlotFraction(s.Time)), dpInput.SocToWh(5),
       t => dpInput.ImportPrices.GetPriceOrMean(t));
     return dp.Slots.Select((s, i) =>
     {
@@ -50,7 +50,8 @@ public static class DpSteering
   /// <summary>
   /// One path per grid charge: every contiguous block of force_charge quarters runs entirely as bulk or entirely as VPP
   /// (a switch between Manual Mode and VPP writes EEPROM every time; the DP chooses per quarter and may alternate). Bulk
-  /// only where VPP falls short of the block's planned charge by more than a tolerance (1 % SoC; the user, 2026-11-02: no
+  /// only where VPP falls short of the block's planned charge by more than a tolerance (5 % SoC — 1 % used bulk for
+  /// ~115 Wh on 2026-11-04 12:01; the user, 2026-11-02: no
   /// bulk if VPP is enough within the price slot — the quarters at the block's price next to it count, VPP may use them:
   /// the next replan does) — the DP's choice per quarter tips to bulk for a few Wh (2026-10-31 04:45: 1213 Wh planned,
   /// VPP 1196), the next replan takes up such a rest. A charge that runs now keeps its path for its block (as in the greedy simulation). The import cap

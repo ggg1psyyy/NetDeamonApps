@@ -162,7 +162,7 @@ public class DpSteeringTests : TestBase
   {
     // The DP may alternate bulk and VPP within a charge (2026-11-02 12:15: B, VPP, B, VPP); every switch between Manual
     // Mode and VPP writes EEPROM. A block runs bulk throughout where VPP (1000 Wh per quarter here) can't deliver its
-    // planned charge by more than 115 Wh (1 %), else VPP — also where the DP tipped a quarter to bulk for a few Wh (2026-10-31 04:45: 1213 Wh vs
+    // planned charge by more than the tolerance (115 Wh here), else VPP — also where the DP tipped a quarter to bulk for a few Wh (2026-10-31 04:45: 1213 Wh vs
     // VPP 1196); a charge running now keeps its path for its block.
     var t0 = Day.AddHours(23);
     DpSlot S(int q, InverterModes m, bool bulk, int ch) => new(t0.AddMinutes(15 * q), 30, m, bulk, 0, 0, 0, ch, 0);

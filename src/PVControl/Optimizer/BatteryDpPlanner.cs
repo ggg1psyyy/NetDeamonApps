@@ -18,13 +18,17 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// <param name="KeepModeEur">In the current quarter the mode running now (normal, feedin_priority or grid_only) stays
 /// while the best action is cheaper by no more than this, € — no switching every minute between options worth less than
 /// 0.1 ct (2026-11-03: flat 0.50 prices, 9 switches in 1.5 h).</param>
+/// <param name="ChargeNowEur">A grid charge the plan has later in the current price block starts (or keeps running) now
+/// while that costs no more than this, € — within one price block the start is a tie, and the minute's replans moved it
+/// (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
   int StatesPerPercent = 4,
   int ChargeStepPct = 2,
   float TieEur = 0.0001f,
-  float KeepModeEur = 0.001f);
+  float KeepModeEur = 0.001f,
+  float ChargeNowEur = 0.01f);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -245,19 +249,59 @@ public static class BatteryDpPlanner
     }
 
     // Forwards from the real SoC with exact energies (the policy by the nearest state)
-    var slots = new List<DpSlot>(n);
-    int energy = input.SocToWh(input.StartSocPercent);
-    for (int i = 0; i < n; i++)
+    int startEnergy = input.SocToWh(input.StartSocPercent);
+    var (pv0, load0, extra0) = energies[0];
+    (List<DpSlot> Slots, int End) Forward(Action? first)
     {
-      var (pv, load, extra) = energies[i];
-      var a = i == 0 ? FirstAction(input, o, policy[0][StateOf(energy)], times[0], pv, load + extra, energy, fractions[0], e => ValueAt(value[1], e))
-        : policy[i][StateOf(energy)];
-      var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
-      slots.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis));
-      energy = input.NextEnergyWh(energy, ch, dis);
+      var list = new List<DpSlot>(n);
+      int energy = startEnergy;
+      for (int i = 0; i < n; i++)
+      {
+        var (pv, load, extra) = energies[i];
+        var a = i == 0 ? first ?? FirstAction(input, o, policy[0][StateOf(energy)], times[0], pv, load + extra, energy, fractions[0], e => ValueAt(value[1], e))
+          : policy[i][StateOf(energy)];
+        var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
+        list.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis));
+        energy = input.NextEnergyWh(energy, ch, dis);
+      }
+      return (list, energy);
     }
-    var cost = PlanEvaluation.Evaluate(input, slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh)), energy, o);
-    return new DpPlan(slots, cost, input.WhToSoc(energy));
+    PlanCost CostOf((List<DpSlot> Slots, int End) f) =>
+      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh)), f.End, o);
+
+    var plan = Forward(null);
+    var cost = CostOf(plan);
+    // A charge the plan has later in the current price block starts — or keeps running — now: within one block its start
+    // is a tie the minute's replans kept moving (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).
+    if (plan.Slots[0].Mode != InverterModes.force_charge)
+    {
+      float price0 = input.ImportPrices.GetPriceOrMean(times[0]);
+      int blockEnd = 1;
+      while (blockEnd < n && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
+      if (plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
+      {
+        bool holdOk = HoldAllowed(input, pv0, load0 + extra0);
+        bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };
+        Action? best = null;
+        float bestRest = float.MaxValue;
+        foreach (var a in Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOk))
+        {
+          if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
+          var (ch, dis, imp, exp) = Flows(input, a, pv0, load0 + extra0, startEnergy, fractions[0]);
+          if (!holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
+          var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o);
+          float rest = input.GridCostOf(times[0], imp, exp) + band + floor + ValueAt(value[1], input.NextEnergyWh(startEnergy, ch, dis));
+          if (rest < bestRest - o.TieEur) (best, bestRest) = (a, rest);
+        }
+        if (best is { } charge)
+        {
+          var now = Forward(charge);
+          var nowCost = CostOf(now);
+          if (nowCost.Total <= cost.Total + o.ChargeNowEur) (plan, cost) = (now, nowCost);
+        }
+      }
+    }
+    return new DpPlan(plan.Slots, cost, input.WhToSoc(plan.End));
   }
 
   /// <summary>

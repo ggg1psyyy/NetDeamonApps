@@ -1186,3 +1186,14 @@ another name (the battery doesn't discharge) — with holds ruled out the DP had
 so the same rule applies to them; and a charge block's VPP check counts the free quarters at the block's price next to
 it (the user's rule is "bulk only if VPP can't get it into the price slot"; the next replan charges there).
 
+### A charge in the current price block starts now; bulk only beyond 5 %
+
+2026-11-04 12:00–12:08, the cheap hour 12:00–13:00 (0.421): the minute's replans moved the charge's start within the
+hour — 12:00 VPP, 12:01 normal, 12:01:30 bulk, 12:08 normal (start 12:15). Within one price block the start is a tie;
+the running-mode hysteresis (`KeepModeEur`) only held normal/feedin/grid_only. Now a charge the plan has later in the
+current price block starts — or keeps running — now, while that costs no more than 1 ct (`DpOptions.ChargeNowEur`).
+And the bulk at 12:01:30: the plan wanted ~3.2 kWh in the hour, VPP (3.08 kW at 62–68 %, falling) ~3.1 kWh — short by
+just over the 1-% tolerance, so 2–3 EEPROM writes for ~115 Wh. The tolerance is 5 % SoC (`BlockPaths`): less energy in
+the cheap block is cheaper than a bulk charge for a sliver of it. (Bulk doesn't overshoot to 100 %: PVControl ends the
+charge with the plan's energy.)
+

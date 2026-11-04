@@ -330,7 +330,8 @@ discharge draws ÷ 0.95 — a grid charge only pays where the later price beats 
 beyond the minimums; the greedy simulation stays lossless and corrects for the round trip in its own rules).
 The DP plans normal, feedin_priority, grid_only and grid charges (in a quarter with any PV it only holds the battery with grid_only
 where the house's deficit under PV would take at least 1 % SoC — otherwise feedin_priority; in the current quarter the
-running mode stays while switching is worth under 0.1 ct): while it steers there is no grid charge at a negative import
+running mode stays while switching is worth under 0.1 ct; a charge the plan has later in the current price block starts
+or keeps running now): while it steers there is no grid charge at a negative import
 price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
@@ -338,8 +339,8 @@ quarter; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges a
 charge, not to save fractions of a cent), `DBLocation`. Both planners plan with the house load forecast
 raised by the 80th percentile of the night forecast's error over the scored nights of `sensor.pv_control_load_forecast`
 (0–30 %; YAML `LoadMarginPct` until 7 nights are scored) — a reserve for a load above the forecast. Ties in the DP (within 0.01 ct) go to VPP before bulk; every
-contiguous charge block runs on one path (bulk only where VPP falls short of its planned charge by more than 1 % SoC; a
-running charge keeps its path).
+contiguous charge block runs on one path (bulk only where VPP falls short of its planned charge in the price slot by more than 5 %
+SoC; a running charge keeps its path).
 
 ## Build, test, run
 
