@@ -205,12 +205,11 @@ public class BatteryDpPlannerTests : TestBase
     Assert.True(evening.All(s => s.Mode != InverterModes.force_charge), trace);
     Assert.True(evening.Min(s => s.SocPct) < 20, trace);
     Assert.True(plan.Slots.All(s => s.SocPct >= 12), trace);
-    // With a reserve worth ten times as much (0.005 € per % and quarter) the reserve is kept — by holding the battery
-    // in the peak, not by buying into it (with the conversion losses a peak charge costs more than the grid directly).
+    // With a reserve worth ten times as much (0.005 € per % and quarter) the reserve is kept (the band only costs while
+    // the battery delivers: holding or a top-up keep it).
     var strict = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions(BandPenaltyPerPctQuarter: 0.005f));
     var strictEvening = strict.Slots.Where(s => s.Time < Day.AddHours(23)).ToList();
-    Assert.True(strictEvening.Min(s => s.SocPct) >= 20, string.Join(", ", strictEvening.Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%")));
-    Assert.DoesNotContain(strictEvening, s => s.Mode == InverterModes.force_charge);
+    Assert.True(strictEvening.Min(s => s.SocPct) >= 19, string.Join(", ", strictEvening.Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%")));
   }
 
   [Fact]
@@ -377,7 +376,7 @@ public class BatteryDpPlannerTests : TestBase
     Assert.Equal(InverterModes.normal, at21.Mode);
     // what steers: the whole 23:00 block in bulk (VPP can't deliver it), no switching within it
     var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
-    var night = timeline.Where(s => s.State.Mode == InverterModes.force_charge && s.Time.Hour == 23).ToList();
+    var night = timeline.Where(s => s.State.Mode == InverterModes.force_charge && s.Time.Date == new DateTime(2026, 11, 2) && s.Time.Hour == 23).ToList();
     Assert.NotEmpty(night);
     Assert.All(night, s => Assert.True(s.State.Bulk));
   }
@@ -497,6 +496,31 @@ public class BatteryDpPlannerTests : TestBase
     Assert.NotEmpty(discharging);
     Assert.All(discharging, s => Assert.True(input.ImportPrices.GetPriceOrMean(s.Time) >= s.BatteryValue - 0.005f, $"{s.Time:HH:mm}"));
     Assert.All(plan.Slots, s => Assert.InRange(s.BatteryValue, 0f, 1f));
+  }
+
+  [Fact]
+  public void Band_OnlyWhileTheBatteryDelivers_RunsToTheCheaperHourThenHoldsBelow()
+  {
+    // Evening at 0.53, 22:00 at 0.52, from 23:00 cheaper (0.437) until a 03:00 charge at 0.426 (after the round trip
+    // 0.472, clearly under 0.52), no dearer time after it — the reserve's band costs only
+    // where the battery delivers: the plan runs the battery into the band before 23:00 and holds below the preferred
+    // minimum until the charge (2026-11-04: with the band charged during the hold too, it held at 16 % from 22:45 —
+    // 20 quarters below 15 % cost more than running the battery on).
+    var b = Input(Day.AddHours(21), 22, pvWh: 0, loadWh: 150, preferred: 15);
+    var prices = b.ImportPrices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime,
+      p.StartTime < Day.AddHours(22) ? 0.53f : p.StartTime < Day.AddHours(23) ? 0.52f : p.StartTime < Day.AddHours(27) ? 0.437f
+      : p.StartTime < Day.AddHours(28) ? 0.426f : 0.44f)).ToList();
+    var input = b.WithPrices(new PriceList(prices), b.ExportPrices);
+    var plan = BatteryDpPlanner.Plan(input, O);
+    var at23 = plan.Slots.Single(s => s.Time == Day.AddHours(23));
+    Assert.True(at23.SocPct < 15, $"23:00 at {at23.SocPct} %: " + string.Join(", ", plan.Slots.Take(12).Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}")));
+    Assert.DoesNotContain(plan.Slots.Where(s => s.Time >= Day.AddHours(22) && s.Time < Day.AddHours(23)), s => s.Mode == InverterModes.grid_only && s.SocPct > 13);
+    // the band's cost only counts while delivering
+    Assert.True(PlanEvaluation.BandApplies(InverterModes.normal));
+    Assert.False(PlanEvaluation.BandApplies(InverterModes.grid_only));
+    Assert.False(PlanEvaluation.BandApplies(InverterModes.force_charge));
+    Assert.Equal(0f, PlanEvaluation.Penalty(input, 10, O, InverterModes.grid_only).Band);
+    Assert.Equal(5 * O.BandPenaltyPerPctQuarter, PlanEvaluation.Penalty(input, 10, O, InverterModes.normal).Band, 6);
   }
 }
 

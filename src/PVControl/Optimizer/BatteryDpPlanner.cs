@@ -67,7 +67,8 @@ public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndS
 /// <summary>
 /// The one cost model of a plan — the DP's objective and the yardstick both plans are compared with: grid cost per slot
 /// (<see cref="SimulationInput.GridCostOf"/>), a penalty per % and quarter below the preferred minimum (only without
-/// EnforcePreferredSoc: there the band is a reserve the plan keeps) and below the hard floor, and the energy left above
+/// EnforcePreferredSoc: there the band is a reserve the plan keeps; only where the battery delivers,
+/// <see cref="PlanEvaluation.BandApplies"/>) and below the hard floor, and the energy left above
 /// the hard floor at the end, valued at what refilling it would cost — the cheapest import price of the horizon's last
 /// 24 h, for what it delivers after the discharge loss. Without a value a plan would empty the battery at the horizon's end for free; at the mean
 /// price (peaks included) it bought energy for after the horizon (live 2026-10-30: 5.5 kWh at 0.41 at the very end).
@@ -78,14 +79,26 @@ public static class PlanEvaluation
   /// <param name="input">Simulation input (floors).</param>
   /// <param name="socPct">SoC at the slot start, % (fractional in the DP's grid).</param>
   /// <param name="o">Options.</param>
-  public static (float Band, float Floor) Penalty(SimulationInput input, double socPct, DpOptions o)
+  /// <param name="mode">The quarter's mode: the band only costs where the battery delivers (<see cref="BandApplies"/>).</param>
+  public static (float Band, float Floor) Penalty(SimulationInput input, double socPct, DpOptions o, InverterModes mode)
   {
     int floor = input.GetEffectiveMinSoC();
-    float band = !input.EnforcePreferredSoc && socPct < input.GetPreferredMinSoC()
+    float band = BandApplies(mode) && !input.EnforcePreferredSoc && socPct < input.GetPreferredMinSoC()
       ? (float)(input.GetPreferredMinSoC() - socPct) * o.BandPenaltyPerPctQuarter : 0f;
     float under = socPct < floor ? (float)(floor - socPct) * o.FloorPenaltyPerPctQuarter : 0f;
     return (band, under);
   }
+
+  /// <summary>
+  /// Whether the preferred minimum's band costs in a quarter: only where the battery delivers (normal, feedin_priority,
+  /// force_discharge). The band is a reserve for a load above the forecast; during a hold or a charge the grid covers
+  /// such a load and the reserve isn't at risk — charging it there kept the plan at the preferred minimum and buying in
+  /// an expensive hour rather than holding below it until a cheaper charge (the user, 2026-11-05: 22:00 at 0.487 held at
+  /// 16 % for 20 quarters until the 03:00 charge instead of running to 23:00).
+  /// </summary>
+  /// <param name="mode">The quarter's mode.</param>
+  public static bool BandApplies(InverterModes mode) =>
+    mode is InverterModes.normal or InverterModes.feedin_priority or InverterModes.force_discharge or InverterModes.automatic;
 
   /// <summary>
   /// Penalty for ending the horizon under the preferred minimum, €: per % missing at the end at the hard floor's rate —
@@ -128,17 +141,17 @@ public static class PlanEvaluation
 
   /// <summary>Cost of a planned run (the greedy simulation or a DP plan) under the one model.</summary>
   /// <param name="input">Simulation input.</param>
-  /// <param name="slots">(slot start, SoC % at the start, import Wh, export Wh) of each quarter.</param>
+  /// <param name="slots">(slot start, SoC % at the start, import Wh, export Wh, mode) of each quarter.</param>
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   /// <param name="o">Options.</param>
-  public static PlanCost Evaluate(SimulationInput input, IEnumerable<(DateTime Time, double SocPct, int ImportWh, int ExportWh)> slots,
+  public static PlanCost Evaluate(SimulationInput input, IEnumerable<(DateTime Time, double SocPct, int ImportWh, int ExportWh, InverterModes Mode)> slots,
     int endEnergyWh, DpOptions o)
   {
     float grid = 0, band = 0, floor = 0;
     foreach (var s in slots)
     {
       grid += input.GridCostOf(s.Time, s.ImportWh, s.ExportWh);
-      var (b, f) = Penalty(input, s.SocPct, o);
+      var (b, f) = Penalty(input, s.SocPct, o, s.Mode);
       band += b;
       floor += f;
     }
@@ -154,10 +167,10 @@ public static class PlanEvaluation
   {
     var input = result.Input.WithBatteryLosses();
     int energy = input.SocToWh(input.StartSocPercent);
-    var slots = new List<(DateTime, double, int, int)>(result.Slots.Count);
+    var slots = new List<(DateTime, double, int, int, InverterModes)>(result.Slots.Count);
     foreach (var s in result.Slots)
     {
-      slots.Add((s.Time, input.WhToSoc(energy), s.GridImportWh, s.GridExportWh));
+      slots.Add((s.Time, input.WhToSoc(energy), s.GridImportWh, s.GridExportWh, s.State.Mode));
       energy = input.NextEnergyWh(energy, s.BatteryChargeWh, s.BatteryDischargeWh);
     }
     return Evaluate(input, slots, energy, o);
@@ -232,7 +245,7 @@ public static class BatteryDpPlanner
       {
         int wh = WhOf(s);
         int pct = input.WhToSoc(wh);   // the whole % the simulation and the evaluation use
-        var (band, floor) = PlanEvaluation.Penalty(input, pct, o);
+        var (band, floor) = PlanEvaluation.Penalty(input, pct, o, InverterModes.normal);
         float best = float.MaxValue;
         Action bestAction = actions[0];
         foreach (var a in actions)
@@ -243,7 +256,7 @@ public static class BatteryDpPlanner
           // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
           if (a.Mode == InverterModes.force_charge && !holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
           int next = input.NextEnergyWh(wh, ch, dis);
-          float rest = input.GridCostOf(times[i], imp, exp) + band + floor + ValueAt(value[i + 1], next);
+          float rest = input.GridCostOf(times[i], imp, exp) + (PlanEvaluation.BandApplies(a.Mode) ? band : 0) + floor + ValueAt(value[i + 1], next);
           if (rest < best - o.TieEur) { best = rest; bestAction = a; }   // a tie goes to the earlier action
         }
         value[i][s] = best;
@@ -272,7 +285,7 @@ public static class BatteryDpPlanner
       return (list, energy);
     }
     PlanCost CostOf((List<DpSlot> Slots, int End) f) =>
-      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh)), f.End, o);
+      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh, s.Mode)), f.End, o);
 
     var plan = Forward(null);
     var cost = CostOf(plan);
@@ -294,7 +307,7 @@ public static class BatteryDpPlanner
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
           var (ch, dis, imp, exp) = Flows(input, a, pv0, load0 + extra0, startEnergy, fractions[0]);
           if (!holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
-          var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o);
+          var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o, a.Mode);
           float rest = input.GridCostOf(times[0], imp, exp) + band + floor + ValueAt(value[1], input.NextEnergyWh(startEnergy, ch, dis));
           if (rest < bestRest - o.TieEur) (best, bestRest) = (a, rest);
         }
@@ -327,7 +340,7 @@ public static class BatteryDpPlanner
     float Rest(Action a)
     {
       var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, energy, fraction);
-      var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(energy), o);
+      var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(energy), o, a.Mode);
       return input.GridCostOf(time, imp, exp) + band + floor + restValue(input.NextEnergyWh(energy, ch, dis));
     }
     return Rest(keep) <= Rest(planned) + o.KeepModeEur ? keep : planned;

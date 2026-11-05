@@ -1208,3 +1208,13 @@ The plan holds where the price is below it, runs the battery where it is above, 
 the round trip — the line that makes a global plan readable against local prices. Near the horizon's end the end rule
 (the preferred minimum at midnight) sets it.
 
+### The band costs only while the battery delivers
+
+The preferred minimum's band cost (`BandPenaltyPerPctQuarter`) counted every quarter below the preferred minimum, holds
+and charges included. On 2026-11-04 (preferred 15 %) the plan therefore held at 16 % from 22:45 (0.487) instead of
+running the battery to the cheaper 23:00 (0.437): below 15 % until the 03:00 charge meant 20 quarters of band cost,
+more than the ~1 ct the battery saved before 23:00 — the user lowered the preferred minimum by hand to get through to
+23:00. The band is a reserve for a load above the forecast; during a hold or a charge the grid covers such a load. It
+costs now only where the battery delivers (`PlanEvaluation.BandApplies`: normal, feedin_priority, force_discharge) —
+in the DP's decisions and the plan's cost alike.
+

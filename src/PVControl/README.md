@@ -335,7 +335,7 @@ or keeps running now): while it steers there is no grid charge at a negative imp
 price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
-quarter; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
+quarter in which the battery delivers — not while it is held or charged; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
 charge, not to save fractions of a cent), `DBLocation`. Both planners plan with the house load forecast
 raised by the 80th percentile of the night forecast's error over the scored nights of `sensor.pv_control_load_forecast`
 (0–30 %; YAML `LoadMarginPct` until 7 nights are scored) — a reserve for a load above the forecast. Ties in the DP (within 0.01 ct) go to VPP before bulk; every
