@@ -476,5 +476,27 @@ public class BatteryDpPlannerTests : TestBase
       Assert.DoesNotContain(timeline.Where(s => s.Time.Hour == 12), s => s.State.Mode == InverterModes.force_charge && s.State.Bulk);
     }
   }
+
+  [Fact]
+  public void BatteryValue_ExplainsTheHolds()
+  {
+    // Live 2026-11-05 11:45 (preferred 25 %): the night (0.45–0.47) held at 40 % while the morning (0.50–0.56) ran on the
+    // battery — right, but it looked wrong. The battery value (what a delivered kWh is worth then) is the line between:
+    // a hold where the price is under it, the battery where the price is over it.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-05_1145.json.gz"));
+    var input = (ForecastSnapshot.FromBytes(bytes) with { PreferredMinSocPercent = 25 }).ToInput();
+    var plan = BatteryDpPlanner.Plan(input, O);
+    var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
+    var holds = plan.Slots.Where(s => s.Mode == InverterModes.grid_only
+      && timeline.First(t => t.Time == s.Time).State.ModeReason == ForceChargeReasons.SavedForLater).ToList();
+    Assert.NotEmpty(holds);
+    Assert.All(holds, s => Assert.True(input.ImportPrices.GetPriceOrMean(s.Time) <= s.BatteryValue + 0.005f, $"{s.Time:HH:mm}"));
+    // (not the horizon's last hours: there the end rule — at least the preferred minimum at midnight — sets the value)
+    var discharging = plan.Slots.Where(s => s.Mode == InverterModes.normal && s.BatteryDischargeWh > 50 && s.SocPct > 26
+      && s.Time < BatteryDpPlanner.HorizonEnd(input).AddHours(-2)).ToList();
+    Assert.NotEmpty(discharging);
+    Assert.All(discharging, s => Assert.True(input.ImportPrices.GetPriceOrMean(s.Time) >= s.BatteryValue - 0.005f, $"{s.Time:HH:mm}"));
+    Assert.All(plan.Slots, s => Assert.InRange(s.BatteryValue, 0f, 1f));
+  }
 }
 

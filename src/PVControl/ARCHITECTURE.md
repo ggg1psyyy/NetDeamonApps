@@ -1197,3 +1197,14 @@ just over the 1-% tolerance, so 2–3 EEPROM writes for ~115 Wh. The tolerance i
 the cheap block is cheaper than a bulk charge for a sliver of it. (Bulk doesn't overshoot to 100 %: PVControl ends the
 charge with the plan's energy.)
 
+### The battery value in the graph (`DpSlot.BatteryValue`)
+
+2026-11-05: the plan held at 40 % through the night (0.45–0.47) and ran the battery in the morning (0.50–0.56) —
+right (the morning is dearer, and a night top-up after the round trip costs 0.495), but against the price line in the
+graph it looked wrong. The DP's table already holds the reason: how much cheaper the rest of the plan gets with one more
+kWh in the battery (a shadow price). Per quarter, from the slope over ±1 % SoC at the end of the quarter, per kWh the
+battery delivers (÷ the discharge efficiency), 0…1 €/kWh: `battery_value` in sensor.pv_control_dp_shadow_predicted_soc.
+The plan holds where the price is below it, runs the battery where it is above, charges where the price is below it ×
+the round trip — the line that makes a global plan readable against local prices. Near the horizon's end the end rule
+(the preferred minimum at midnight) sets it.
+

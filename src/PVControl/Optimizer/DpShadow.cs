@@ -31,7 +31,8 @@ namespace NetDeamon.apps.PVControl.Optimizer
   /// <param name="Soc">SoC at the slot start, %.</param>
   /// <param name="Mode">The DP's mode; "past" before now.</param>
   /// <param name="ExtraLoad">A planned extra load runs (the same loads as the greedy plan).</param>
-  public sealed record PredictedSocEntry(DateTime Time, int Soc, string Mode, bool ExtraLoad);
+  /// <param name="BatteryValue">What a delivered kWh from the battery is worth at the end of the quarter, €/kWh (<see cref="DpSlot.BatteryValue"/>); null for past quarters.</param>
+  public sealed record PredictedSocEntry(DateTime Time, int Soc, string Mode, bool ExtraLoad, float? BatteryValue = null);
 
   /// <summary>A grid charge of a plan: a block of consecutive force_charge quarters.</summary>
   /// <param name="Start">First quarter.</param>
@@ -171,7 +172,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
       var planned = dp.Slots.ToDictionary(s => s.Time);
       var loads = greedy.Slots.ToDictionary(s => s.Time, s => s.ExtraLoadWh > 0);
       return todayAndTomorrow.OrderBy(x => x.Key).Select(x => planned.TryGetValue(x.Key, out var slot)
-          ? new PredictedSocEntry(x.Key, slot.SocPct, slot.Mode.ToString(), loads.GetValueOrDefault(x.Key))
+          ? new PredictedSocEntry(x.Key, slot.SocPct, slot.Mode.ToString(), loads.GetValueOrDefault(x.Key), slot.BatteryValue)
           : new PredictedSocEntry(x.Key, x.Value, "past", false))
         .ToList();
     }
@@ -187,6 +188,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
       data_actual = entries.Select(e => new
       {
         datetime = e.Time.ToISO8601(), soc = e.Soc, mode = e.Mode, extra_load = e.ExtraLoad, export_allowed = true,
+        battery_value = e.BatteryValue,
       }),
     };
 

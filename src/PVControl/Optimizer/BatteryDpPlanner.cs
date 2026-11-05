@@ -40,8 +40,11 @@ public sealed record DpOptions(
 /// <param name="GridExportWh">Grid export, Wh.</param>
 /// <param name="BatteryChargeWh">Battery charge, Wh.</param>
 /// <param name="BatteryDischargeWh">Battery discharge, Wh.</param>
+/// <param name="BatteryValue">What a kWh the battery delivers is worth at the end of the quarter, €/kWh: how much cheaper
+/// the rest of the plan gets with it (<see cref="BatteryDpPlanner.BatteryValueOf"/>). Above it the battery covers the
+/// house, below it the plan buys from the grid and keeps the battery — the line that explains the plan's holds.</param>
 public sealed record DpSlot(DateTime Time, int SocPct, InverterModes Mode, bool Bulk, int TargetSocPct,
-  int GridImportWh, int GridExportWh, int BatteryChargeWh, int BatteryDischargeWh);
+  int GridImportWh, int GridExportWh, int BatteryChargeWh, int BatteryDischargeWh, float BatteryValue = 0);
 
 /// <summary>What a plan costs over the horizon, €: <see cref="Total"/> = grid cost + penalties − the value of the energy left at the end.</summary>
 /// <param name="GridCost">Import cost − export earnings.</param>
@@ -261,8 +264,10 @@ public static class BatteryDpPlanner
         var a = i == 0 ? first ?? FirstAction(input, o, policy[0][StateOf(energy)], times[0], pv, load + extra, energy, fractions[0], e => ValueAt(value[1], e))
           : policy[i][StateOf(energy)];
         var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
-        list.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis));
-        energy = input.NextEnergyWh(energy, ch, dis);
+        int next = input.NextEnergyWh(energy, ch, dis);
+        list.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis,
+          BatteryValueOf(input, value[i + 1], next, ValueAt)));
+        energy = next;
       }
       return (list, energy);
     }
@@ -326,6 +331,26 @@ public static class BatteryDpPlanner
       return input.GridCostOf(time, imp, exp) + band + floor + restValue(input.NextEnergyWh(energy, ch, dis));
     }
     return Rest(keep) <= Rest(planned) + o.KeepModeEur ? keep : planned;
+  }
+
+  /// <summary>
+  /// What a delivered kWh from the battery is worth at an energy, €/kWh: the slope of the rest's cost over ±1 % SoC
+  /// (the DP's table: one kWh more in the battery makes the rest of the plan that much cheaper — a shadow price), per
+  /// stored kWh and then per delivered kWh (÷ the discharge efficiency), so it compares with the import price. Near the
+  /// floor the floor's penalty makes it huge: limited to 0…1 €/kWh.
+  /// </summary>
+  /// <param name="input">Simulation input (with the DP's losses).</param>
+  /// <param name="rest">Cost of the rest by state (the DP's table for the next quarter).</param>
+  /// <param name="energyWh">Energy at the end of the quarter, Wh.</param>
+  /// <param name="valueAt">The table's interpolation.</param>
+  internal static float BatteryValueOf(SimulationInput input, float[] rest, int energyWh, Func<float[], int, float> valueAt)
+  {
+    int step = input.SocToWh(1);
+    int lo = Math.Max(0, energyWh - step), hi = Math.Min(input.BatteryCapacityWh, energyWh + step);
+    if (hi <= lo) return 0;
+    double perStoredKwh = (valueAt(rest, lo) - valueAt(rest, hi)) / ((hi - lo) / 1000.0);
+    double perDeliveredKwh = perStoredKwh * input.DrawnWh(1000) / 1000.0;
+    return (float)Math.Round(Math.Clamp(perDeliveredKwh, 0, 1), 4);
   }
 
   /// <summary>An action of a quarter: a mode, and for a grid charge its path and target.</summary>

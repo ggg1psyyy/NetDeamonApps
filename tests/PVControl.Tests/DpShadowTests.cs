@@ -133,6 +133,9 @@ public class DpShadowTests : TestBase, IDisposable
     var fromNow = entries.Where(e => e.Time >= now).ToList();
     Assert.Equal(dp.Slots.Select(s => s.SocPct), fromNow.Select(e => e.Soc));
     Assert.Equal(dp.Slots.Select(s => s.Mode.ToString()), fromNow.Select(e => e.Mode));
+    // the battery value per quarter from now on (the line explaining the holds), none for the past
+    Assert.Equal(dp.Slots.Select(s => (float?)s.BatteryValue), fromNow.Select(e => e.BatteryValue));
+    Assert.All(entries.Where(e => e.Time < now), e => Assert.Null(e.BatteryValue));
   }
 
   /// <summary>An input with everything a snapshot has to carry: hourly prices, a grid-fed EV session and a battery-fed
