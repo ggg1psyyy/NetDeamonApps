@@ -1,5 +1,6 @@
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl;
+using NetDeamon.apps.PVControl.Optimizer;
 using NetDeamon.apps.PVControl.Simulator;
 using Xunit;
 using Xunit.Abstractions;
@@ -140,4 +141,37 @@ public class EvDirectFromGridTests : TestBase
     Assert.True(direct.NetGridCostVs(baseline) < viaBattery.NetGridCostVs(baseline),
       $"direct {direct.NetGridCostVs(baseline):F3} € vs battery {viaBattery.NetGridCostVs(baseline):F3} €");
   }
+
+  [Fact]
+  public void ChooseSupply_RunningViaTheBattery_StaysSo()
+  {
+    // The session that alone runs from the grid: once it runs via the battery it keeps that supply.
+    var input = Input();
+    var baseline = EnergySimulator.Simulate(input);
+    var (load, _) = SessionPlanner.ChooseSupply(l => input.SimulateWith(l), Ev(Midnight.AddHours(5), Midnight.AddHours(6).AddMinutes(8)), baseline,
+      keepFromGrid: false);
+    Assert.False(load.FromGrid);
+  }
+
+  [Fact]
+  public void ChooseSupply_DearNow_CheaperRefillLater_UsesTheBattery()
+  {
+    // Live 2026-11-06 06:15 (the stored planning situation): a short drive, the EV (PriorityPlus, ready-by target 25 %)
+    // at 23 %; house battery 41 %, preferred 20 %. The battery's energy is bought back later in a cheaper charge, so
+    // the battery path adds grid — but less than the dear morning quarters directly: the EV runs via the battery.
+    var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-06_0615.json.gz"));
+    var input = ForecastSnapshot.FromBytes(bytes).ToInput();
+    var ev = input.ExtraLoads.Single(e => e.Name == "EV Charger");
+    var house = input.WithExtraLoads([.. input.ExtraLoads.Where(e => e != ev)]);
+    var baseline = EnergySimulator.Simulate(house);
+    var viaBattery = house.SimulateWith(ev.WithFromGrid(false));
+    var direct = house.SimulateWith(ev.WithFromGrid(true));
+    Assert.True(viaBattery.HasNewGridVs(baseline), "the old rule's case: the battery path adds grid somewhere");
+    Assert.True(viaBattery.NetGridCostVs(baseline) < direct.NetGridCostVs(baseline),
+      $"battery {viaBattery.NetGridCostVs(baseline):F3} € vs direct {direct.NetGridCostVs(baseline):F3} €");
+
+    var (load, _) = SessionPlanner.ChooseSupply(l => house.SimulateWith(l), ev, baseline);
+    Assert.False(load.FromGrid);
+  }
 }
+

@@ -1218,3 +1218,16 @@ more than the ~1 ct the battery saved before 23:00 — the user lowered the pref
 costs now only where the battery delivers (`PlanEvaluation.BandApplies`: normal, feedin_priority, force_discharge) —
 in the DP's decisions and the plan's cost alike.
 
+### A grid session's supply by cost, not by "any new grid"
+
+`SessionPlanner.ChooseSupply` ran a PriorityPlus session via the house battery only if that added no grid import
+anywhere in the horizon. In winter the battery is refilled from the grid every night, so any battery use adds grid
+somewhere and every session ran directly from the grid. Live 2026-11-06 06:12, after a short drive (EV 23 %,
+ready-by target 25 %), the house battery at 40 % (preferred 20 %) was held (`grid_only`) at the dear morning price
+until the user overrode it; via the battery the same energy is bought back later at ~0.40 plus the round trip. The
+choice now compares both supplies' `NetGridCostVs` (extra grid cost and the round-trip loss of extra battery use):
+the battery if it needs no extra grid or costs less, a tie goes to the grid — the 2026-10-25 night charge at 34.9 ct
+only to feed the EV still loses to the grid. A running session keeps its supply both ways (before, only a grid
+session was kept). This also lets a cheap charge before a dearer stretch feed a night session through the battery
+when that pays after the losses.
+

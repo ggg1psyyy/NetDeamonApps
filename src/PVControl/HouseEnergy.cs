@@ -1112,10 +1112,10 @@ namespace NetDeamon.apps.PVControl
       {
         // A running session is never stopped just to wait for a cheaper start later. A planned
         // later start from last cycle stays preferred (see FindBestPriceAwareStart).
-        // A session that needs no extra grid may use the house battery (like Priority); once it imports,
-        // it takes that energy directly from the grid, not via the battery (wear, round-trip losses).
-        // A running session supplied directly from the grid stays so (no flip-flop with the battery).
-        bool keepFromGrid = wasActive && previousLoads.FirstOrDefault()?.FromGrid == true;
+        // A session uses the house battery if that needs no extra grid (like Priority) or costs less than
+        // directly from the grid (round-trip loss included); otherwise it runs directly from the grid.
+        // A running session keeps its supply (no flip-flop between battery and grid).
+        bool? keepFromGrid = wasActive ? previousLoads.FirstOrDefault()?.FromGrid : null;
         // A split session (two blocks) whose first block has ended pauses as planned: it isn't "running" for the
         // rule that keeps a running session going — that rule is for noise, not for the planned pause.
         bool running = wasActive && !(previousLoads.Count > 1 && previousLoads[0].EndTime <= now);

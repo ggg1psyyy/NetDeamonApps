@@ -406,7 +406,9 @@ public class SessionPlannerTests : TestBase
   {
     var input = Input(12, Dip(middle));
     var baseline = EnergySimulator.Simulate(input);
-    SimulationResult Run(IReadOnlyList<ExtraLoad> l) => SessionPlanner.ChooseSupply(x => input.SimulateWith(x), l, baseline).Sim;
+    // Directly from the grid (the split is about the grid's prices; via the battery the cheap 23:00 hour would feed
+    // the dear middle and no split were needed — ChooseSupply's cost choice, EvDirectFromGridTests).
+    SimulationResult Run(IReadOnlyList<ExtraLoad> l) => SessionPlanner.ChooseSupply(x => input.SimulateWith(x), l, baseline, keepFromGrid: true).Sim;
     var unbroken = SessionPlanner.FindBestPriceAwareStart(Night, Night.AddHours(8), ThreeHoursWh, EvW,
       (a, b) => Run([Ev(a, b)]), baseline)!.Value;
     Assert.Equal(Night.AddHours(2), unbroken.Start); // the best unbroken: 01:00 — one hour of the middle, then the cheap two

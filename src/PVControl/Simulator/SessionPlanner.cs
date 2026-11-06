@@ -227,44 +227,49 @@ public static class SessionPlanner
 
 
   /// <summary>
-  /// How a session is supplied: from PV and the house battery if that needs no extra grid (like
-  /// Priority), otherwise directly from the grid (<see cref="ExtraLoad.FromGrid"/>: battery held while
-  /// it runs without enough PV) — grid energy doesn't take the detour through the battery.
+  /// How a session is supplied: from PV and the house battery if that needs no extra grid (like Priority) or
+  /// costs less than directly from the grid (<see cref="SimulationResult.NetGridCostVs"/>, with the round-trip
+  /// loss), otherwise directly from the grid (<see cref="ExtraLoad.FromGrid"/>: battery held while it runs without
+  /// enough PV); a tie goes to the grid. In winter the battery is refilled from the grid every night, so any
+  /// battery use adds grid somewhere — what counts is when: live 2026-11-06 06:12 the EV (23 → 25 %) ran from the
+  /// grid at the dear morning price with the battery at 40 %, its energy refilled later at ~0.40.
   /// </summary>
   /// <param name="simulate">Simulates with the session added.</param>
   /// <param name="session">The session (its <see cref="ExtraLoad.FromGrid"/> is ignored).</param>
   /// <param name="baseline">Simulation without it.</param>
-  /// <param name="keepFromGrid">The session runs directly from the grid already: it stays so (live 2026-10-28
-  /// 03:53–05:00 the choice flipped every ~10 min and the EV drew the battery a night charge had just filled).</param>
+  /// <param name="keepFromGrid">A running session keeps its supply (true: from the grid, false: via the battery; null:
+  /// choose) — live 2026-10-28 03:53–05:00 the choice flipped every ~10 min and the EV drew the battery a night charge
+  /// had just filled.</param>
   /// <returns>The session as supplied and its simulation.</returns>
   public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline,
-    bool keepFromGrid = false)
+    bool? keepFromGrid = null)
   {
     var (loads, sim) = ChooseSupply(l => simulate(l[0]), [session], baseline, keepFromGrid);
     return (loads[0], sim);
   }
 
-  /// <summary>The supply choice for a session in several blocks (<see cref="FindSplit"/>): all blocks from PV and the
-  /// battery if that needs no extra grid, otherwise all directly from the grid; a running grid session stays so.</summary>
+  /// <summary>The supply choice for a session in several blocks (<see cref="FindSplit"/>): all blocks via the battery
+  /// or all directly from the grid, chosen as for one session; a running session keeps its supply.</summary>
   /// <param name="simulate">Simulates with the sessions added.</param>
   /// <param name="sessions">The blocks.</param>
   /// <param name="baseline">Simulation without them.</param>
-  /// <param name="keepFromGrid">The session runs directly from the grid already.</param>
+  /// <param name="keepFromGrid">A running session's supply (true: grid, false: battery); null: choose.</param>
   /// <returns>The blocks as supplied and their simulation.</returns>
   public static (IReadOnlyList<ExtraLoad> Loads, SimulationResult Sim) ChooseSupply(Func<IReadOnlyList<ExtraLoad>, SimulationResult> simulate,
-    IReadOnlyList<ExtraLoad> sessions, SimulationResult baseline, bool keepFromGrid = false)
+    IReadOnlyList<ExtraLoad> sessions, SimulationResult baseline, bool? keepFromGrid = null)
   {
     List<ExtraLoad> As(bool fromGrid) => sessions.Select(e => e.WithFromGrid(fromGrid)).ToList();
-    if (keepFromGrid)
+    if (keepFromGrid is { } keep)
     {
-      var kept = As(true);
+      var kept = As(keep);
       return (kept, simulate(kept));
     }
     var viaBattery = As(false);
     var sim = simulate(viaBattery);
     if (!sim.HasNewGridVs(baseline)) return (viaBattery, sim);
     var direct = As(true);
-    return (direct, simulate(direct));
+    var directSim = simulate(direct);
+    return sim.NetGridCostVs(baseline) < directSim.NetGridCostVs(baseline) ? (viaBattery, sim) : (direct, directSim);
   }
 
   /// <summary>Saving a split needs over the unbroken session, as a fraction of its cost (every block is one more on/off of the charger).</summary>
