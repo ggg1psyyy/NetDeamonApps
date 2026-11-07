@@ -97,6 +97,7 @@ public sealed class WarmWaterController
   /// <returns>The reason; null to keep the plan.</returns>
   public string? ReplanReason(DateTime now)
   {
+    if (AwaitsFirstFit(LastFit, _fitAttempted)) return null;
     if (LastPlan is not { } last) return "first plan";
     if (_replanRequest is { } requested) return requested;
     if (Heating != _lastHeating) return "heating started/stopped";
@@ -189,7 +190,18 @@ public sealed class WarmWaterController
   public static bool RefitDue(DateTime? lastFit, DateTime? lastAttempt, DateTime now) =>
     (lastFit is null || now - lastFit.Value >= RefitInterval) && (lastAttempt is null || now - lastAttempt.Value >= RefitRetry);
 
+  /// <summary>
+  /// Whether the controller waits for the first tank model after a start: no plan and no control decision until the
+  /// first refit has finished (successfully or not) — the refit runs in the background after the start (it held up
+  /// InitializeAsync for ~17 s), and a plan from <see cref="TankModel.Default"/> could start a heating the learned
+  /// model wouldn't plan. A failed first fit ends the wait too: the default model is used and retried hourly.
+  /// </summary>
+  /// <param name="lastFit">Last successful fit; null = none yet.</param>
+  /// <param name="attemptFinished">A refit has finished since the start.</param>
+  public static bool AwaitsFirstFit(DateTime? lastFit, bool attemptFinished) => lastFit is null && !attemptFinished;
+
   private DateTime? _lastFitAttempt;
+  private volatile bool _fitAttempted;   // set by the background refit, read by the cycle
   private Task? _refit;
 
   /// <summary>Starts the daily refit in the background and carries out this cycle's control decision (<see cref="WarmWaterControl.Decide"/>).</summary>
@@ -199,6 +211,11 @@ public sealed class WarmWaterController
     // The refit reads ~10 days of HA history (20–40 requests): off the 15-s cycle, one at a time.
     if (_refit is not { IsCompleted: false } && RefitDue(LastFit, _lastFitAttempt, now))
       _refit = Task.Run(() => RefitAsync(CancellationToken.None));
+    if (AwaitsFirstFit(LastFit, _fitAttempted))
+    {
+      ControlReason = "Learning the tank model";
+      return;
+    }
 
     if (Temperature is not { } temp
         || OnOff(Config.OneTimeSwitchEntity) is not { } switchOn
@@ -301,6 +318,10 @@ public sealed class WarmWaterController
     catch (Exception ex)
     {
       PVCC_Logger.LogError(ex, "{name}: learning the tank model failed — keeping {model}", Config.Name, Model);
+    }
+    finally
+    {
+      _fitAttempted = true;
     }
   }
 

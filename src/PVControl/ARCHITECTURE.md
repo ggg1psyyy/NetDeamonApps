@@ -1252,3 +1252,13 @@ bulk charges and more mode switches. The `shadow` table's € columns aren't com
 version, the greedy plan's lossy replay dominated by the floor penalty); both plans agreed on the current mode in 80 %
 of the quarters, mostly differing as greedy normal vs DP hold.
 
+### The tank model is learned after the start, not in it
+
+The warm-water tank model's first fit ran inside `InitializeAsync`: ~10 days of HA history in 20–40 requests, ~17 s
+on 2026-11-06 09:16 — NetDaemon warned "InitializeAsync is taking too long" on every start, and the apps loaded after
+PVControl waited for it. The first cycle now starts the fit in the background like the daily refit
+(`WarmWaterController.ActAsync`). Until that first fit has finished the controller neither plans nor switches
+(`AwaitsFirstFit`): a plan from `TankModel.Default` could start a one-time heating the learned model wouldn't plan,
+then stop it after the replan. A failed first fit ends the wait as well — the default model is used and the fit
+retried hourly, as before.
+

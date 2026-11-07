@@ -230,4 +230,14 @@ public class WarmWaterControlTests : TestBase
     Assert.True(WarmWaterController.RefitDue(null, t, t.AddHours(1)));                 // …but again after an hour, not a day
     Assert.True(WarmWaterController.RefitDue(t.AddDays(-2), t, t.AddHours(1)));        // an old fit, the last try failed
   }
+
+  [Fact]
+  public void AwaitsFirstFit_UntilTheFirstRefitFinished_SuccessOrNot()
+  {
+    var t = new DateTime(2026, 11, 7, 14, 0, 0);
+    Assert.True(WarmWaterController.AwaitsFirstFit(null, attemptFinished: false));   // just started: no plan, no control
+    Assert.False(WarmWaterController.AwaitsFirstFit(t, attemptFinished: true));      // learned
+    Assert.False(WarmWaterController.AwaitsFirstFit(null, attemptFinished: true));   // failed: the default model, retried hourly
+  }
 }
+

@@ -267,9 +267,9 @@ namespace NetDeamon.apps.PVControl
 
       if (_house.WarmWater is { } warmWater)
       {
+        // The tank model is learned in the background by the first cycle (WarmWaterController.ActAsync).
         foreach (var entity in warmWater.CommandEntities)
           await SubscribeCommandAsync(entity);
-        await warmWater.RefitAsync(cancellationToken);
       }
 
 #if !DEBUG
