@@ -26,7 +26,7 @@
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <!-- tools/LoadBacktest -->
-    <PackageVersion Include="Microsoft.ML" Version="3.0.1" />
-    <PackageVersion Include="Microsoft.ML.FastTree" Version="3.0.1" />
+    <PackageVersion Include="Microsoft.ML" Version="5.0.1" />
+    <PackageVersion Include="Microsoft.ML.FastTree" Version="5.0.1" />
   </ItemGroup>
 </Project>
