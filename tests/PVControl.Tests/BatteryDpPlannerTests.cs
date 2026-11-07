@@ -565,6 +565,17 @@ public class BatteryDpPlannerTests : TestBase
   }
 
   [Fact]
+  public void HorizonEnd_NoShortfallFromTheStateGrid()
+  {
+    // Live 2026-11-07 09:45: the plan aimed at the preferred minimum (20 %) on the 0.25-% grid and, followed with exact
+    // energies, ended at 19.96 % — 4.3 ct of the end rule for 5 Wh. Aimed half a state above, it ends at 20 %.
+    var input = Snapshot("forecast_snapshot_2026-11-07_0945.json.gz").ToInput();
+    var plan = BatteryDpPlanner.Plan(input);
+    Assert.Equal(0f, plan.Cost.EndShortfall);
+    Assert.True(plan.EndSocPct >= input.GetPreferredMinSoC());
+  }
+
+  [Fact]
   public void ChargeStart_ARunningChargeContinuesWithoutOne()
   {
     // Live 2026-11-07 11:00, the cheapest hour of the day: a start cost of 1 € outweighs the hour's saving, so from

@@ -239,11 +239,15 @@ public static class BatteryDpPlanner
     var policy = new Action[n][][];
     value[n] = new float[layers][];
     float refill = PlanEvaluation.RefillPrice(input);
+    // The end rule aimed half a state above the preferred minimum: the plan is followed with exact energies from the
+    // nearest state's policy and drifts by up to half a step — aimed at exactly 20 % it ended at 19.9x % and paid the
+    // rule's 1 €/% (live 2026-11-07: 5 of 119 quarters, 1.7–9.5 ct). PlanEvaluation judges at exactly the minimum.
+    int endMarginWh = (int)Math.Ceiling(whPerState / 2);
     for (int c = 0; c < layers; c++)
     {
       value[n][c] = new float[states];
       for (int s = 0; s < states; s++)
-        value[n][c][s] = -PlanEvaluation.EndValue(input, WhOf(s), refill) + PlanEvaluation.EndShortfall(input, WhOf(s), o);
+        value[n][c][s] = -PlanEvaluation.EndValue(input, WhOf(s), refill) + PlanEvaluation.EndShortfall(input, WhOf(s) - endMarginWh, o);
     }
 
     var bestRestOf = new float[2];

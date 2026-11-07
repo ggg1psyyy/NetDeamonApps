@@ -1280,6 +1280,16 @@ unchanged (1.2–2.4 s). Replayed on 7 live snapshots (2026-11-05…07): 3–7 c
 at 0 the DP's 0.25-% grid already gave plans that much dearer. 1, 2 and 5 ct gave the same blocks; 1 ct, because a start
 cost also drops a whole charge that saves less than it: a synthetic night charge worth 2.2 ct survives 1 ct, not 2.
 
+### The end rule aimed half a state higher
+
+The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by
+up to half a step. Aimed at exactly the preferred minimum, a plan ended at 19.9x % and paid the end rule's 1 €/% — 5 of
+119 live quarters (2026-11-06 12:00 … 11-07 17:30), 1.7–9.5 ct each, in the reported total and in the comparison that
+starts a charge now (`ChargeNowEur`). The DP's own end value now applies the rule half a state higher; `PlanEvaluation`
+still judges at exactly the minimum. Replayed: 5 → 0 shortfalls, ~0.1 ct per plan (max 1.7) for the few Wh more at the
+end. Tried and dropped: choosing each quarter's action at the exact energy (0.6 ct dearer over 30 snapshots), a tolerance
+in the rule itself (2 shortfalls left, plans aimed at 19.75 %).
+
 ### The tank model is learned after the start, not in it
 
 The warm-water tank model's first fit ran inside `InitializeAsync`: ~10 days of HA history in 20–40 requests, ~17 s
