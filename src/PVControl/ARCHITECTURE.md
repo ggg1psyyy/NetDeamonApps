@@ -988,6 +988,9 @@ the host's folder, linq2db (PVControl's own) in the plugin's, and PVControl fail
 System.Data.SQLite", 17:39–17:46, rolled back). A reproduction with the plugin layout showed the plain call failing
 and the explicit one working; `SqliteOptionsTests` pins the explicit choice (in the test output both assemblies lie
 together, so the detection itself can't fail there).
+With linq2db 6 (2026-11-07) a `DateTime` went into the cost log as "2026-11-07 15:00:00.000" where every earlier row
+had "… 14:45:00"; `EnergyCostDb` converts its timestamps to text in the old format (`TimestampFormat`), so the column
+keeps one format for queries that match the text (PVControl itself only sorts it, which worked either way).
 
 ## Preferred minimum SoC: a band the plan keeps, not a second hard floor
 

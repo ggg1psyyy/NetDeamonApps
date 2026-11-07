@@ -64,6 +64,7 @@ Also references DataLogger: PVControl reads its DB — schema and file name.
 - **`HealthTests`** — `sensor.pv_control_health`: `HealthMonitor` debounce/escalation, restore after a restart, and `HealthChecks` (incl. `Instances`: a second live PVControl instance is an error) (reading HA/DB and publishing in `PVControl` aren't unit tested)
 - **`EntityRegistrationTests`** — when `RegisterSensor` publishes an entity's MQTT discovery config: option lists (selects/enums) on every start so HA follows `InverterModes` etc., the state kept on a republish
 - **`SqliteOptionsTests`** — every LinqToDB connection names Microsoft.Data.Sqlite (`SqliteOptions`), never LinqToDB's driver detection (live 2026-10-29: it failed once the driver lay only in the host's folder)
+- **`EnergyCostDbTests`** — the cost log's timestamps stay text without trailing zero fractions (`EnergyCostDb.TimestampFormat`; linq2db 6 wrote `.000`, live 2026-11-07 15:00), both formats read back
 - **`AppFilesTests`** — PVControl finds the DataLogger's DB from its own plugin folder (`../DataLogger/`), its cost DB in its folder
 
 `TestBase` (PVControl.Tests) initialises `PVControlCommon.PVCC_Logger` via reflection (private setter) so PVControl code can log without throwing.
