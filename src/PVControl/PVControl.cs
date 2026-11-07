@@ -635,6 +635,8 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Mode published last (and since when): a started grid charge runs at least
     /// <see cref="InverterCommand.MinChargeRun"/>.</summary>
     private InverterState _publishedState = new(InverterModes.normal);
+    /// <summary>The first cycle waited for the first DP plan (<see cref="WaitForFirstDpPlanAsync"/>).</summary>
+    private bool _waitedForFirstDpPlan;
     private DateTime _publishedStateSince;
 
     /// <summary>The import counters in priority order (kWh); null where one has no usable reading.</summary>
@@ -1070,6 +1072,7 @@ namespace NetDeamon.apps.PVControl
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
+      await WaitForFirstDpPlanAsync(now);
       var (dpTimeline, effective, dpStale) = Optimizer.DpSteering.Choose(_planner, _dpShadow?.LastPlan, _dpShadow?.Last?.ComputedAt, now, _house.SimulationState);
       if (effective != _effectivePlanner)
         PVCC_Logger.LogInformation("Planner steering: {Planner}{Stale}", effective, dpStale ? " (DP plan stale)" : "");
@@ -1095,7 +1098,7 @@ namespace NetDeamon.apps.PVControl
       await PublishPredictionsAsync(now);
       await PublishPricesAsync(now);
       await LogCostsAsync(now);
-      RunDpShadowIfDue(now);
+      _ = RunDpShadowIfDue(now);
       PVCC_Logger.LogTrace("Leave Schedule");
     }
 
@@ -1460,17 +1463,20 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>
     /// Starts the DP shadow in the background when due, on this cycle's greedy simulation, and publishes the comparison
-    /// (sensor.pv_control_dp_shadow). It never affects the cycle: not awaited, every failure only logged.
+    /// (sensor.pv_control_dp_shadow). Every failure is only logged; the cycle doesn't wait for it, except for the first
+    /// plan after a restart (<see cref="WaitForFirstDpPlanAsync"/>).
     /// </summary>
     /// <param name="now">Current time.</param>
-    private void RunDpShadowIfDue(DateTime now)
+    /// <param name="firstPlan">The cycle waits for this run: no extra cycle after it (the waiting cycle goes on with the plan).</param>
+    /// <returns>The run (completed if none was due).</returns>
+    private Task RunDpShadowIfDue(DateTime now, bool firstPlan = false)
     {
       if (_dpShadow is not { } shadow || _dpShadowEntity is not { } entity || _dpShadowSocEntity is not { } socEntity
           || !shadow.Due(now, steering: _planner == Optimizer.Planner.dp) || _house.SimulationState is not { } sim)
-        return;
+        return Task.CompletedTask;
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
-      bool requested = shadow.RunRequested;
-      _ = Task.Run(async () =>
+      bool requested = shadow.RunRequested && !firstPlan;
+      return Task.Run(async () =>
       {
         try
         {
@@ -1491,6 +1497,28 @@ namespace NetDeamon.apps.PVControl
           PVCC_Logger.LogWarning(ex, "DP shadow failed (the greedy plan is unaffected)");
         }
       });
+    }
+
+    /// <summary>The longest the first cycle after a restart waits for the first DP plan (it takes 2–4 s); after that the
+    /// greedy plan steers until the run is done, as for a stale plan.</summary>
+    private static readonly TimeSpan FirstDpPlanWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The first cycle after a restart with the DP selected computes the DP plan before it picks the plan that steers, so
+    /// the first published command is the DP's — not one greedy cycle (whose force charge the minimum run would hold
+    /// for a minute). Once per start; if that run fails, the greedy plan steers as for a stale plan.
+    /// </summary>
+    /// <param name="now">Current time.</param>
+    private async Task WaitForFirstDpPlanAsync(DateTime now)
+    {
+      if (!Optimizer.DpSteering.WaitsForFirstPlan(_planner, _dpShadow?.LastPlan, _waitedForFirstDpPlan))
+        return;
+      _waitedForFirstDpPlan = true;
+      var sw = System.Diagnostics.Stopwatch.StartNew();
+      var run = RunDpShadowIfDue(now, firstPlan: true);
+      bool done = await Task.WhenAny(run, Task.Delay(FirstDpPlanWait)) == run;
+      PVCC_Logger.LogInformation("First DP plan after start: {Result} after {Ms} ms",
+        done && _dpShadow?.LastPlan is not null ? "ready" : "not ready, greedy steers meanwhile", sw.ElapsedMilliseconds);
     }
 
     /// <summary>The cost log: one row per quarter (import/export totals and increases, the prices) in the energy costs DB.</summary>

@@ -113,6 +113,18 @@ public class DpSteeringTests : TestBase
   }
 
   [Fact]
+  public void WaitsForFirstPlan_OnlyDpSelectedWithoutPlan_OncePerStart()
+  {
+    var plan = BatteryDpPlanner.Plan(Input());
+    // After a restart with the DP selected: the first cycle computes the DP plan before choosing (no greedy cycle first).
+    Assert.True(DpSteering.WaitsForFirstPlan(Planner.dp, null, waitedBefore: false));
+    // Once only: a failed first run doesn't hold up every cycle — the greedy plan steers as for a stale plan.
+    Assert.False(DpSteering.WaitsForFirstPlan(Planner.dp, null, waitedBefore: true));
+    Assert.False(DpSteering.WaitsForFirstPlan(Planner.dp, plan, waitedBefore: false));
+    Assert.False(DpSteering.WaitsForFirstPlan(Planner.greedy, null, waitedBefore: false));
+  }
+
+  [Fact]
   public void DpPlannerHealth_OnlyWhenSelectedAndStale()
   {
     Assert.Empty(HealthChecks.DpPlanner(dpSelected: false, stale: false));

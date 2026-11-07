@@ -134,6 +134,14 @@ public static class DpSteering
     return s.Mode == InverterModes.force_charge ? ForceChargeReasons.CheaperThanLater : ForceChargeReasons.SavedForLater;
   }
 
+  /// <summary>Whether the cycle waits for the first DP plan before choosing: the DP is selected, has no plan yet, and the
+  /// cycle hasn't waited before (once per start — a failed first run doesn't hold up every cycle).</summary>
+  /// <param name="selected">The planner the user selected.</param>
+  /// <param name="plan">The last DP plan; null if none yet.</param>
+  /// <param name="waitedBefore">An earlier cycle already waited.</param>
+  public static bool WaitsForFirstPlan(Planner selected, DpPlan? plan, bool waitedBefore) =>
+    selected == Planner.dp && plan is null && !waitedBefore;
+
   /// <summary>Which plan steers now.</summary>
   /// <param name="selected">The planner the user selected.</param>
   /// <param name="plan">The last DP plan; null if none yet.</param>

@@ -1118,7 +1118,11 @@ before the planned evaluation). The command chain derives everything from one li
 such slots (`DpSteering.ToTimeline`) and override, minimum run, import cap guard, bulk/VPP path and
 the HA reconciler stay exactly as they are. The greedy simulation keeps running every cycle: the EV and warm-water
 planning, the predicted-SoC sensor and the comparison need it, and it is the fallback — a DP plan older than 10 min
-(a failed or hanging run) never steers, the greedy plan takes over and health says so. While the DP steers it runs
+(a failed or hanging run) never steers, the greedy plan takes over and health says so. After a restart the first cycle
+had no DP plan yet, so it published the greedy plan's command for one cycle — and a greedy force charge in it was held
+for the minimum run (1 min) whatever the DP said. The first cycle therefore waits for the first DP run (2–4 s; once per
+start, at most 30 s — a failed run then falls back as above) before it chooses (`DpSteering.WaitsForFirstPlan`), which
+was simpler and safer than restoring the last published command from HA. While the DP steers it runs
 every minute (~1 s in the background) so a changed SoC or forecast reaches the command quickly. Known gap: the DP's
 actions are normal, feedin_priority, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
 target charge exist in the greedy rules only.

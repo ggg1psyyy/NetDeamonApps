@@ -315,7 +315,8 @@ the background on the greedy run's input; it never reaches the inverter.
 
 **Which plan steers: `select.pv_control_planner`** (`greedy` / `dp`, default `greedy`). With `dp` the inverter command
 comes from the DP plan — the current quarter and the next grid charge; override, minimum run, import cap guard and the
-HA reconciler act on it exactly as on the greedy plan — and the DP runs every minute — and right after a user change (its plan then goes out with one more cycle). A DP plan older than 10 min (or
+HA reconciler act on it exactly as on the greedy plan — and the DP runs every minute — and right after a user change (its plan then goes out with one more cycle). After a start the
+first cycle waits for the first DP plan (2–4 s, at most 30 s) before it publishes a command. A DP plan older than 10 min (or
 none yet) never steers: the greedy plan takes over and `sensor.pv_control_health` reports "DP plan stale" (degraded).
 `sensor.pv_control_mode` shows `planner` (in effect) and `planner_selected`; a DP charge or hold carries its reason
 from the DP's own plan (`DpSteering.ReasonOf`): `LoadFromGrid` (held while the EV runs from the grid),
