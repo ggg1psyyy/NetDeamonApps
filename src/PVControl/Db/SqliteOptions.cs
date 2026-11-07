@@ -11,7 +11,7 @@ namespace PVControl
     /// Microsoft.Data.Sqlite lies in the host's folder, not next to linq2db in the plugin's.
     /// </summary>
     /// <param name="connectionString">SQLite connection string (<c>Data Source=…</c>).</param>
-    public static DataOptions For(string connectionString) => new DataOptions().UseSQLiteMicrosoft(connectionString);
+    public static DataOptions For(string connectionString) => new DataOptions().UseSQLite(connectionString, LinqToDB.DataProvider.SQLite.SQLiteProvider.Microsoft);
 
     /// <summary>Options for the SQLite DB file at <paramref name="path"/>.</summary>
     /// <param name="path">The DB file.</param>

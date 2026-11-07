@@ -9,8 +9,8 @@ namespace NetDeamonApps.Tests;
 /// <see cref="SqliteOptions"/>: PVControl's DBs use Microsoft.Data.Sqlite, named explicitly. LinqToDB's plain UseSQLite
 /// detects the driver by its assembly next to linq2db.dll and otherwise takes System.Data.SQLite — live 2026-10-29
 /// 17:39 PVControl failed to start ("Cannot load assembly System.Data.SQLite") once Microsoft.Data.Sqlite lay only in
-/// the host's folder. In the test output both lie together, so detection can't fail here: the tests pin the explicit
-/// choice instead.
+/// the host's folder. In the test output both lie together, so detection can't fail here (linq2db 6 resolves a plain
+/// UseSQLite to SQLite.MS too): the tests pin the explicit choice instead.
 /// </summary>
 public class SqliteOptionsTests : IDisposable
 {
@@ -24,11 +24,8 @@ public class SqliteOptionsTests : IDisposable
 
   [Fact]
   public void For_NamesTheMicrosoftDriver_NoDetection() =>
-    Assert.Equal(ProviderName.SQLiteMS, SqliteOptions.ForFile(_db).ConnectionOptions.ProviderName);
-
-  [Fact]
-  public void PlainUseSQLite_LeavesTheDriverToDetection() =>
-    Assert.Equal(ProviderName.SQLite, new DataOptions().UseSQLite("Data Source=" + _db).ConnectionOptions.ProviderName);
+    // linq2db 6: the provider is set as the data provider itself (SQLiteProvider.Microsoft), not as a provider name
+    Assert.Equal(ProviderName.SQLiteMS, SqliteOptions.ForFile(_db).ConnectionOptions.DataProvider?.Name);
 
   [Fact]
   public void ForFile_OpensAndQueriesTheDb()

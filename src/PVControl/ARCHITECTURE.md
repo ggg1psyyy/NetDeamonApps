@@ -981,7 +981,7 @@ All command entities are handled by `WarmWaterController.HandleCommandAsync` (ca
 
 ## SQLite driver for LinqToDB (`Db/SqliteOptions.cs`)
 
-Every LinqToDB connection goes through `SqliteOptions` (`UseSQLiteMicrosoft`), never the plain `UseSQLite`. The
+Every LinqToDB connection goes through `SqliteOptions` (`UseSQLite(…, SQLiteProvider.Microsoft)`; linq2db 5 called it `UseSQLiteMicrosoft`), never the plain `UseSQLite`. The
 plain one picks the driver by looking for its assembly next to linq2db.dll and otherwise takes System.Data.SQLite.
 On 2026-10-29 the plugins stopped carrying copies of what the host provides; Microsoft.Data.Sqlite then lay only in
 the host's folder, linq2db (PVControl's own) in the plugin's, and PVControl failed to start ("Cannot load assembly
