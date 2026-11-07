@@ -56,6 +56,9 @@ public class BatteryDpPlannerTests : TestBase
     slots.Where((s, i) => s.Mode == InverterModes.force_charge && (i == 0 || slots[i - 1].Mode != InverterModes.force_charge)).Select(s => s.Time);
 
   static readonly DpOptions O = new();
+  // Without the charge start cost: scenarios whose point is something else and that end in a small last charge (1 %
+  // at 03:00, 0.8 kWh at 03:15) worth less than a start (ChargeStart_* tests below).
+  static readonly DpOptions NoStartCost = new(ChargeStartEur: 0);
 
   public static IEnumerable<object[]> Scenarios() =>
   [
@@ -484,7 +487,7 @@ public class BatteryDpPlannerTests : TestBase
     // a hold where the price is under it, the battery where the price is over it.
     var bytes = System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-05_1145.json.gz"));
     var input = (ForecastSnapshot.FromBytes(bytes) with { PreferredMinSocPercent = 25 }).ToInput();
-    var plan = BatteryDpPlanner.Plan(input, O);
+    var plan = BatteryDpPlanner.Plan(input, NoStartCost);
     var timeline = DpSteering.ToTimeline(plan, EnergySimulator.Simulate(input));
     var holds = plan.Slots.Where(s => s.Mode == InverterModes.grid_only
       && timeline.First(t => t.Time == s.Time).State.ModeReason == ForceChargeReasons.SavedForLater).ToList();
@@ -511,7 +514,7 @@ public class BatteryDpPlannerTests : TestBase
       p.StartTime < Day.AddHours(22) ? 0.53f : p.StartTime < Day.AddHours(23) ? 0.52f : p.StartTime < Day.AddHours(27) ? 0.437f
       : p.StartTime < Day.AddHours(28) ? 0.426f : 0.44f)).ToList();
     var input = b.WithPrices(new PriceList(prices), b.ExportPrices);
-    var plan = BatteryDpPlanner.Plan(input, O);
+    var plan = BatteryDpPlanner.Plan(input, NoStartCost);
     var at23 = plan.Slots.Single(s => s.Time == Day.AddHours(23));
     Assert.True(at23.SocPct < 15, $"23:00 at {at23.SocPct} %: " + string.Join(", ", plan.Slots.Take(12).Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}")));
     Assert.DoesNotContain(plan.Slots.Where(s => s.Time >= Day.AddHours(22) && s.Time < Day.AddHours(23)), s => s.Mode == InverterModes.grid_only && s.SocPct > 13);
@@ -521,6 +524,69 @@ public class BatteryDpPlannerTests : TestBase
     Assert.False(PlanEvaluation.BandApplies(InverterModes.force_charge));
     Assert.Equal(0f, PlanEvaluation.Penalty(input, 10, O, InverterModes.grid_only).Band);
     Assert.Equal(5 * O.BandPenaltyPerPctQuarter, PlanEvaluation.Penalty(input, 10, O, InverterModes.normal).Band, 6);
+  }
+
+  // ── Charge start cost (DpOptions.ChargeStartEur) ──
+
+  static ForecastSnapshot Snapshot(string name) =>
+    ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", name)));
+
+  static List<(DateTime Start, int Quarters)> ChargeBlocks(DpPlan plan, DateTime before)
+  {
+    var blocks = new List<(DateTime, int)>();
+    for (int i = 0; i < plan.Slots.Count && plan.Slots[i].Time < before; i++)
+    {
+      if (plan.Slots[i].Mode != InverterModes.force_charge) continue;
+      int j = i;
+      while (j < plan.Slots.Count && plan.Slots[j].Mode == InverterModes.force_charge) j++;
+      blocks.Add((plan.Slots[i].Time, j - i));
+      i = j - 1;
+    }
+    return blocks;
+  }
+
+  [Fact]
+  public void ChargeStart_OneLongChargeInsteadOfABlockPlusTopUps()
+  {
+    // Live 2026-11-07 09:45: the midday hours 0.3815 / 0.3829 / 0.3825 — without a start cost the DP filled 11:00 (bulk)
+    // and topped up in five more short charges at +0.1 ct/kWh; with 1 ct per start one charge from 11:00, for < 1 ct.
+    var input = Snapshot("forecast_snapshot_2026-11-07_0945.json.gz").ToInput();
+    var free = BatteryDpPlanner.Plan(input, new DpOptions(ChargeStartEur: 0));
+    var plan = BatteryDpPlanner.Plan(input, new DpOptions());
+    var today = input.StartTime.Date.AddDays(1);
+
+    Assert.True(ChargeBlocks(free, today).Count >= 3, $"without a start cost: {ChargeBlocks(free, today).Count} charges");
+    var blocks = ChargeBlocks(plan, today);
+    Assert.Single(blocks);
+    Assert.Equal(input.StartTime.Date.AddHours(11), blocks[0].Start);
+    // The real plan cost (no start costs in PlanEvaluation) barely changes; the horizon's end is compared apart (its
+    // last quarters differ by the DP's state grid, not by the charges).
+    Assert.InRange(plan.Cost.GridCost - plan.Cost.EndValue - (free.Cost.GridCost - free.Cost.EndValue), -0.02f, 0.02f);
+  }
+
+  [Fact]
+  public void ChargeStart_ARunningChargeContinuesWithoutOne()
+  {
+    // Live 2026-11-07 11:00, the cheapest hour of the day: a start cost of 1 € outweighs the hour's saving, so from
+    // normal the DP doesn't start the charge — a charge already running (the current mode) continues at no start cost.
+    var snap = Snapshot("forecast_snapshot_2026-11-07_1100.json.gz");
+    var o = new DpOptions(ChargeStartEur: 1f);
+    var fromNormal = BatteryDpPlanner.Plan(snap.ToInput(), o);
+    var running = BatteryDpPlanner.Plan((snap with { CurrentMode = InverterModes.force_charge, CurrentBulk = true }).ToInput(), o);
+
+    Assert.NotEqual(InverterModes.force_charge, fromNormal.Slots[0].Mode);
+    Assert.Equal(InverterModes.force_charge, running.Slots[0].Mode);
+  }
+
+  [Fact]
+  public void ChargeStart_Zero_IsTheDpWithoutTheChargingFlag()
+  {
+    // 0 = off: the plan of the earlier DP (one state layer), e.g. tonight's top-ups of 2026-11-07 09:45 stay.
+    var input = Snapshot("forecast_snapshot_2026-11-07_0945.json.gz").ToInput();
+    var a = BatteryDpPlanner.Plan(input, new DpOptions(ChargeStartEur: 0));
+    var b = BatteryDpPlanner.Plan(input, new DpOptions(ChargeStartEur: 0));
+    Assert.Equal(a.Slots, b.Slots);
+    Assert.True(ChargeBlocks(a, input.StartTime.Date.AddDays(2)).Count > ChargeBlocks(BatteryDpPlanner.Plan(input), input.StartTime.Date.AddDays(2)).Count);
   }
 }
 

@@ -1265,6 +1265,21 @@ bulk charges and more mode switches. The `shadow` table's € columns aren't com
 version, the greedy plan's lossy replay dominated by the floor penalty); both plans agreed on the current mode in 80 %
 of the quarters, mostly differing as greedy normal vs DP hold.
 
+### One long charge: a cost per charge start (`ChargeStartEur`)
+
+With midday hours 0.1–0.4 ct apart (2026-11-07: 0.3815 / 0.3829 / 0.3825) the DP filled the cheapest hour first —
+bulk, to fit 5.2 kWh into it — and topped up in five more short charges in quarters 0.1 ct/kWh dearer; steering it
+every minute, near-ties flipped the mode on and off (10:01–10:21: four switches). VPP charges cost nothing extra (no
+wear), but the user wanted one long charge, bulk where it needs it, rather than a bulk block plus VPP top-ups. A cost
+per bulk quarter would have pushed charges onto VPP — the opposite; the event to price is the *start*. So the DP pays
+`DpOptions.ChargeStartEur` whenever a grid charge begins after a quarter without one (a charge running now continues
+without it); `PlanEvaluation` doesn't count it — it steers the shape, the € stay the real ones. The DP's state gets a
+"charged in the quarter before" flag (two layers; one with 0), each quarter's flows computed once for both: runtime
+unchanged (1.2–2.4 s). Replayed on 7 live snapshots (2026-11-05…07): 3–7 charges became one in every case (09:45 today:
+11:00–12:15, 6.6 kWh; tomorrow 13:00–14:00 on VPP instead of 08:00, 10:00 and 13:15 bulk), for −0.4 … +0.7 ct per plan —
+at 0 the DP's 0.25-% grid already gave plans that much dearer. 1, 2 and 5 ct gave the same blocks; 1 ct, because a start
+cost also drops a whole charge that saves less than it: a synthetic night charge worth 2.2 ct survives 1 ct, not 2.
+
 ### The tank model is learned after the start, not in it
 
 The warm-water tank model's first fit ran inside `InitializeAsync`: ~10 days of HA history in 20–40 requests, ~17 s

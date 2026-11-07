@@ -235,4 +235,5 @@ NetDeamon.apps.PVControl.PVConfig:
     Enabled: true
     IntervalMinutes: 5
     BandPenaltyPerPctQuarter: 0.0005   # ≈ 1.7 ct per kWh of reserve and hour: bridges a peak to a clearly cheaper charge
+    ChargeStartEur: 0.01   # € per grid charge started: one long charge instead of a block plus top-ups a fraction of a cent dearer; 0 = off
     DBLocation: "dp_shadow.db"
