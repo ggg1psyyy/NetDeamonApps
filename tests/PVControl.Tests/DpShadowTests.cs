@@ -65,6 +65,22 @@ public class DpShadowTests : TestBase, IDisposable
   }
 
   [Fact]
+  public void Charges_MeanPriceIsWeightedByEnergy_WithoutImportThePlainMean()
+  {
+    var input = Input(Day.AddHours(22), 30);
+    var blocks = DpShadow.Charges(input,
+    [
+      (Day.AddHours(22).AddMinutes(45), true, 3000),   // 0.44
+      (Day.AddHours(23), true, 1000),                  // 0.39
+      (Day.AddHours(23).AddMinutes(15), false, 0),
+      (Day.AddHours(22).AddDays(1), true, 0),          // charging from PV only: 0.44
+      (Day.AddHours(23).AddDays(1), true, 0),          // 0.39
+    ]);
+    Assert.Equal((0.44f * 3 + 0.39f) / 4, blocks[0].AvgPrice, 4);   // not the plain 0.415
+    Assert.Equal((0.44f + 0.39f) / 2, blocks[1].AvgPrice, 4);
+  }
+
+  [Fact]
   public void Report_ComparesBothPlansUnderTheOneModel()
   {
     var input = Input(Day.AddHours(22), 29);

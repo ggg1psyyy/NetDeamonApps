@@ -78,7 +78,7 @@ of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
   ~7 h before the low aims ~4 % higher; a low an hour away gets none.
 - **Charge vs hold** (`ChargingBeatsHolding`): the cheapest quarter is only charged in if it's
   cheaper than the hours to bridge (latest charge time → PV takeover after it, `PvTakeoverAfter`:
-  PV above house load + extra loads), round trip (efficiency²) included — or under
+  PV above house load + extra loads) per kWh delivered (`SimulationInput.DeliveredPrice`) — or under
   `ForceChargeMaxPrice`. Otherwise the floor is held with `grid_only`, which buys only the load.
   The span used to end at the first PV takeover after *now*: at midday that's the PV running now,
   so a low tonight fell back to one hour after it. Live 2026-10-26 13:30 (44 %, low ~01:30): 0.3649
@@ -771,8 +771,11 @@ by `SessionPlanner.ChooseSupply`: PV + battery if that needs no extra grid (like
 ready-by target in the morning from the battery), otherwise FromGrid: while it runs and PV doesn't cover
 house + load, the battery is held (`grid_only`; the inverter can't feed the house and not the EV), or
 the load runs along a force_charge the house needs in that quarter anyway; the look-ahead doesn't count
-it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge
-(`SimulationInput.RoundTripEfficiency`, also used by `ChargingBeatsHolding`). The missing energy and the loss are
+it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge. The round trip has one
+price function, `SimulationInput.DeliveredPrice` = price per kWh charged ÷ `RoundTripEfficiency` — what a kWh the
+battery delivers costs; `NetGridCostVs`, `ChargingBeatsHolding` and the loads' cost totals all use it (until
+2026-11-07 they had three formulas: `NetGridCostVs` the approximation × (1 − rt), 9.75 % instead of 10.8 % at 0.95;
+`ChargingBeatsHolding` hold − |hold| × (1 − rt), the same for positive prices; the totals none). The missing energy is
 valued at the refill price (`SimulationInput.RefillPrice` = `PlanEvaluation.RefillPrice`: the cheapest import of the
 horizon's last 24 h, the DP's end value). Until 2026-11-07 that was the mean import price: peaks included, it made a
 kWh taken from the battery ~10 % dearer than its next charge (0.40 vs 0.36 that day) and pushed EV sessions onto
@@ -947,7 +950,7 @@ simulation's `NetGridCostVs` (mean outside the prices), and the € come from on
 `SourceShares.Cost`, for all three: the only difference is its `pvPrice` parameter. Money paid
 (battery average cost, loads' cost totals) passes 0 — PV is free. The average cost is per kWh *charged* (the
 battery input counter); a load fed by the battery uses delivered energy, so the loads' totals price the battery
-share at `CostTracker.DeliveredCostPerKwh` = average ÷ round trip (0.355 → 0.39 at 0.95 per direction; measured
+share at `SimulationInput.DeliveredPrice` = average ÷ round trip (0.355 → 0.39 at 0.95 per direction; measured
 0.86–0.89, 2026-11-02 — until 2026-11-07 it was booked at the average, ~10 % too cheap). `NetGridCostVs` (behind the
 slot prices of the warm water and the EV) passes the export price: per slot it costs the import
 and earns the export (export = PV not used, a negative PV amount), which values PV by the export

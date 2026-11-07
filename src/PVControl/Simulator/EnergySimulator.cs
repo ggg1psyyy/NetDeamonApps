@@ -494,8 +494,7 @@ public static class EnergySimulator
     if (window.Count == 0 || bridged.Count == 0)
       return true;
     float holdPrice = bridged.Average(p => p.Price);
-    float roundTrip = input.RoundTripEfficiency;
-    return window.Min(p => p.Price) < holdPrice - Math.Abs(holdPrice) * (1 - roundTrip);
+    return input.DeliveredPrice(window.Min(p => p.Price)) < holdPrice;
   }
 
   /// <summary>First slot after a time in which PV covers the load incl. extra loads (solar takes over from the battery/grid).</summary>

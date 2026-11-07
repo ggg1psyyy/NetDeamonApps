@@ -300,7 +300,7 @@ namespace NetDeamon.apps.PVControl
           float effectivePrice = SourceShares
             .ForLoad(schedPowerW, Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower)
             .Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now),
-              CostTracker.DeliveredCostPerKwh(Costs.BatteryAvgCostPerKwh, SimulationInput.RoundTrip(Battery.InverterEfficiency)));
+              SimulationInput.DeliveredPrice(Costs.BatteryAvgCostPerKwh, SimulationInput.RoundTrip(Battery.InverterEfficiency)));
 
           // Maintain totals in memory — never read back from the entity to avoid the
           // MQTT read-modify-write race that causes exponential accumulation.

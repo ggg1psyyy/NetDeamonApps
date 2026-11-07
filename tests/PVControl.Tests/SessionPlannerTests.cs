@@ -347,8 +347,10 @@ public class SessionPlannerTests : TestBase
     Assert.False(withEv.HasNewGridVs(baseline));
     Assert.Equal(0.20f, input.RefillPrice, 4);
     float evKwh = EvW * TwoHours / 60f / 1000f;
-    float expected = evKwh * (2 - input.RoundTripEfficiency) * 0.20f;   // the energy plus its round-trip loss
-    Assert.Equal(expected, withEv.NetGridCostVs(baseline), 2);
+    float expected = evKwh / input.RoundTripEfficiency * 0.20f;   // what refilling the delivered energy takes
+    // The end SoC is whole % (1 % = 115 Wh ≈ 0.023 € here); the mean price would give ~1.7 €.
+    float onePct = BatCap / 100f / 1000f * 0.20f;
+    Assert.InRange(withEv.NetGridCostVs(baseline), expected - onePct, expected + onePct);
   }
 
   [Theory]

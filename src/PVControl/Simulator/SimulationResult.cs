@@ -183,10 +183,11 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   /// <summary>
   /// Extra grid cost vs the baseline: import cost − export earnings over the horizon (lost export
-  /// counts), plus the battery energy missing at the end and the round-trip loss of the extra energy the
-  /// load takes out of the battery (it has to be put back in), both at the refill price
+  /// counts), plus the battery energy missing at the end at the refill price
   /// (<see cref="SimulationInput.RefillPrice"/>: the cheapest import of the horizon's last 24 h, as the DP's end value —
-  /// the mean, peaks included, made battery energy look dearer than its next charge).
+  /// the mean, peaks included, made battery energy look dearer than its next charge), plus the round-trip loss of the
+  /// extra energy the load takes out of the battery: refilling it costs <see cref="SimulationInput.DeliveredPrice(float)"/>
+  /// per kWh delivered, the refill price of which the missing energy already counts.
   /// </summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>€; prices via <see cref="PriceList.GetPriceOrMean"/>, PV valued at the export price (<see cref="SourceShares.Cost"/>).</returns>
@@ -194,8 +195,9 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
   {
     float missingEndKwh = _input.SocToWh(baseline.Slots[^1].SoC - Slots[^1].SoC) / 1000f;
     float extraDischargeKwh = Math.Max(0, Slots.Sum(s => s.BatteryDischargeWh) - baseline.Slots.Sum(s => s.BatteryDischargeWh)) / 1000f;
-    float roundTripLossKwh = extraDischargeKwh * (1 - _input.RoundTripEfficiency);
-    return OwnGridCost - baseline.OwnGridCost + (missingEndKwh + roundTripLossKwh) * _input.RefillPrice;
+    float refill = _input.RefillPrice;
+    float roundTripLoss = extraDischargeKwh * (_input.DeliveredPrice(refill) - refill);
+    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * refill + roundTripLoss;
   }
 
   /// <summary>Import cost − export earnings of this run over the horizon, € (sensor.pv_control_mode's <c>grid_eur</c>, the

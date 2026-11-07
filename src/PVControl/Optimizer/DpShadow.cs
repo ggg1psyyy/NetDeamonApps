@@ -134,25 +134,30 @@ namespace NetDeamon.apps.PVControl.Optimizer
         gMin.SoC, gMin.Time, dMin.SocPct, dMin.Time, greedy.Slots[0].SoC);
     }
 
-    /// <summary>The grid charges of a plan: blocks of consecutive charging quarters with their energy and mean price.</summary>
+    /// <summary>The grid charges of a plan: blocks of consecutive charging quarters with their energy and mean price (weighted by energy).</summary>
     /// <param name="input">Simulation input (prices).</param>
     /// <param name="slots">(slot start, charging, grid import Wh) per quarter.</param>
     public static List<ChargeBlock> Charges(SimulationInput input, IEnumerable<(DateTime Time, bool Charging, int ImportWh)> slots)
     {
       var blocks = new List<ChargeBlock>();
-      DateTime? start = null; DateTime last = default; int wh = 0; float priceSum = 0; int n = 0;
+      // The price weighted by the quarters' grid import (a full bulk quarter outweighs a 0.1-kWh tail); a block without
+      // import (all PV) the plain mean.
+      DateTime? start = null; DateTime last = default; int wh = 0; double weighted = 0; float priceSum = 0; int n = 0;
       void Close()
       {
-        if (start is { } s) blocks.Add(new ChargeBlock(s, last.AddMinutes(TimeRange.SlotMinutes), wh / 1000f, n > 0 ? priceSum / n : 0));
-        start = null; wh = 0; priceSum = 0; n = 0;
+        if (start is { } s)
+          blocks.Add(new ChargeBlock(s, last.AddMinutes(TimeRange.SlotMinutes), wh / 1000f, wh > 0 ? (float)weighted : n > 0 ? priceSum / n : 0));
+        start = null; wh = 0; weighted = 0; priceSum = 0; n = 0;
       }
       foreach (var (time, charging, importWh) in slots)
       {
         if (!charging) { Close(); continue; }
         start ??= time;
         last = time;
-        wh += importWh;
-        priceSum += input.ImportPrices.GetPriceOrMean(time);
+        float price = input.ImportPrices.GetPriceOrMean(time);
+        if (importWh > 0) weighted = Mean.Weighted(weighted, wh, price, importWh);
+        wh += Math.Max(0, importWh);
+        priceSum += price;
         n++;
       }
       Close();

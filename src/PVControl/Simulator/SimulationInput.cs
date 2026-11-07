@@ -105,6 +105,21 @@ public class SimulationInput
   /// <param name="perDirection">Inverter efficiency of one direction.</param>
   public static float RoundTrip(float perDirection) => perDirection * perDirection;
 
+  /// <summary>
+  /// What a kWh the battery delivers costs when a kWh charged costs <paramref name="chargePrice"/>, €/kWh: only the round
+  /// trip comes back out (measured 2026-11-02: 0.86–0.89). The one round-trip price — the loads' battery share (average
+  /// cost per kWh charged), <see cref="SimulationResult.NetGridCostVs"/> (refill price) and the greedy charge-vs-hold
+  /// comparison. A negative price stays negative (paid per kWh charged, more per kWh delivered).
+  /// </summary>
+  /// <param name="chargePrice">Cost of a kWh charged, €/kWh.</param>
+  /// <param name="roundTripEfficiency">Share left after charge and discharge (<see cref="RoundTrip"/>); ≤ 0 = unknown, the price as is.</param>
+  public static float DeliveredPrice(float chargePrice, float roundTripEfficiency) =>
+    roundTripEfficiency > 0 ? chargePrice / roundTripEfficiency : chargePrice;
+
+  /// <summary><see cref="DeliveredPrice(float, float)"/> at this input's <see cref="RoundTripEfficiency"/>.</summary>
+  /// <param name="chargePrice">Cost of a kWh charged, €/kWh.</param>
+  public float DeliveredPrice(float chargePrice) => DeliveredPrice(chargePrice, RoundTripEfficiency);
+
   private float? _refillPrice;
   /// <summary><see cref="PlanEvaluation.RefillPrice"/> of this input, €/kWh (computed once per input).</summary>
   public float RefillPrice => _refillPrice ??= PlanEvaluation.RefillPrice(this);
