@@ -47,6 +47,16 @@ public class CostTracker
 
   public float BatteryAvgCostPerKwh => _batteryAvgCostPerKwh;
 
+  /// <summary>
+  /// What a kWh the battery delivers cost, €/kWh: the average cost is per kWh charged (the battery input counter), and
+  /// only the round trip of it comes back out (measured 2026-11-02: 0.86–0.89) — an extra load fed by the battery uses
+  /// delivered energy.
+  /// </summary>
+  /// <param name="avgCostPerKwh">Average cost per kWh charged (<see cref="BatteryAvgCostPerKwh"/>).</param>
+  /// <param name="roundTripEfficiency">Share left after charge and discharge (<see cref="Simulator.SimulationInput.RoundTrip"/>).</param>
+  public static float DeliveredCostPerKwh(float avgCostPerKwh, float roundTripEfficiency) =>
+    roundTripEfficiency > 0 ? avgCostPerKwh / roundTripEfficiency : avgCostPerKwh;
+
   /// <summary>Starts from the current daily import, export and battery input counters.</summary>
   /// <exception cref="NullReferenceException">The daily energy entities are not configured.</exception>
   public CostTracker()

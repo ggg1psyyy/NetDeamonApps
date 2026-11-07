@@ -295,11 +295,12 @@ namespace NetDeamon.apps.PVControl
         }
         else if (diff > 0)
         {
-          // Energy source: PV (free) → grid → battery (avg cost) — same calculation as the battery's cost.
+          // Energy source: PV (free) → grid → battery (avg cost per kWh delivered) — same calculation as the battery's cost.
           int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.LearnedPowerW;
           float effectivePrice = SourceShares
             .ForLoad(schedPowerW, Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower)
-            .Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now), Costs.BatteryAvgCostPerKwh);
+            .Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now),
+              CostTracker.DeliveredCostPerKwh(Costs.BatteryAvgCostPerKwh, SimulationInput.RoundTrip(Battery.InverterEfficiency)));
 
           // Maintain totals in memory — never read back from the entity to avoid the
           // MQTT read-modify-write race that causes exponential accumulation.

@@ -1,6 +1,7 @@
 using System;
 using NetDeamon.apps;
 using NetDeamon.apps.PVControl;
+using NetDeamon.apps.PVControl.Simulator;
 using Xunit;
 
 namespace NetDeamonApps.Tests;
@@ -73,6 +74,18 @@ public class SourceSharesTests
   }
 
   // ── Average cost ─────────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void DeliveredCost_IsTheAveragePerKwhChargedOverTheRoundTrip()
+  {
+    // 0.355 €/kWh charged, 0.95 per direction: a kWh the battery delivers took 1/0.9025 kWh charged.
+    Assert.Equal(0.355f / 0.9025f, CostTracker.DeliveredCostPerKwh(0.355f, SimulationInput.RoundTrip(0.95f)), 4);
+    Assert.Equal(0.355f, CostTracker.DeliveredCostPerKwh(0.355f, 0f));   // no efficiency configured: the average as is
+    // An EV half on the grid at 0.40, half on the battery: the battery half at the delivered cost.
+    var shares = SourceShares.ForLoad(loadW: 2000, batteryChargeW: -1000, gridImportW: 1000);
+    Assert.Equal(0.5f * 0.40f + 0.5f * 0.355f / 0.9025f,
+      shares.Cost(0.40f, CostTracker.DeliveredCostPerKwh(0.355f, SimulationInput.RoundTrip(0.95f))), 4);
+  }
 
   [Fact]
   public void BlendAverageCost_WeightsByEnergy()

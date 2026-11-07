@@ -22,18 +22,18 @@ public class SessionPlannerTests : TestBase
   static readonly DateTime CheapFrom  = new(2026, 10, 19, 0, 0, 0);
   static readonly DateTime CheapTo    = new(2026, 10, 19, 4, 0, 0);
 
-  static SimulationInput Input(int socPercent, Func<DateTime, float> price, float maxPrice = MaxPrice)
+  static SimulationInput Input(int socPercent, Func<DateTime, float> price, float maxPrice = MaxPrice, int loadWh = 112, bool pv = true)
   {
     var date   = Start.Date;
     var prices = new List<PriceTableEntry>();
     for (var t = date; t < date.AddDays(2); t = t.AddMinutes(15))
       prices.Add(new PriceTableEntry(t, t.AddMinutes(15), price(t)));
     var load = new Dictionary<DateTime, int>();
-    var pv   = new Dictionary<DateTime, int>();
+    var pvWh = new Dictionary<DateTime, int>();
     for (var t = date; t < date.AddDays(3); t = t.AddMinutes(15))
     {
-      load[t] = 112;
-      pv[t]   = t.Date > date && t.Hour >= 6 && t.Hour < 18 ? 600 : 0;
+      load[t] = loadWh;
+      pvWh[t] = pv && t.Date > date && t.Hour >= 6 && t.Hour < 18 ? 600 : 0;
     }
     return new SimulationInput
     {
@@ -48,7 +48,7 @@ public class SessionPlannerTests : TestBase
       ImportPrices                = prices,
       ExportPrices                = prices,
       LoadPredictionWh            = load,
-      PVPredictionWh              = pv,
+      PVPredictionWh              = pvWh,
       ExtraLoads                  = [],
       EnableCheapForceCharge      = false,
       OpportunisticDischarge      = false,
@@ -330,6 +330,25 @@ public class SessionPlannerTests : TestBase
 
     float evKwh = EvW * TwoHours / 60f / 1000f;
     Assert.InRange(withEv.NetGridCostVs(baseline), evKwh * 0.30f * 0.95f, evKwh * 0.30f * 1.05f);
+  }
+
+  [Fact]
+  public void NetGridCost_EvFromTheBattery_IsItsRefillAtTheCheapestPrice()
+  {
+    // The EV takes its energy from the battery in the evening; no PV, a small house load: the grid isn't touched, the
+    // battery just ends lower. That energy plus the round-trip loss is bought back at the refill price (the cheapest
+    // import of the horizon's last 24 h: 0.20 after midnight, as the DP's end value) — the mean (~0.38, peaks included)
+    // made battery energy look dearer than its next charge.
+    var input    = Input(90, CheapAfterMidnight, loadWh: 20, pv: false);
+    var baseline = EnergySimulator.Simulate(input);
+    var ev       = new ExtraLoad { Name = "EV", Priority = 10, StartTime = EveningFrom, EndTime = EveningFrom.AddMinutes(TwoHours), PowerW = EvW };
+    var withEv   = EnergySimulator.Simulate(input.WithExtraLoads([ev]));
+
+    Assert.False(withEv.HasNewGridVs(baseline));
+    Assert.Equal(0.20f, input.RefillPrice, 4);
+    float evKwh = EvW * TwoHours / 60f / 1000f;
+    float expected = evKwh * (2 - input.RoundTripEfficiency) * 0.20f;   // the energy plus its round-trip loss
+    Assert.Equal(expected, withEv.NetGridCostVs(baseline), 2);
   }
 
   [Theory]

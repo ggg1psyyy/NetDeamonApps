@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NetDeamon.apps.PVControl;
+using NetDeamon.apps.PVControl.Optimizer;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
@@ -98,7 +99,15 @@ public class SimulationInput
   }
 
   /// <summary>Share of energy left after a round trip through the battery (charge and discharge each through the inverter).</summary>
-  public float RoundTripEfficiency => InverterEfficiency * InverterEfficiency;
+  public float RoundTripEfficiency => RoundTrip(InverterEfficiency);
+
+  /// <summary>Share left after a round trip through the battery for an efficiency per direction.</summary>
+  /// <param name="perDirection">Inverter efficiency of one direction.</param>
+  public static float RoundTrip(float perDirection) => perDirection * perDirection;
+
+  private float? _refillPrice;
+  /// <summary><see cref="PlanEvaluation.RefillPrice"/> of this input, €/kWh (computed once per input).</summary>
+  public float RefillPrice => _refillPrice ??= PlanEvaluation.RefillPrice(this);
 
   // The battery's conversion losses (InverterEfficiency per direction, measured 2026-11-02: ~88 % round trip): the flows
   // are AC energies (what the battery path takes from or gives to the house/grid side); the battery's own energy changes

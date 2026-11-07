@@ -214,7 +214,7 @@ For each load defined in YAML (e.g. `"EV Charger"` → slug `ev_charger`):
 | `number.pv_control_<slug>_charge_power` | Typical power while running (W) — learned, editable |
 | `binary_sensor.pv_control_<slug>_charge_now` | Whether to run this load right now — the entity your automation acts on |
 | `sensor.pv_control_<slug>_total_energy` | Cumulative energy consumed by this load (kWh; needs `ActualEnergyEntity`) |
-| `sensor.pv_control_<slug>_total_cost` | Cumulative cost for this load (€; needs `ActualEnergyEntity`) |
+| `sensor.pv_control_<slug>_total_cost` | Cumulative cost for this load (€; needs `ActualEnergyEntity`): PV free, grid at the import price, battery at its average cost ÷ the round trip (per kWh delivered) |
 
 Attributes of `charge_now`: `charge_status_reason`, `mode`, `target_level`, `current_level`, `power_avg_w`, `net_pv_w`, `charge_start_predicted`, `charge_end_predicted`, `charge_end_predicted_soc`, `planned_sessions` (current/next session plus planned follow-ups), `zz_charge_timeline` (prefixed so it sorts last in the HA GUI), `ready_by`, `energy_per_level_kwh`, `learned_power_w`, `last_plan`, `last_plan_reason`, `price_scan` (PriorityPlus: earliest / cheapest / last plan start with their extra cost, and whether any start was under the price limit). A session window's length comes from the energy still needed (counted from now in the running slot); follow-up sessions cover the rest.
 
