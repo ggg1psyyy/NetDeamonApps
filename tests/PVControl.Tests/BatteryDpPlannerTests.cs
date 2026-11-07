@@ -225,7 +225,8 @@ public class BatteryDpPlannerTests : TestBase
     Assert.True(plan.EndSocPct >= 20, $"end {plan.EndSocPct} %");
     Assert.Equal(0f, plan.Cost.EndShortfall);
     // the same rule judges the greedy plan: under the minimum at the end it pays the shortfall
-    Assert.Equal(3 * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17), O), 2);
+    // (17 % in whole Wh is rounded up: 2.995 % short)
+    Assert.Equal(3 * O.FloorPenaltyPerPctQuarter, PlanEvaluation.EndShortfall(input, input.SocToWh(17), O), 1);
   }
 
   [Fact]

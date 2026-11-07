@@ -62,6 +62,11 @@ public class CalculationsTests
   {
     Assert.Equal(2560, Soc.ToWh(25, 10240));
     Assert.Equal(25, Soc.FromWh(2600, 10240));
+    // Rounded up, so every whole % reads back as itself (12 % of 11 520 Wh = 1 382.4 → 1 383, not 1 382 = 11.99 %).
+    Assert.Equal(1383, Soc.ToWh(12, 11_520));
+    foreach (int cap in new[] { 10_000, 10_240, 11_520, 11_523 })
+      for (int p = 0; p <= 100; p++)
+        Assert.Equal(p, Soc.FromWh(Soc.ToWh(p, cap), cap));
     Assert.Equal(25.390625, Soc.FromWhExact(2600, 10240), 6);
     Assert.Equal(2.5, Mean.Percentile([4, 1, 3, 2], 0.5), 6);
     Assert.Equal(3.4, Mean.Percentile([1, 2, 3, 4], 0.8), 6);

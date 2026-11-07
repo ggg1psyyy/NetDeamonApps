@@ -1171,7 +1171,7 @@ preferred minimum (median 12 % short) — in reality the inverter stops at the f
 `BatteryLosses` is now the default and the look-ahead (`ComputeBaseFutureSoC`: a surplus stored × 0.95, a deficit
 drawn ÷ 0.95), the charge sizing (the energy a target needs in AC: `ChargesBulk`/`BlockChargeWh`,
 `ChargesInCheapestQuarters`, `VppNowBeatsBulkLater`) and the negative-export room use the same helpers as the flows.
-Same 149 snapshots: none visibly under the floor (lowest 12.0 %; 50 graze it by < 0.05 % from whole-Wh rounding), 33
+Same 149 snapshots: none under the floor (lowest 12.0 %), 33
 end under the preferred minimum by a median 0.26 %; 0.6 kWh more charged per plan, 3.5 charges instead of 3.0; cost
 without the penalties 4.79 € per plan against the DP's 4.61 € (the lossless 4.59 € only looked cheaper: it was the energy
 under the floor). The DP's lead that is left is its battery value — when holding is worth more than using; the greedy
@@ -1183,6 +1183,11 @@ A real effect it now shows: a grid session's hold moves the house's load off the
 round trip — a start where the battery would otherwise carry the house is worth that much more. Tests that pinned a
 rule's threshold on lossless numbers (a trough at floor + margin, the 99 % boundary of a spring day) were re-derived
 with the losses; the session threshold tests run without house load, so their starts differ in price only.
+
+A battery held at the floor showed 11 %: `Soc.ToWh` cut 12 % of 11 520 Wh (1 382.4) to 1 382 Wh, which `Soc.FromWh` read
+back as 11.99 → 11 %. The greedy plan's holds were drawn at 11 % and `PlanEvaluation` judged every such quarter 1 % under
+the floor (live 2026-11-07 20:45: 38 € of floor penalty in `greedy_total_eur` for a plan that never left 12.000 %; 50 of
+the 149 snapshots). `Soc.ToWh` rounds up since, so every whole % reads back as itself.
 
 ### A hold within the PV period needs a 1 % deficit
 

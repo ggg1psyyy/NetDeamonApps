@@ -139,8 +139,9 @@ namespace NetDeamon.apps
     /// <summary>Energy of a state of charge.</summary>
     /// <param name="socPercent">State of charge (or a difference of two) in %.</param>
     /// <param name="capacityWh">Battery capacity in Wh.</param>
-    /// <returns>Energy in Wh (integer division).</returns>
-    public static int ToWh(int socPercent, int capacityWh) => socPercent * capacityWh / 100;
+    /// <returns>Energy in Wh, rounded up: <see cref="FromWh"/> of it gives the same % back (12 % of 11 520 Wh is 1 382.4 —
+    /// cut to 1 382 Wh it read back as 11 %, and a battery held exactly at the floor showed and was judged 1 % under it).</returns>
+    public static int ToWh(int socPercent, int capacityWh) => (int)Math.Ceiling(socPercent * (double)capacityWh / 100);
 
     /// <summary>State of charge of an energy.</summary>
     /// <param name="wh">Energy in the battery in Wh.</param>
