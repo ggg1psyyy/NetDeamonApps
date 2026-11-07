@@ -59,7 +59,9 @@ public class EvDirectFromGridTests : TestBase
   [InlineData(true)]   // 06:00 planned last cycle (Priority's late start before sunrise)
   public void EvRunsDirectlyFromTheGridInTheCheapQuarters(bool preferMorning)
   {
-    var input = Input();
+    // 94 %: the house itself needs no night charge (from 86 % it needs one at 00:00 with the discharge loss — its own
+    // need, in the EV's quarters); the session alone decides.
+    var input = WithSoc(Input(), 94);
     var baseline = EnergySimulator.Simulate(input);
     SimulationResult Run(DateTime s, DateTime e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)]));
 
@@ -91,8 +93,9 @@ public class EvDirectFromGridTests : TestBase
     // Full battery, sunny tomorrow: the EV in the morning (e.g. a ready-by target) needs no extra grid — like Priority.
     var input = WithSoc(Input(sunny: true), 100);
     var baseline = EnergySimulator.Simulate(input);
-    // 30 min (~8 %): the battery (~27 % at the low without it) still stays above floor + margin.
-    var (load, sim) = SessionPlanner.ChooseSupply(l => input.SimulateWith(l), Ev(Midnight.AddHours(5), Midnight.AddHours(5).AddMinutes(30)), baseline);
+    // 15 min (~4 %): the battery (~23 % at the low without it, the night drawn with the discharge loss) still stays above
+    // floor + margin.
+    var (load, sim) = SessionPlanner.ChooseSupply(l => input.SimulateWith(l), Ev(Midnight.AddHours(5), Midnight.AddHours(5).AddMinutes(15)), baseline);
     Assert.False(load.FromGrid);
     Assert.False(sim.HasNewGridVs(baseline));
   }

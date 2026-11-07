@@ -155,9 +155,9 @@ public class SessionPlannerTests : TestBase
   const int TwoHours = 120;
 
   static PlannedStart? Best(Func<DateTime, float> price, DateTime? deadline = null, float maxPrice = MaxPrice, DateTime? preferred = null,
-    float minSaving = SessionPlanner.DefaultMinSavingFraction, DateTime? now = null)
+    float minSaving = SessionPlanner.DefaultMinSavingFraction, DateTime? now = null, int loadWh = 112)
   {
-    var input = Input(12, price, maxPrice);
+    var input = Input(12, price, maxPrice, loadWh);
     var baseline = EnergySimulator.Simulate(input);
     return SessionPlanner.FindBestPriceAwareStart(EveningFrom, input.ImportPrices.Max(p => p.EndTime), (int)Math.Ceiling(EvW * TwoHours / 60.0), EvW,
       (s, e) => EnergySimulator.Simulate(input.WithExtraLoads([Ev(s, e)])), baseline, deadline, minSaving, preferredStart: preferred, now: now);
@@ -171,7 +171,9 @@ public class SessionPlannerTests : TestBase
   public void PreferredStart_SlightlyCheaperThanEarliest_IsKept()
   {
     // 0.5 % cheaper: on its own not worth waiting for, but it is last cycle's plan.
-    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.2985f : 0.30f, preferred: CheapFrom);
+    // No house load: while the EV runs from the grid the battery is held, so a start in a window where the battery would
+    // otherwise carry the house also saves that load's round-trip loss — the starts here differ in price only.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.2985f : 0.30f, preferred: CheapFrom, loadWh: 0);
 
     Assert.NotNull(p);
     Assert.Equal(CheapFrom, p.Value.Start);
@@ -215,7 +217,9 @@ public class SessionPlannerTests : TestBase
   public void LaterStartLessThanMinSavingCheaper_StartsEarliest()
   {
     // 0.3 % cheaper — under the 1 % minimum saving.
-    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.299f : 0.30f);
+    // No house load: while the EV runs from the grid the battery is held, so a start in a window where the battery would
+    // otherwise carry the house also saves that load's round-trip loss — the starts here differ in price only.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.299f : 0.30f, loadWh: 0);
 
     Assert.NotNull(p);
     Assert.Equal(StartChoice.Earliest, p.Value.Choice);
@@ -253,7 +257,9 @@ public class SessionPlannerTests : TestBase
   public void Deadline_OverThreshold_PlannedStartStays()
   {
     // Last cycle planned 01:00; another start a hair cheaper doesn't move it.
-    var p = Best(t => t == CheapFrom.AddHours(2) ? 0.3555f : NearlyFlat(t), ReadyBy, maxPrice: 0.10f, preferred: CheapFrom.AddHours(1));
+    // No house load: while the EV runs from the grid the battery is held, so a start in a window where the battery would
+    // otherwise carry the house also saves that load's round-trip loss — the starts here differ in price only.
+    var p = Best(t => t == CheapFrom.AddHours(2) ? 0.3555f : NearlyFlat(t), ReadyBy, maxPrice: 0.10f, preferred: CheapFrom.AddHours(1), loadWh: 0);
 
     Assert.NotNull(p);
     Assert.Equal((CheapFrom.AddHours(1), StartChoice.DeadlineCheapest), (p.Value.Start, p.Value.Choice));
@@ -262,7 +268,9 @@ public class SessionPlannerTests : TestBase
   [Fact]
   public void Deadline_OverThreshold_LaterStartBarelyCheaper_StartsEarliest()
   {
-    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.3578f : 0.358f, ReadyBy, maxPrice: 0.10f);
+    // No house load: while the EV runs from the grid the battery is held, so a start in a window where the battery would
+    // otherwise carry the house also saves that load's round-trip loss — the starts here differ in price only.
+    var p = Best(t => t >= CheapFrom && t < CheapTo ? 0.3578f : 0.358f, ReadyBy, maxPrice: 0.10f, loadWh: 0);
 
     Assert.NotNull(p);
     Assert.Equal((EveningFrom, StartChoice.DeadlineEarliest), (p.Value.Start, p.Value.Choice));
@@ -324,7 +332,8 @@ public class SessionPlannerTests : TestBase
   [Fact]
   public void NetGridCost_EvAtFloor_IsItsGridEnergyTimesPrice()
   {
-    var input    = Input(12, _ => 0.30f);
+    // No house load: the hold while the EV runs would also move the house's load off the battery (its round-trip loss saved).
+    var input    = Input(12, _ => 0.30f, loadWh: 0);
     var baseline = EnergySimulator.Simulate(input);
     var withEv   = EnergySimulator.Simulate(input.WithExtraLoads([Ev(EveningFrom, EveningFrom.AddMinutes(TwoHours))]));
 

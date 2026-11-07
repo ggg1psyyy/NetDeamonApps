@@ -119,7 +119,7 @@ public static class EnergySimulator
   public static bool ChargesBulk(SimulationInput input, DateTime slotTime, int socPercent, int targetSocPercent)
   {
     if (input.VppChargePowerW is null) return false;
-    int neededWh = input.SocToWh(Math.Max(0, Math.Min(targetSocPercent, 100) - socPercent));
+    int neededWh = input.ChargeAcForWh(input.SocToWh(Math.Max(0, Math.Min(targetSocPercent, 100) - socPercent)));
     var blockEnd = SamePriceBlockEnd(input, slotTime);
     int vppWh = BlockChargeWh(input, slotTime, blockEnd, socPercent, neededWh, bulk: false);
     return vppWh < neededWh && BlockChargeWh(input, slotTime, blockEnd, socPercent, neededWh, bulk: true) > vppWh;
@@ -145,7 +145,7 @@ public static class EnergySimulator
       int pathWh = input.ChargeLimitWh(bulk, soc, fraction);
       int slotWh = Math.Min(pathWh, input.GridChargeWhPerSlot(pv, load + extra, fraction, pathWh) + Math.Max(0, pv - load - extra));
       wh += slotWh;
-      soc = Math.Min(100, soc + input.WhToSoc(slotWh));
+      soc = Math.Min(100, soc + input.WhToSoc(input.StoredWh(slotWh)));
     }
     return wh;
   }
@@ -175,7 +175,7 @@ public static class EnergySimulator
     if (next >= blockEnd || !baseFutureSoC.TryGetValue(next, out int socNext)) return false;
     // Does this block charge at all? The deficit at its end decides it as the rule would there.
     int socAtEnd = baseFutureSoC.GetValueOrDefault(blockEnd, socNext);
-    int neededAtEndWh = input.SocToWh(Math.Max(0, targetSoc - Math.Min(soc, socAtEnd)));
+    int neededAtEndWh = input.ChargeAcForWh(input.SocToWh(Math.Max(0, targetSoc - Math.Min(soc, socAtEnd))));
     if (cheaperUnderMax >= Math.Max(1, (neededAtEndWh + maxChargeWh - 1) / maxChargeWh)) return false;
     return !ChargesBulk(input, now, soc, targetSoc) && ChargesBulk(input, next, socNext, targetSoc);
   }
@@ -246,7 +246,7 @@ public static class EnergySimulator
     Dictionary<DateTime, int> baseFutureSoC, int pvWhSlot, int totalLoadWhSlot)
   {
     int maxChargeWh = Math.Max(1, input.GridChargeWhPerSlot(pvWhSlot, totalLoadWhSlot));
-    int neededWh = input.SocToWh(Math.Max(0, targetSoc - simulatedSoc));
+    int neededWh = input.ChargeAcForWh(input.SocToWh(Math.Max(0, targetSoc - simulatedSoc)));
     int quartersNeeded = Math.Max(1, (neededWh + maxChargeWh - 1) / maxChargeWh);
     return cheaperUnderMax < quartersNeeded
       || VppNowBeatsBulkLater(input, now, simulatedSoc, targetSoc, baseFutureSoC, cheaperUnderMax, maxChargeWh);
@@ -532,7 +532,7 @@ public static class EnergySimulator
       result[t] = input.WhToSoc(energy);
       // The battery is held while a load that never draws it runs without enough PV (grid_only).
       if (!input.BatteryHeldForLoad(t, pv, load + extra))
-        energy = Math.Clamp(energy + pv - load - extra, minEnergy, input.BatteryCapacityWh);
+        { int net = pv - load - extra; energy = Math.Clamp(net >= 0 ? energy + input.StoredWh(net) : energy - input.DrawnWh(-net), minEnergy, input.BatteryCapacityWh); }
     }
 
     return result;
@@ -924,7 +924,7 @@ public static class EnergySimulator
       var (pvWh, loadWh, extraWh) = input.SlotEnergyWh(t);
       surplusWh += Math.Min(Math.Max(0, pvWh - loadWh - extraWh), input.MaxChargeWhPerSlot());
     }
-    return surplusWh > 0 && surplusWh * NegativeExportSurplusShare >= input.SocToWh(100 - simulatedSoc);
+    return surplusWh > 0 && input.StoredWh((int)surplusWh) * NegativeExportSurplusShare >= input.SocToWh(100 - simulatedSoc);
   }
 
   /// <summary>Energy flows of a slot in a mode.</summary>

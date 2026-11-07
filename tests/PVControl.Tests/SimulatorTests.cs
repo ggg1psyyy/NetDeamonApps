@@ -175,7 +175,8 @@ public class SimulatorTests : TestBase
       pvWhPerSlot: 0,
       cheapHour: 2));
 
-    var chargeSlots = slots.Where(s => s.State.Mode == InverterModes.force_charge).ToList();
+    // The floor's charge (a preferred-band charge at the dearer hour before the 18:00 peak may add to it: another rule).
+    var chargeSlots = slots.Where(s => s.State is { Mode: InverterModes.force_charge, ModeReason: ForceChargeReasons.GoingUnderAbsoluteMinima }).ToList();
     Assert.NotEmpty(chargeSlots);
 
     // All force_charge slots should fall within the 02:00–03:00 window
@@ -317,7 +318,7 @@ public class SimulatorTests : TestBase
     // remainder must show up as grid import rather than being modeled as instant battery drain.
     var start = new DateTime(2025, 6, 15, 9, 0, 0);
     var slots = EnergySimulator.Simulate(BuildInput(start, startSocPct: 70, loadWhPerSlot: 2000, pvWhPerSlot: 0));
-    var firstSlot = slots[0];
+    var firstSlot = slots.First(s => s.State.Mode == InverterModes.normal);   // a discharging quarter (not a band charge)
 
     Assert.True(firstSlot.BatteryDischargeWh <= 575);
     Assert.Equal(2000 - firstSlot.BatteryDischargeWh, firstSlot.GridImportWh);
@@ -630,7 +631,8 @@ public class SimulatorTests : TestBase
     };
 
     var slots = EnergySimulator.Simulate(input);
-    var chargeSlots = slots.Where(s => s.State.Mode == InverterModes.force_charge).ToList();
+    // The floor's charge (a preferred-band charge at the dearer hour before the 18:00 peak may add to it: another rule).
+    var chargeSlots = slots.Where(s => s.State is { Mode: InverterModes.force_charge, ModeReason: ForceChargeReasons.GoingUnderAbsoluteMinima }).ToList();
 
     Assert.NotEmpty(chargeSlots);
     foreach (var s in chargeSlots)

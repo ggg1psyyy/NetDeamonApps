@@ -183,21 +183,37 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
 
   /// <summary>
   /// Extra grid cost vs the baseline: import cost − export earnings over the horizon (lost export
-  /// counts), plus the battery energy missing at the end at the refill price
+  /// counts), plus the battery energy missing at the end, refilled at the refill price
   /// (<see cref="SimulationInput.RefillPrice"/>: the cheapest import of the horizon's last 24 h, as the DP's end value —
-  /// the mean, peaks included, made battery energy look dearer than its next charge), plus the round-trip loss of the
-  /// extra energy the load takes out of the battery: refilling it costs <see cref="SimulationInput.DeliveredPrice(float)"/>
-  /// per kWh delivered, the refill price of which the missing energy already counts.
+  /// the mean, peaks included, made battery energy look dearer than its next charge) with its charge loss
+  /// (<see cref="SimulationInput.StoredPrice"/>). The discharge loss is in the flows already: a kWh the load takes out of the
+  /// battery draws 1/0.95 kWh stored — together the round trip (<see cref="SimulationInput.DeliveredPrice(float)"/>).
   /// </summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>€; prices via <see cref="PriceList.GetPriceOrMean"/>, PV valued at the export price (<see cref="SourceShares.Cost"/>).</returns>
   public float NetGridCostVs(SimulationResult baseline)
   {
-    float missingEndKwh = _input.SocToWh(baseline.Slots[^1].SoC - Slots[^1].SoC) / 1000f;
-    float extraDischargeKwh = Math.Max(0, Slots.Sum(s => s.BatteryDischargeWh) - baseline.Slots.Sum(s => s.BatteryDischargeWh)) / 1000f;
-    float refill = _input.RefillPrice;
-    float roundTripLoss = extraDischargeKwh * (_input.DeliveredPrice(refill) - refill);
-    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * refill + roundTripLoss;
+    float missingEndKwh = (baseline.EnergyPathWh()[^1] - EnergyPathWh()[^1]) / 1000f;
+    return OwnGridCost - baseline.OwnGridCost + missingEndKwh * _input.StoredPrice(_input.RefillPrice);
+  }
+
+  private int[]? _energyPath;
+  /// <summary>
+  /// The battery's energy at each slot's start and after the last (one more entry than slots), Wh, replayed exactly from
+  /// the slots' flows (<see cref="SimulationInput.NextEnergyWh"/>) — the slots carry whole % only, and a difference
+  /// under 1 % (~115 Wh) made one EV start look cents cheaper than another. The simulation steps its energy the same way.
+  /// </summary>
+  /// <param name="battery">The battery to replay against; null: this run's own input (cached).</param>
+  public int[] EnergyPathWh(SimulationInput? battery = null)
+  {
+    if (battery is null && _energyPath is { } cached) return cached;
+    var b = battery ?? _input;
+    var path = new int[Slots.Count + 1];
+    path[0] = b.SocToWh(b.StartSocPercent);
+    for (int i = 0; i < Slots.Count; i++)
+      path[i + 1] = b.NextEnergyWh(path[i], Slots[i].BatteryChargeWh, Slots[i].BatteryDischargeWh);
+    if (battery is null) _energyPath = path;
+    return path;
   }
 
   /// <summary>Import cost − export earnings of this run over the horizon, € (sensor.pv_control_mode's <c>grid_eur</c>, the

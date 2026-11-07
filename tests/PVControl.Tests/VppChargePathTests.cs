@@ -237,8 +237,8 @@ public class ChargeStartAlignmentTests
   [Fact]
   public void WithoutVppCurve_TheNaturalStartStays()
   {
-    // ~690 W all night from 25 %: the quarters-needed rule starts at 00:15 — later in the block is fine.
-    Assert.Equal(Night.AddMinutes(15), Starts(EnergySimulator.Simulate(Input(172, 25))).First().Time);
+    // ~630 W all night from 26 %: the quarters-needed rule starts at 00:15 — later in the block is fine.
+    Assert.Equal(Night.AddMinutes(15), Starts(EnergySimulator.Simulate(Input(158, 26))).First().Time);
   }
 
   // 00:00–01:00 at one price, 38 % at 00:00 losing 2 % per quarter. VPP from 00:00 reaches up to

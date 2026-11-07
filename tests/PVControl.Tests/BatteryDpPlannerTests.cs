@@ -311,18 +311,20 @@ public class BatteryDpPlannerTests : TestBase
   }
 
   [Fact]
-  public void LossHelpers_OnlyWithBatteryLosses()
+  public void LossHelpers_LossyByDefault_LosslessOnlyWhenSwitchedOff()
   {
     // InverterEfficiency per direction (measured 2026-11-02: ~88 % round trip; 0.95 configured): 1000 Wh AC in stores
     // 950, 950 Wh AC out draws 1000; the inverses give the AC flows that fit a room or an available energy exactly.
-    var lossless = Input(Day.AddHours(22), 50);
-    var lossy = lossless.WithBatteryLosses();
+    var lossy = Input(Day.AddHours(22), 50);
+    Assert.True(lossy.BatteryLosses);
+    var lossless = lossy.WithBatteryLosses(false);
     Assert.Equal((1000, 1000), (lossless.StoredWh(1000), lossless.DrawnWh(1000)));
     Assert.Equal((950, 1000), (lossy.StoredWh(1000), lossy.DrawnWh(950)));
     Assert.Equal((1000, 950), (lossy.ChargeAcForWh(950), lossy.DischargeAcForWh(1000)));
     Assert.True(lossy.StoredWh(lossy.ChargeAcForWh(777)) <= 777 && lossy.DrawnWh(lossy.DischargeAcForWh(777)) <= 777);
     Assert.Equal(5000 + 950 - 1000, lossy.NextEnergyWh(5000, 1000, 950));
     Assert.Same(lossy, lossy.WithBatteryLosses());
+    Assert.Equal((0.40f / 0.95f, 0.40f), (lossy.StoredPrice(0.40f), lossless.StoredPrice(0.40f)));
   }
 
   [Fact]

@@ -207,19 +207,19 @@ public class FindWindowConditionTests : TestBase
   /// A session of 26 slots (390 min, ending 16:00) leaves 7 post-EV PV slots that push the
   /// battery to 100 % → Optimal daytime condition met.
   ///
-  /// Verifies the LOWER boundary: at T=26, SimWillReachMaxSocToday = true.
+  /// Verifies the LOWER boundary: at T=25, SimWillReachMaxSocToday = true.
   /// </summary>
   [Fact]
   public void SpringDay_Optimal_ShortSession_Reaches99()
   {
     var start    = SpringStart;
-    var evEnd    = start.AddMinutes(26 * 15); // T=26 → 16:00
+    var evEnd    = start.AddMinutes(25 * 15); // T=25 → 15:45
     var baseSim  = EnergySimulator.Simulate(SpringBaseInput(start));
     var evSim    = EnergySimulator.Simulate(WithEV(SpringBaseInput(start), start, evEnd));
 
     // With EV for 390 min, house STILL hits ≥ 99 % today (battery tops up after EV stops).
     Assert.True(Reaches99Today(evSim, start.Date),
-      $"T=26 (390 min EV): battery should reach ≥99 % today. Max SoC today = " +
+      $"T=25 (375 min EV): battery should reach ≥99 % today. Max SoC today = " +
       $"{evSim.Slots.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
 
     // The base simulation (no EV) also reaches 100 % — confirms PV is genuinely strong.
@@ -228,9 +228,9 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// The UPPER boundary for Optimal daytime condition: at T=27 (405 min, ending 16:15),
+  /// The UPPER boundary for Optimal daytime condition: at T=26 (390 min, ending 16:00; PV stores 95 % of its surplus),
   /// one extra slot of EV robs the remaining PV of the energy needed to reach 99 %.
-  /// Binary search for Optimal would cap the daytime part at T=26, but the session can
+  /// Binary search for Optimal would cap the daytime part at T=25, but the session can
   /// still extend overnight via the same Step 1 predicate (SimWillReachMaxSocToday remains
   /// true for shorter daytime + overnight tail once battery reached 100 %).
   /// </summary>
@@ -238,12 +238,12 @@ public class FindWindowConditionTests : TestBase
   public void SpringDay_Optimal_FullSession_DoesNotReach99()
   {
     var start = SpringStart;
-    var evEnd = start.AddMinutes(27 * 15); // T=27 → 16:15
+    var evEnd = start.AddMinutes(26 * 15); // T=26 → 16:00
     var evSim = EnergySimulator.Simulate(WithEV(SpringBaseInput(start), start, evEnd));
 
-    // With T=27 the battery peaks at ≈97.6 % (just short of 99 %).
+    // With T=26 the battery peaks just short of 99 %.
     Assert.False(Reaches99Today(evSim, start.Date),
-      $"T=27 (405 min EV): battery should NOT reach ≥99 % today. Max SoC today = " +
+      $"T=26 (390 min EV): battery should NOT reach ≥99 % today. Max SoC today = " +
       $"{evSim.Slots.Where(s => s.Time.Date == start.Date).Max(s => s.SoC)} %");
   }
 
@@ -341,29 +341,29 @@ public class FindWindowConditionTests : TestBase
   }
 
   /// <summary>
-  /// Confirms that the T=27 EV session (which fails Optimal's 99 % test) still satisfies
+  /// Confirms that the T=26 EV session (which fails Optimal's 99 % test) still satisfies
   /// Priority's conditions — i.e. Priority can run exactly where Optimal would stop.
   /// </summary>
   [Fact]
   public void SpringDay_Priority_RunsWhereOptimalWouldStop()
   {
     var start   = SpringStart;
-    var evEnd   = start.AddMinutes(27 * 15); // T=27 → 16:15 (one slot past Optimal max)
+    var evEnd   = start.AddMinutes(26 * 15); // T=26 → 16:00 (one slot past Optimal max)
     var baseIn  = SpringBaseInput(start);
     var baseSim = EnergySimulator.Simulate(baseIn);
     var evSim   = EnergySimulator.Simulate(WithEV(baseIn, start, evEnd));
     var baseFCS = new HashSet<DateTime>(
       baseSim.Slots.Where(s => s.State.Mode == InverterModes.force_charge).Select(s => s.Time));
 
-    // T=27 fails Optimal (battery doesn't hit 99 %)
+    // T=26 fails Optimal (battery doesn't hit 99 %)
     Assert.False(Reaches99Today(evSim, start.Date),
-      "T=27 should not satisfy Optimal's 99 % condition.");
+      "T=26 should not satisfy Optimal's 99 % condition.");
 
     // … but satisfies Priority (overnight OK, no new grid)
     Assert.True(OvernightOk(evSim, LastPVToday, FirstPVTomorrow, AbsMin),
-      "T=27 should still satisfy Priority's overnight condition.");
+      "T=26 should still satisfy Priority's overnight condition.");
     Assert.True(NoNewGrid(evSim, baseFCS),
-      "T=27 should require no new grid import overnight.");
+      "T=26 should require no new grid import overnight.");
   }
 
   // ── Step 3 (PriorityPlus) tests ──────────────────────────────────────────────────────────

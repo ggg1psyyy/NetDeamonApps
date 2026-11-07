@@ -43,8 +43,9 @@ public class ChargeAbovePriceLimitTests : TestBase
   [Fact]
   public void OnlyTheMarginShort_NoChargeAboveTheLimit()
   {
-    // Low ~14 %: above the 12 % floor, inside floor + 4 % margin. Before: 4 quarters at 36 ct.
-    var plan = Plan(82);
+    // Low ~14 % (the night drawn with the discharge loss): above the 12 % floor, inside floor + 4 % margin. Before: 4
+    // quarters at 36 ct.
+    var plan = Plan(86);
     Assert.DoesNotContain(plan, s => s.State.Mode == InverterModes.force_charge);
     Assert.True(plan.Min(s => s.SoC) >= 12);
   }

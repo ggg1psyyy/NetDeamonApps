@@ -771,7 +771,9 @@ by `SessionPlanner.ChooseSupply`: PV + battery if that needs no extra grid (like
 ready-by target in the morning from the battery), otherwise FromGrid: while it runs and PV doesn't cover
 house + load, the battery is held (`grid_only`; the inverter can't feed the house and not the EV), or
 the load runs along a force_charge the house needs in that quarter anyway; the look-ahead doesn't count
-it against the battery. `NetGridCostVs` adds the round-trip loss of extra battery discharge. The round trip has one
+it against the battery. In `NetGridCostVs` battery energy costs its round trip: the discharge loss is in the simulation's
+flows (a kWh the load takes draws 1/0.95 kWh stored), the charge loss in the refill (`SimulationInput.StoredPrice`); until
+2026-11-07 (the simulation lossless) it added the round-trip loss of extra discharge as its own term. The round trip has one
 price function, `SimulationInput.DeliveredPrice` = price per kWh charged ÷ `RoundTripEfficiency` — what a kWh the
 battery delivers costs; `NetGridCostVs`, `ChargingBeatsHolding` and the loads' cost totals all use it (until
 2026-11-07 they had three formulas: `NetGridCostVs` the approximation × (1 − rt), 9.75 % instead of 10.8 % at 0.95;
@@ -1148,7 +1150,7 @@ surplus exported, nothing into the battery) but lets the battery cover the dips,
 grid_only — equally cheap actions go to the first. The inverter then has to run it without EEPROM writes: the solax-modbus
 mode-8 sub-mode "Enabled Feedin Priority" (RAM), not the work mode "Feedin Priority".
 
-### Conversion losses in the DP
+### Conversion losses in the plans
 
 The flows (`EnergySimulator.ComputeEnergyFlows`) were lossless: 1 kWh charged from the grid stored 1 kWh, 1 kWh of load
 took 1 kWh out of the battery. The greedy rules correct for the round trip where they compare (`ChargingBeatsHolding`,
@@ -1158,12 +1160,29 @@ tie and the DP charged in 8–19 tiny quarters; with market prices it bought spr
 0.396 to avoid 0.412). Measured 2026-11-02 from the DataLogger: the inverter's battery counters plus the SoC change give
 0.86–0.89 round trip per month (Aug–Oct; incl. the battery's standby draw), night charges store 92–96 % of the counted
 charge; the inverter's AC↔DC conversion isn't measurable (house load is the inverter's balance figure). So 0.95 per
-direction stays. The losses live in `SimulationInput` (`StoredWh`, `DrawnWh` and their inverses, `NextEnergyWh`) and
-apply with `BatteryLosses` only — the DP plans with them, the greedy simulation stays lossless: its look-ahead and
-charge sizing are lossless, and lossy flows under them sized charges too small (repeated charges, spills; 11 greedy
-tests), and the greedy run still plans the EV and warm water. The greedy plan is judged under the same lossy model for
-the comparison (its flows replayed against a lossy battery). The end value is what the energy delivers after the
-discharge loss at the refill price.
+direction stays. The losses live in `SimulationInput` (`StoredWh`, `DrawnWh` and their inverses, `NextEnergyWh`). The
+end value is what the energy delivers after the discharge loss at the refill price.
+
+The DP planned with them from 2026-11-02, the greedy simulation stayed lossless until 2026-11-07: losses in its flows
+alone sized charges too small (its look-ahead and charge sizing still counted 1:1 — repeated charges, spills; 11 greedy
+tests). Lossless, it planned the night 1:1 and ran under the hard floor once the losses were counted: replayed against
+the real battery, 119 of 149 live snapshots (2026-11-04…07) went under 12 %, down to 0 %, and 140 ended under the
+preferred minimum (median 12 % short) — in reality the inverter stops at the floor and the next replan buys it later.
+`BatteryLosses` is now the default and the look-ahead (`ComputeBaseFutureSoC`: a surplus stored × 0.95, a deficit
+drawn ÷ 0.95), the charge sizing (the energy a target needs in AC: `ChargesBulk`/`BlockChargeWh`,
+`ChargesInCheapestQuarters`, `VppNowBeatsBulkLater`) and the negative-export room use the same helpers as the flows.
+Same 149 snapshots: none visibly under the floor (lowest 12.0 %; 50 graze it by < 0.05 % from whole-Wh rounding), 33
+end under the preferred minimum by a median 0.26 %; 0.6 kWh more charged per plan, 3.5 charges instead of 3.0; cost
+without the penalties 4.79 € per plan against the DP's 4.61 € (the lossless 4.59 € only looked cheaper: it was the energy
+under the floor). The DP's lead that is left is its battery value — when holding is worth more than using; the greedy
+rules have none. Runtime unchanged (3.4–3.6 ms per simulation; the EV and warm-water planning run dozens per cycle,
+which is why they stay on the greedy simulation and not the ~2 s DP). `NetGridCostVs` now counts the discharge loss in
+the flows and the charge loss in the refill (`StoredPrice`), on the exact end energy (`SimulationResult.EnergyPathWh`,
+the replay of the flows): with whole % a 135-Wh difference vanished and one EV start looked 4 ct cheaper than another.
+A real effect it now shows: a grid session's hold moves the house's load off the battery in that window, saving its
+round trip — a start where the battery would otherwise carry the house is worth that much more. Tests that pinned a
+rule's threshold on lossless numbers (a trough at floor + margin, the 99 % boundary of a spring day) were re-derived
+with the losses; the session threshold tests run without house load, so their starts differ in price only.
 
 ### A hold within the PV period needs a 1 % deficit
 

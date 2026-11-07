@@ -53,7 +53,9 @@ public class MiddayChargeVsNightTests
   [Fact]
   public void NightAndMorningOnTheBattery_ChargesInTheCheaperMiddayQuarters()
   {
-    var result = EnergySimulator.Simulate(Input(Day.AddHours(13).AddMinutes(30), 44));
+    // 50 %: the cheap midday block (13:30–14:00) holds two full-power quarters (3.45 kWh, 95 % of it stored); the night
+    // and morning draw the battery with the discharge loss — without the losses 44 % left the night the same top-up.
+    var result = EnergySimulator.Simulate(Input(Day.AddHours(13).AddMinutes(30), 50));
 
     Assert.Equal(InverterModes.force_charge, result[0].State.Mode);
     // The night needs no real charge any more — at most a top-up of the floor itself (~70 Wh here).

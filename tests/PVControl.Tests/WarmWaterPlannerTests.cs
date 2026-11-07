@@ -198,7 +198,9 @@ public class WarmWaterPlannerTests : TestBase
     var tomorrow = day.AddDays(1).AddHours(14.5);
 
     float real = PriceAt(published, tomorrow), mean = PriceAt(raw, tomorrow), est = PriceAt(estimated, tomorrow);
-    Assert.True(mean > real + 0.1f, $"mean {mean:F3} vs real {real:F3}");
+    // The mean (0.375 flat tomorrow) is clearly off; under it the reserve band's charges at a flat price only lose the
+    // round trip, which the heating partly saves — so not the full 0.375 − 0.20.
+    Assert.True(mean > real + 0.05f, $"mean {mean:F3} vs real {real:F3}");
     Assert.Equal(real, est, 2);
   }
 

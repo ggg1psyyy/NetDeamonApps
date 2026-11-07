@@ -107,9 +107,9 @@ public class SimulationInput
 
   /// <summary>
   /// What a kWh the battery delivers costs when a kWh charged costs <paramref name="chargePrice"/>, €/kWh: only the round
-  /// trip comes back out (measured 2026-11-02: 0.86–0.89). The one round-trip price — the loads' battery share (average
-  /// cost per kWh charged), <see cref="SimulationResult.NetGridCostVs"/> (refill price) and the greedy charge-vs-hold
-  /// comparison. A negative price stays negative (paid per kWh charged, more per kWh delivered).
+  /// trip comes back out (measured 2026-11-02: 0.86–0.89). The one loss price — the loads' battery share (average
+  /// cost per kWh charged), the greedy charge-vs-hold comparison and, for one direction, <see cref="StoredPrice"/>
+  /// (<see cref="SimulationResult.NetGridCostVs"/>'s refill). A negative price stays negative (paid per kWh charged, more per kWh delivered).
   /// </summary>
   /// <param name="chargePrice">Cost of a kWh charged, €/kWh.</param>
   /// <param name="roundTripEfficiency">Share left after charge and discharge (<see cref="RoundTrip"/>); ≤ 0 = unknown, the price as is.</param>
@@ -126,14 +126,19 @@ public class SimulationInput
 
   // The battery's conversion losses (InverterEfficiency per direction, measured 2026-11-02: ~88 % round trip): the flows
   // are AC energies (what the battery path takes from or gives to the house/grid side); the battery's own energy changes
-  // by what is stored or drawn. Only with BatteryLosses (the DP plans with them): the greedy rules size their charges with
-  // a lossless look-ahead and correct for the round trip in their own price comparisons.
+  // by what is stored or drawn. The greedy simulation (its flows, look-ahead and charge sizing) and the DP both run with
+  // them; lossless (BatteryLosses false) is left for tests that check a rule on round numbers.
 
-  /// <summary>The flows lose <see cref="InverterEfficiency"/> per direction (the DP); false: lossless (the greedy simulation).</summary>
-  public bool BatteryLosses { get; init; }
+  /// <summary>The flows lose <see cref="InverterEfficiency"/> per direction (default); false: lossless.</summary>
+  public bool BatteryLosses { get; init; } = true;
 
   /// <summary>Efficiency of one direction in the flows: <see cref="InverterEfficiency"/> with <see cref="BatteryLosses"/>, else 1.</summary>
   private double FlowEfficiency => BatteryLosses ? Math.Round(InverterEfficiency, 4) : 1.0;   // 0.95f is 0.9499999881
+
+  /// <summary>What a kWh stored in the battery costs when a kWh charged costs <paramref name="chargePrice"/>, €/kWh: the
+  /// charge loss of one direction (<see cref="DeliveredPrice(float, float)"/> at the flow efficiency; lossless: the price).</summary>
+  /// <param name="chargePrice">Cost of a kWh charged, €/kWh.</param>
+  public float StoredPrice(float chargePrice) => DeliveredPrice(chargePrice, (float)FlowEfficiency);
 
   /// <summary>Copy whose house load forecast is raised by a margin (the DP plans for a load above the forecast: an
   /// unforeseen load then still finds the battery, not the expensive hours). Extra loads stay as planned.</summary>
@@ -146,8 +151,10 @@ public class SimulationInput
     return copy;
   }
 
-  /// <summary>Copy whose flows lose energy (<see cref="BatteryLosses"/>).</summary>
-  public SimulationInput WithBatteryLosses() => BatteryLosses ? this : Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil, losses: true);
+  /// <summary>Copy whose flows lose energy or not (<see cref="BatteryLosses"/>); this input if it already does.</summary>
+  /// <param name="losses">False: lossless (tests of a rule on round numbers).</param>
+  public SimulationInput WithBatteryLosses(bool losses = true) =>
+    BatteryLosses == losses ? this : Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil, losses: losses);
 
   /// <summary>Energy stored in the battery by an AC charge, Wh (× the flow efficiency, rounded down).</summary>
   /// <param name="chargeAcWh">AC energy into the battery path, Wh.</param>

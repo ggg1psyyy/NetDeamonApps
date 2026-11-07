@@ -164,22 +164,17 @@ public static class PlanEvaluation
     return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh), EndShortfall(input, endEnergyWh, o));
   }
 
-  /// <summary>Cost of the greedy simulation's plan under the one model: its flows (the greedy simulation's own, lossless)
-  /// against a battery with the conversion losses (<see cref="SimulationInput.WithBatteryLosses"/>) — the SoC path and the
-  /// end those decisions really lead to, so both plans are judged alike.</summary>
+  /// <summary>Cost of the greedy simulation's plan under the one model: its flows against a battery with the conversion
+  /// losses (<see cref="SimulationInput.WithBatteryLosses"/>; the simulation's own unless a test ran it lossless) — the SoC
+  /// path and the end those decisions lead to, so both plans are judged alike.</summary>
   /// <param name="result">The simulation.</param>
   /// <param name="o">Options.</param>
   public static PlanCost Evaluate(SimulationResult result, DpOptions o)
   {
     var input = result.Input.WithBatteryLosses();
-    int energy = input.SocToWh(input.StartSocPercent);
-    var slots = new List<(DateTime, double, int, int, InverterModes)>(result.Slots.Count);
-    foreach (var s in result.Slots)
-    {
-      slots.Add((s.Time, input.WhToSoc(energy), s.GridImportWh, s.GridExportWh, s.State.Mode));
-      energy = input.NextEnergyWh(energy, s.BatteryChargeWh, s.BatteryDischargeWh);
-    }
-    return Evaluate(input, slots, energy, o);
+    var path = result.EnergyPathWh(input);
+    var slots = result.Slots.Select((s, i) => (s.Time, (double)input.WhToSoc(path[i]), s.GridImportWh, s.GridExportWh, s.State.Mode));
+    return Evaluate(input, slots, path[^1], o);
   }
 }
 

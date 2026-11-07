@@ -84,18 +84,18 @@ public class NeedToChargeHysteresisTests : TestBase
   [Fact]
   public void NotCharging_TroughAtFloorPlusMargin_DoesNotStart()
   {
-    // 31 % → trough ≈ 14 % = floor + margin: a charge that just stopped at 15 % and lost a 1 %
-    // tick — no restart (that was the 2026-10-19 flapping).
-    var sim = EnergySimulator.Simulate(Input(31, Normal));
+    // 32 % → trough ≈ 14 % = floor + margin (the night drawn with the discharge loss): a charge that just stopped at 15 %
+    // and lost a 1 % tick — no restart (that was the 2026-10-19 flapping).
+    var sim = EnergySimulator.Simulate(Input(32, Normal));
     Assert.Equal(InverterModes.normal, sim.Slots[0].State.Mode);
   }
 
   [Fact]
   public void NotCharging_TroughOneBelowFloorPlusMargin_Starts()
   {
-    // 30 % → trough ≈ 13 % = floor + margin − 1: a real 2 % drop — starts, in whatever quarter
+    // 31 % → trough ≈ 13 % = floor + margin − 1: a real 2 % drop — starts, in whatever quarter
     // the price logic picks (here: now, flat price).
-    var sim = EnergySimulator.Simulate(Input(30, Normal));
+    var sim = EnergySimulator.Simulate(Input(31, Normal));
     Assert.Equal(InverterModes.force_charge, sim.Slots[0].State.Mode);
   }
 
