@@ -45,5 +45,26 @@ class StaleFilesTests(unittest.TestCase):
         self.assertEqual([], deploy.stale_files(['a.dll'], ['a.dll', 'x.db']))
 
 
+class InstallTests(unittest.TestCase):
+    def test_stop_copy_start_in_order(self):
+        calls = []
+        deploy.install(lambda: calls.append('stop'), lambda: calls.append('copy'), lambda: calls.append('start'))
+        self.assertEqual(['stop', 'copy', 'start'], calls)
+
+    def test_a_failed_copy_still_starts_the_add_on(self):
+        calls = []
+        def copy(): calls.append('copy'); raise OSError('share gone')
+        with self.assertRaises(OSError):
+            deploy.install(lambda: calls.append('stop'), copy, lambda: calls.append('start'))
+        self.assertEqual(['stop', 'copy', 'start'], calls)
+
+    def test_a_failed_stop_copies_nothing(self):
+        calls = []
+        def stop(): raise OSError('HA unreachable')
+        with self.assertRaises(OSError):
+            deploy.install(stop, lambda: calls.append('copy'), lambda: calls.append('start'))
+        self.assertEqual([], calls)
+
+
 if __name__ == '__main__':
     unittest.main()

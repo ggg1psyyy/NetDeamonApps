@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploys the NetDaemon host with its app plugins, and PVControl's Home Assistant files.
 
-  python deploy/deploy.py apps [--dry-run] [--force]   publish, copy to the add-on folder, restart, verify
+  python deploy/deploy.py apps [--dry-run] [--force]   publish, stop the add-on, copy to its folder, start it, verify
   python deploy/deploy.py ha [--write]                  merge src/PVControl/HA into the HA config (dry run without --write)
 
 Machine details come from deploy/local.json (not committed, see local.example.json); the HA URL and token from
@@ -73,6 +73,17 @@ def stale_files(published, deployed):
     return sorted(f for f in deployed if f not in set(published) and not keep(f))
 
 
+def install(stop, copy, start):
+    """Stops the add-on, copies, starts it again — also if the copy fails. Copying over a running add-on rewrote its
+    DLLs under the process: .NET loads a method's code from the mapped file when it first runs, and on 2026-11-07 the
+    apps' DisposeAsync at shutdown failed with BadImageFormatException (Bad IL range)."""
+    stop()
+    try:
+        copy()
+    finally:
+        start()
+
+
 def files_in(folder):
     return [os.path.relpath(os.path.join(d, f), folder).replace(os.sep, '/') for d, _, fs in os.walk(folder) for f in fs]
 
@@ -106,18 +117,28 @@ def apps(cfg, dry_run, force):
                  'quarter after a restart); retry later or use --force')
 
     target = cfg['addon_folder']
-    ignore = lambda d, names: [n for n in names if any(fnmatch.fnmatch(n, p) for p in KEEP)]
-    shutil.copytree(PUBLISH, target, dirs_exist_ok=True, ignore=ignore)
-    print(now(), 'copied to', target)
-    for name in plugins:   # a plugin folder holds exactly its build (plus its data): drop what the build no longer has
-        new, old = os.path.join(PUBLISH, 'apps', 'plugins', name), os.path.join(target, 'apps', 'plugins', name)
-        stale = stale_files(files_in(new), files_in(old))
-        for f in stale: os.remove(os.path.join(old, f))
-        for d, _, _ in sorted(os.walk(old), key=lambda x: -len(x[0])):
-            if d != old and not os.listdir(d): os.rmdir(d)
-        if stale: print(f'  {name}: removed {len(stale)} files the build no longer has')
-    ha.call('services/hassio/addon_restart', {'addon': cfg['addon']})
-    print(now(), 'restarted', cfg['addon'])
+
+    def copy():
+        ignore = lambda d, names: [n for n in names if any(fnmatch.fnmatch(n, p) for p in KEEP)]
+        shutil.copytree(PUBLISH, target, dirs_exist_ok=True, ignore=ignore)
+        print(now(), 'copied to', target)
+        for name in plugins:   # a plugin folder holds exactly its build (plus its data): drop what the build no longer has
+            new, old = os.path.join(PUBLISH, 'apps', 'plugins', name), os.path.join(target, 'apps', 'plugins', name)
+            stale = stale_files(files_in(new), files_in(old))
+            for f in stale: os.remove(os.path.join(old, f))
+            for d, _, _ in sorted(os.walk(old), key=lambda x: -len(x[0])):
+                if d != old and not os.listdir(d): os.rmdir(d)
+            if stale: print(f'  {name}: removed {len(stale)} files the build no longer has')
+
+    def stop():
+        ha.call('services/hassio/addon_stop', {'addon': cfg['addon']})
+        print(now(), 'stopped', cfg['addon'])
+
+    def start():
+        ha.call('services/hassio/addon_start', {'addon': cfg['addon']})
+        print(now(), 'started', cfg['addon'])
+
+    install(stop, copy, start)
 
     deadline = time.time() + 180
     sensors = cfg.get('version_entities', [])
@@ -204,7 +225,7 @@ def ha_files(cfg, write):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
-    a = sub.add_parser('apps', help='publish, copy, restart, verify')
+    a = sub.add_parser('apps', help='publish, stop, copy, start, verify')
     a.add_argument('--dry-run', action='store_true', help='publish only')
     a.add_argument('--force', action='store_true', help='deploy even while the import is high')
     h = sub.add_parser('ha', help="merge PVControl's HA files into the HA config")

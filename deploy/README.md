@@ -7,7 +7,7 @@ Setup: copy `local.example.json` to `local.json` (not committed) and fill in the
 mounted HA config folder. The HA URL and token come from `src/Host/appsettings.json`.
 
 ```bash
-python deploy/deploy.py apps            # publish, copy, restart the add-on, verify the version sensors
+python deploy/deploy.py apps            # publish, stop the add-on, copy, start it, verify the version sensors
 python deploy/deploy.py apps --dry-run  # publish only
 python deploy/deploy.py ha              # merge src/PVControl/HA into the HA config: dry run
 python deploy/deploy.py ha --write      # apply (backups next to the files), check the config, reload
@@ -20,9 +20,10 @@ python -m unittest discover deploy      # the script's tests
   the cost log and the quarter tracking write then) — it waits
 - refuses while the grid import is high or a force charge runs (after a restart the import cap guard only
   estimates the running quarter); `--force` overrides
-- copies the publish output into the add-on folder, keeping the live `appsettings*.json` and every DB; files
-  that no longer exist in the build stay there (remove them by hand)
-- restarts the add-on and waits until `version_entities` show the deployed commit
+- stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json` and every DB;
+  files the build no longer has are removed from the plugin folders) and starts it again — also if the copy fails;
+  never copies over the running add-on (it would rewrite the DLLs under the process)
+- waits until `version_entities` show the deployed commit
 
 `ha`: replaces PVControl's automations in `automations.yaml` by `id` (appends missing ones), the
 `pv_control_apply_mode` script in `scripts.yaml` and the `packages/pv_control_inverter.yaml` package; checks the
