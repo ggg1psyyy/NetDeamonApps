@@ -1231,3 +1231,24 @@ only to feed the EV still loses to the grid. A running session keeps its supply 
 session was kept). This also lets a cheap charge before a dearer stretch feed a night session through the battery
 when that pays after the losses.
 
+### The DP planner evaluated: kept, band cost 0.0005 confirmed
+
+Closed-loop replay on 2026-11-07 over the stored planning situations (`dp_shadow.db` table `forecast`, 758 quarters
+2026-10-30 13:30 – 2026-11-07 10:45): each quarter both planners planned on that quarter's forecast from their own
+replayed SoC and their own previous mode, and the first decision ran against the real PV and house load (DataLogger
+hourly ÷ 4) at the real price, with the battery's losses — same reality for both, only the decisions differ.
+
+| | grid cost | end SoC | lowest SoC | mode switches | charge quarters (bulk) |
+|---|---|---|---|---|---|
+| greedy | 61.81 € | 11 % | 11 % (under the 12-% floor: planned lossless) | 48 | 60 (28) |
+| DP | 62.43 € | 35 % | 13 % | 68 | 95 (12) |
+
+The DP bought 2.66 kWh more into the battery for 0.62 € (~0.24 €/kWh, below any refill price); with the end SoC
+valued at the mean price it was ~0.45 € (0.7 %) ahead. `BandPenaltyPerPctQuarter` 0 / 0.00025 / 0.0005 / 0.001 /
+0.002 came within 6 ct of each other — nothing to calibrate. The replay of the live planner was 2–5 % cheaper than
+reality (overrides, 100-Wh counters, hourly load, real losses ~88 % vs ~90 % modelled, live lags), more than the
+difference between the planners: the DP is at least as good, keeps more reserve and stays off the floor, with fewer
+bulk charges and more mode switches. The `shadow` table's € columns aren't comparable (each row a different code
+version, the greedy plan's lossy replay dominated by the floor penalty); both plans agreed on the current mode in 80 %
+of the quarters, mostly differing as greedy normal vs DP hold.
+
