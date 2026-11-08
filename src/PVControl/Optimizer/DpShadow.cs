@@ -94,8 +94,10 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>Runs the DP in the background on the greedy run's input and compares; logs the quarter's row.</summary>
     /// <param name="greedy">The greedy simulation of this cycle.</param>
     /// <param name="now">Current time.</param>
+    /// <param name="running">The mode the plan that steers runs now (<see cref="DpSteering.RunningInput"/>); null: the
+    /// greedy plan's own.</param>
     /// <returns>The comparison; null if a run was already going.</returns>
-    public async Task<DpShadowReport?> RunAsync(SimulationResult greedy, DateTime now)
+    public async Task<DpShadowReport?> RunAsync(SimulationResult greedy, DateTime now, InverterState? running = null)
     {
       if (Interlocked.Exchange(ref _running, 1) == 1) return null;
       try
@@ -104,13 +106,14 @@ namespace NetDeamon.apps.PVControl.Optimizer
         _lastRun = now;
         var sw = Stopwatch.StartNew();
         var options = config.Options;
-        var dp = await Task.Run(() => BatteryDpPlanner.Plan(greedy.Input, options));
+        var input = DpSteering.RunningInput(greedy.Input, running);
+        var dp = await Task.Run(() => BatteryDpPlanner.Plan(input, options));
         LastPlan = dp;
         Last = Report(greedy, dp, now, (int)sw.ElapsedMilliseconds, options);
         var quarter = TimeRange.Floor(now, TimeRange.SlotMinutes);
         if (quarter > _lastLoggedQuarter)
         {
-          await LogAsync(quarter, Last, ForecastSnapshot.From(greedy.Input));
+          await LogAsync(quarter, Last, ForecastSnapshot.From(input));
           _lastLoggedQuarter = quarter;
         }
         return Last;

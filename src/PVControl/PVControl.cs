@@ -32,6 +32,9 @@ namespace NetDeamon.apps.PVControl
     private static int s_liveInstances;
     // The DP shadow planner (Optimizer.DpShadow): computed and published next to the greedy plan, never steering.
     private Optimizer.DpShadow? _dpShadow;
+    /// <summary>The steering plan's decision for the running quarter, last cycle (HouseEnergy.SteeredState): the mode
+    /// the DP plans from — its own while it steers, not the greedy plan's.</summary>
+    private InverterState? _steeredState;
     private Entity? _dpShadowEntity;
     private Entity? _dpShadowSocEntity;
     // nullforgiving "!" used to supress CS8618 for now
@@ -1073,10 +1076,11 @@ namespace NetDeamon.apps.PVControl
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
       await WaitForFirstDpPlanAsync(now);
-      var (dpTimeline, effective, dpStale) = Optimizer.DpSteering.Choose(_planner, _dpShadow?.LastPlan, _dpShadow?.Last?.ComputedAt, now, _house.SimulationState);
+      var (dpTimeline, effective, dpStale) = Optimizer.DpSteering.Choose(_planner, _dpShadow?.LastPlan, _dpShadow?.Last?.ComputedAt, now, _house.SimulationState, _steeredState);
       if (effective != _effectivePlanner)
         PVCC_Logger.LogInformation("Planner steering: {Planner}{Stale}", effective, dpStale ? " (DP plan stale)" : "");
       _house.DpSteering = dpTimeline;
+      _steeredState = _house.SteeredState(now);
       (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
       await PublishPricePublicationAsync(now);
@@ -1476,11 +1480,12 @@ namespace NetDeamon.apps.PVControl
         return Task.CompletedTask;
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       bool requested = shadow.RunRequested && !firstPlan;
+      var running = _steeredState;   // read on the cycle's thread
       return Task.Run(async () =>
       {
         try
         {
-          if (await shadow.RunAsync(sim, now) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
+          if (await shadow.RunAsync(sim, now, running) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
           {
             await PVCC_EntityManager.SetStateAsync(entity.EntityId, report.DpModeNow.ToString());
             await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, Optimizer.DpShadow.Attributes(report));

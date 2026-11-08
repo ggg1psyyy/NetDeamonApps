@@ -31,11 +31,12 @@ public static class DpSteering
   /// </summary>
   /// <param name="dp">The DP plan.</param>
   /// <param name="greedy">The greedy simulation the plan was computed on (or a later one).</param>
-  public static List<SimulationSlot> ToTimeline(DpPlan dp, SimulationResult greedy)
+  /// <param name="running">The mode running now (<see cref="RunningInput"/>); null: the greedy plan's own.</param>
+  public static List<SimulationSlot> ToTimeline(DpPlan dp, SimulationResult greedy, InverterState? running = null)
   {
     var bySlot = greedy.Slots.ToDictionary(s => s.Time);
-    var dpInput = greedy.Input.WithBatteryLosses();   // the input the DP planned with
-    var bulk = BlockPaths(dp.Slots, greedy.Input.CurrentMode, s => dpInput.ChargeLimitWh(false, s.SocPct, dpInput.SlotFraction(s.Time)), dpInput.SocToWh(5),
+    var dpInput = RunningInput(greedy.Input, running).WithBatteryLosses();   // the input the DP planned with
+    var bulk = BlockPaths(dp.Slots, dpInput.CurrentMode, s => dpInput.ChargeLimitWh(false, s.SocPct, dpInput.SlotFraction(s.Time)), dpInput.SocToWh(5),
       t => dpInput.ImportPrices.GetPriceOrMean(t));
     return dp.Slots.Select((s, i) =>
     {
@@ -134,6 +135,18 @@ public static class DpSteering
     return s.Mode == InverterModes.force_charge ? ForceChargeReasons.CheaperThanLater : ForceChargeReasons.SavedForLater;
   }
 
+  /// <summary>
+  /// The DP's input: the greedy run's, with the mode running now — the decision of the plan that steers (the DP's own while
+  /// it does), not the greedy plan's. The keep-mode hysteresis, a running charge's start cost and its path key off it: on
+  /// the greedy plan's mode they kept a mode that wasn't running (live 2026-11-07/08: the greedy plan "normal" all night,
+  /// the DP holding — the hold dropped 90 s before each quarter's end; a running DP charge read as "none running": paused
+  /// at each quarter's start and restarted minutes later).
+  /// </summary>
+  /// <param name="greedy">The greedy run's input.</param>
+  /// <param name="running">The mode running now; null keeps the greedy plan's.</param>
+  public static SimulationInput RunningInput(SimulationInput greedy, InverterState? running) =>
+    running is { } mode ? greedy.WithCurrentMode(mode) : greedy;
+
   /// <summary>Whether the cycle waits for the first DP plan before choosing: the DP is selected, has no plan yet, and the
   /// cycle hasn't waited before (once per start — a failed first run doesn't hold up every cycle).</summary>
   /// <param name="selected">The planner the user selected.</param>
@@ -148,14 +161,15 @@ public static class DpSteering
   /// <param name="computedAt">When it was computed.</param>
   /// <param name="now">Current time.</param>
   /// <param name="greedy">This cycle's greedy simulation.</param>
+  /// <param name="running">The mode running now (<see cref="RunningInput"/>); null: the greedy plan's own.</param>
   /// <returns>The DP timeline to steer by (null: the greedy plan steers), the planner in effect, and whether the DP
   /// was selected but couldn't steer (no plan, or older than <see cref="MaxPlanAge"/>).</returns>
   public static (IReadOnlyList<SimulationSlot>? Timeline, Planner Effective, bool Stale) Choose(
-    Planner selected, DpPlan? plan, DateTime? computedAt, DateTime now, SimulationResult? greedy)
+    Planner selected, DpPlan? plan, DateTime? computedAt, DateTime now, SimulationResult? greedy, InverterState? running = null)
   {
     if (selected != Planner.dp) return (null, Planner.greedy, false);
     if (plan is null || greedy is null || computedAt is not { } at || now - at > MaxPlanAge)
       return (null, Planner.greedy, true);
-    return (ToTimeline(plan, greedy), Planner.dp, false);
+    return (ToTimeline(plan, greedy, running), Planner.dp, false);
   }
 }

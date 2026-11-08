@@ -133,6 +133,48 @@ public class DpSteeringTests : TestBase
   }
 
   [Fact]
+  public async Task TheDpPlansFromTheModeItSteers_NotTheGreedyPlans()
+  {
+    // Live 2026-11-07 23:00 (23 %): the greedy plan "normal" all night — its running mode was the DP's input — while
+    // the DP held. The keep-mode hysteresis kept "normal", the mode that wasn't running: the hold dropped at 23:13:30,
+    // and so in every quarter. From the mode it steers the hold runs the quarter out.
+    static ForecastSnapshot Snap(string name) => ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(
+      System.IO.Path.Combine(AppContext.BaseDirectory, "Data", name)));
+    var o = new DpOptions(BandPenaltyPerPctQuarter: 0.0005f, ChargeStartEur: 0.01f);   // the live settings
+    var late = (Snap("forecast_snapshot_2026-11-07_2300.json.gz") with
+      { StartTime = new DateTime(2026, 11, 7, 23, 13, 30), CurrentMode = InverterModes.normal }).ToInput();
+    var held = new InverterState(InverterModes.grid_only, ForceChargeReasons.AbsoluteMinimum);
+    Assert.Equal(InverterModes.normal, BatteryDpPlanner.Plan(late, o).Slots[0].Mode);   // on the greedy plan's mode
+    var steered = DpSteering.RunningInput(late, held);
+    Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(steered, o).Slots[0].Mode);
+    Assert.Equal(held, steered.CurrentMode);
+    Assert.Equal((late.StartTime, late.StartSocPercent, late.LoadPredictionWh), (steered.StartTime, steered.StartSocPercent, steered.LoadPredictionWh));
+    Assert.Same(late, DpSteering.RunningInput(late, null));   // nothing steered yet (after a start): the greedy plan's
+
+    // The shadow plans — and stores the snapshot — on it.
+    var db = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dpsteer-" + Guid.NewGuid().ToString("N") + ".db");
+    try
+    {
+      var shadow = new DpShadow(new DpShadowConfig { IntervalMinutes = 5, BandPenaltyPerPctQuarter = 0.0005f, ChargeStartEur = 0.01f }, db);
+      await shadow.RunAsync(EnergySimulator.Simulate(late), late.StartTime, held);
+      Assert.Equal(InverterModes.grid_only, shadow.LastPlan!.Slots[0].Mode);
+    }
+    finally
+    {
+      Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+      if (System.IO.File.Exists(db)) System.IO.File.Delete(db);
+    }
+
+    // A running charge keeps its path from the mode it runs in, not the greedy plan's (2026-11-08 10:05: greedy "normal").
+    var charging = (Snap("forecast_snapshot_2026-11-08_1000.json.gz") with
+      { StartTime = new DateTime(2026, 11, 8, 10, 5, 0), CurrentMode = InverterModes.normal }).ToInput();
+    var bulk = new InverterState(InverterModes.force_charge, ForceChargeReasons.AbsoluteMinimum) { Bulk = true };
+    var plan = BatteryDpPlanner.Plan(DpSteering.RunningInput(charging, bulk), o);
+    Assert.Equal(InverterModes.force_charge, plan.Slots[0].Mode);
+    Assert.True(DpSteering.ToTimeline(plan, EnergySimulator.Simulate(charging), bulk)[0].State.Bulk);
+  }
+
+  [Fact]
   public async Task Shadow_RunsEveryMinuteWhileSteering()
   {
     var db = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dpsteer-" + Guid.NewGuid().ToString("N") + ".db");

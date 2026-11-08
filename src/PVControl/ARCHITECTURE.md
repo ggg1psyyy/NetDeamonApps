@@ -1237,6 +1237,19 @@ it only keeps a mode that is allowed. Now the hold rule reads the whole quarter'
 minute, which reads as "no PV") and the charge rule scales the 1 % with the rest (`StoresUnderOnePercent`: the charge's
 rate decides, not the minutes left).
 
+The running mode those rules and the keep-mode hysteresis read was the greedy plan's, not the DP's: the DP planned on the
+greedy run's input, whose `CurrentMode` is the greedy plan's own decision for the running quarter (`HouseEnergy._planMode`,
+its hysteresis). While the DP steers the two differ — 2026-11-07/08 the greedy plan said "normal" all night while the
+DP held. So `KeepModeEur` kept "normal", the mode that wasn't running: near a quarter's end the hold's value fell under
+0.1 ct and it dropped (23:13:30, 23:28:30, … — then held again at the next quarter); and a running DP charge read as
+none running (a start cost, no path to keep): grid_only at a quarter's start, the charge again minutes later (11:15–12:45).
+Replayed from the stored snapshots, the DP held through the quarter and charged on once it was given the mode it steered.
+Now the DP plans from the steering plan's decision for the running quarter (`HouseEnergy.SteeredState`, the cycle passes
+it to the shadow run, `DpSteering.RunningInput`; `BlockPaths` keeps a running charge's path from it) — the DP's own while
+it steers, the greedy plan's while that steers. Before the user override, the grid-load hold and the bug-fix kick, as
+for the greedy plan's own: neither plan continues what it didn't decide. The greedy simulation keeps its own mode; the
+stored snapshot is the DP's input.
+
 ### A charge in the current price block starts now; bulk only beyond 5 %
 
 2026-11-04 12:00–12:08, the cheap hour 12:00–13:00 (0.421): the minute's replans moved the charge's start within the

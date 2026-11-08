@@ -1246,6 +1246,18 @@ namespace NetDeamon.apps.PVControl
     /// <param name="b">Second time.</param>
     private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
 
+    /// <summary>The steering plan's decision for the running quarter (the DP's while it steers, else the greedy
+    /// simulation's) — before the user override, the battery hold for a grid load and the bug-fix kick: the plan's own
+    /// state, the DP's next run plans from it (<see cref="Optimizer.DpSteering.RunningInput"/>).</summary>
+    /// <param name="now">Current time.</param>
+    /// <returns>The state; null before the first simulation.</returns>
+    public InverterState? SteeredState(DateTime now)
+    {
+      if (_simulationResult is null || _simulationResult.Slots.Count == 0) return null;
+      var timeline = SteeringTimeline;
+      return (timeline.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour()) ?? timeline[0]).State;
+    }
+
     /// <summary>Inverter command now: the simulation's running slot, or the user override. Neither the override nor
     /// the bug-fix kick below changes the plan's own state (<see cref="_planMode"/>): the simulation always continues
     /// from what it decided itself.</summary>
@@ -1257,9 +1269,7 @@ namespace NetDeamon.apps.PVControl
         if (_simulationResult is null || _simulationResult.Slots.Count == 0)
           return _planMode;
 
-        var timeline = SteeringTimeline;
-        var planned = (timeline.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour())
-                       ?? timeline[0]).State;
+        var planned = SteeredState(now) ?? _planMode;
 
         // ── User override ──────────────────────────────────────────────────────────────────
         // Only affects the command sent to the inverter right now.

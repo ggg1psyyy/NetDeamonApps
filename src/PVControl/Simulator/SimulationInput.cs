@@ -357,6 +357,12 @@ public class SimulationInput
   /// <returns>The copy.</returns>
   public SimulationInput WithExtraLoads(List<ExtraLoad> loads) => Copy(loads, ImportPrices, ExportPrices, PublishedPricesUntil);
 
+  /// <summary>Copy with another mode running now (the DP plans from the mode it steers, not the greedy plan's).</summary>
+  /// <param name="mode">The mode running now.</param>
+  /// <returns>The copy.</returns>
+  public SimulationInput WithCurrentMode(InverterState mode) =>
+    Copy(ExtraLoads, ImportPrices, ExportPrices, PublishedPricesUntil, mode: mode);
+
   /// <summary>Copy with other prices.</summary>
   /// <param name="import">Replaces <see cref="ImportPrices"/>.</param>
   /// <param name="export">Replaces <see cref="ExportPrices"/>.</param>
@@ -373,8 +379,9 @@ public class SimulationInput
   /// <returns>The copy.</returns>
   /// <param name="losses">Replaces <see cref="BatteryLosses"/>; null keeps it.</param>
   /// <param name="load">Replaces <see cref="LoadPredictionWh"/>; null keeps it.</param>
+  /// <param name="mode">Replaces <see cref="CurrentMode"/>; null keeps it.</param>
   private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null,
-    Dictionary<DateTime, int>? load = null) => new()
+    Dictionary<DateTime, int>? load = null, InverterState? mode = null) => new()
   {
     BatteryLosses = losses ?? BatteryLosses,
     StartTime = StartTime,
@@ -395,7 +402,7 @@ public class SimulationInput
     OpportunisticDischarge = OpportunisticDischarge,
     ForceChargeMaxPrice = ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
-    CurrentMode = CurrentMode,
+    CurrentMode = mode ?? CurrentMode,
     ChargeVoltageV = ChargeVoltageV,
     MaxGridImportW = MaxGridImportW,
     VppChargePowerW = VppChargePowerW,
