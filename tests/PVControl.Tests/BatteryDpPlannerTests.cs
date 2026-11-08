@@ -370,6 +370,31 @@ public class BatteryDpPlannerTests : TestBase
   }
 
   [Fact]
+  public void HoldAndChargeRules_JudgeTheWholeQuarter_NotItsRest()
+  {
+    // Live 2026-11-08: the minute's replans judged the 1 % rules on the running quarter's rest. 07:45 (17 %, PV 27 Wh
+    // against 189 Wh): the hold was allowed at :45 and ruled out 5 minutes in (normal, then grid_only again at 08:00 —
+    // every quarter 07:15–08:45); 10:00 (a charge to 99 %): it stored under 1 % of a quarter in the last minute and
+    // stopped there (10:13, 10:44, 12:29, 13:14).
+    static ForecastSnapshot Snap(string name) => ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(
+      System.IO.Path.Combine(AppContext.BaseDirectory, "Data", name)));
+    var hold = Snap("forecast_snapshot_2026-11-08_0745.json.gz");
+    var quarter = new DateTime(2026, 11, 8, 7, 45, 0);
+    Assert.True(BatteryDpPlanner.HoldAllowed(hold.ToInput().WithBatteryLosses(), quarter));
+    foreach (int minute in new[] { 5, 9 })
+    {
+      var input = (hold with { StartTime = quarter.AddMinutes(minute), CurrentMode = InverterModes.grid_only }).ToInput();
+      Assert.True(BatteryDpPlanner.HoldAllowed(input.WithBatteryLosses(), quarter));
+      Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input, O).Slots[0].Mode);
+    }
+
+    var charge = Snap("forecast_snapshot_2026-11-08_1000.json.gz");
+    var late = (charge with { StartTime = new DateTime(2026, 11, 8, 10, 14, 30), CurrentMode = InverterModes.force_charge,
+      CurrentReason = ForceChargeReasons.AbsoluteMinimum }).ToInput();
+    Assert.Equal(InverterModes.force_charge, BatteryDpPlanner.Plan(late, O).Slots[0].Mode);
+  }
+
+  [Fact]
   public void Bulk_WhenTheCheapHourIsFullOnVpp()
   {
     // Live 2026-11-02 12:15 (the stored planning situation): the 23:00 hour (0.394) is full on VPP (1196 → 918 Wh per

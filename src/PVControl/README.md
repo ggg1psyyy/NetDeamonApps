@@ -330,7 +330,8 @@ Both plans run with the battery's conversion losses (`InverterEfficiency` per di
 discharge draws ÷ 0.95): the greedy simulation's flows, its look-ahead and its charge sizing, and the DP — where a grid
 charge only pays if the later price beats the round trip, at a fixed price never beyond the minimums.
 The DP plans normal, feedin_priority, grid_only and grid charges (in a quarter with any PV it only holds the battery with grid_only
-where the house's deficit under PV would take at least 1 % SoC — otherwise feedin_priority; in the current quarter the
+where the house's deficit under PV would take at least 1 % SoC in the quarter — otherwise feedin_priority; the running quarter
+is judged whole, not its rest; in the current quarter the
 running mode stays while switching is worth under 0.1 ct; a charge the plan has later in the current price block starts
 or keeps running now): while it steers there is no grid charge at a negative import
 price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.

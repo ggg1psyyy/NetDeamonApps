@@ -53,9 +53,15 @@ public class SimulationInput
   /// <summary>Energies of a slot, the running slot only its rest (<see cref="SlotFraction"/>).</summary>
   /// <param name="slotStart">Start of the slot.</param>
   /// <returns>PV, base load and extra loads, Wh.</returns>
-  internal (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart)
+  internal (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart) => SlotEnergyWh(slotStart, SlotFraction(slotStart));
+
+  /// <summary>Energies of a whole slot, the running one too — for rules set per quarter (<c>BatteryDpPlanner.HoldAllowed</c>).</summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <returns>PV, base load and extra loads, Wh.</returns>
+  internal (int PvWh, int LoadWh, int ExtraWh) QuarterEnergyWh(DateTime slotStart) => SlotEnergyWh(slotStart, 1);
+
+  private (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart, double fraction)
   {
-    double fraction = SlotFraction(slotStart);
     return ((int)(PVPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
             (int)(LoadPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
             (int)(ExtraLoadWh(slotStart) * fraction));

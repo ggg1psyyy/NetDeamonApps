@@ -224,6 +224,7 @@ public static class BatteryDpPlanner
 
     var energies = times.Select(t => input.SlotEnergyWh(t)).ToArray();
     var fractions = times.Select(t => input.SlotFraction(t)).ToArray();
+    var holdOks = times.Select(t => HoldAllowed(input, t)).ToArray();   // per whole quarter, the running one too
 
     // value[i][c][s]: cheapest cost from slot i in state s to the end, c = 1 if the quarter before charged from the grid
     // (only with a ChargeStartEur; else one layer); policy[i][c][s]: the action taken
@@ -255,7 +256,7 @@ public static class BatteryDpPlanner
       var (pv, load, extra) = energies[i];
       int totalLoad = load + extra;
       bool held = input.BatteryHeldForLoad(times[i], pv, totalLoad);
-      bool holdOk = HoldAllowed(input, pv, totalLoad);
+      bool holdOk = holdOks[i];
       var actions = Actions(input, o, held, holdOk);
       for (int s = 0; s < states; s++)
       {
@@ -270,7 +271,7 @@ public static class BatteryDpPlanner
           var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, wh, fractions[i]);
           // A "charge" that stores under 1 % is a hold under another name (the battery doesn't discharge): the hold rule
           // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
-          if (a.Mode == InverterModes.force_charge && !holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
+          if (a.Mode == InverterModes.force_charge && !holdOk && StoresUnderOnePercent(input, ch, fractions[i])) continue;
           int next = input.NextEnergyWh(wh, ch, dis);
           float rest = input.GridCostOf(times[i], imp, exp) + (PlanEvaluation.BandApplies(a.Mode) ? band : 0) + floor + ValueAt(value[i + 1][LayerAfter(a)], next);
           for (int c = 0; c < layers; c++)
@@ -321,7 +322,7 @@ public static class BatteryDpPlanner
       while (blockEnd < n && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
       if (plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
       {
-        bool holdOk = HoldAllowed(input, pv0, load0 + extra0);
+        bool holdOk = holdOks[0];
         bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };
         Action? best = null;
         float bestRest = float.MaxValue;
@@ -329,7 +330,7 @@ public static class BatteryDpPlanner
         {
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
           var (ch, dis, imp, exp) = Flows(input, a, pv0, load0 + extra0, startEnergy, fractions[0]);
-          if (!holdOk && input.StoredWh(ch) < input.SocToWh(1)) continue;
+          if (!holdOk && StoresUnderOnePercent(input, ch, fractions[0])) continue;
           var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o, a.Mode);
           float rest = input.GridCostOf(times[0], imp, exp) + band + floor + RestAt(0, a, input.NextEnergyWh(startEnergy, ch, dis));
           if (rest < bestRest - o.TieEur) (best, bestRest) = (a, rest);
@@ -358,7 +359,7 @@ public static class BatteryDpPlanner
       return planned;
     var keep = new Action(current, false, 0);
     bool held = input.BatteryHeldForLoad(time, pv, totalLoad);
-    if (!Actions(input, o, held, HoldAllowed(input, pv, totalLoad)).Contains(keep))
+    if (!Actions(input, o, held, HoldAllowed(input, time)).Contains(keep))
       return planned;
     float Rest(Action a)
     {
@@ -431,6 +432,30 @@ public static class BatteryDpPlanner
   /// <param name="totalLoadWh">Load incl. extra loads, Wh.</param>
   public static bool HoldAllowed(SimulationInput input, int pvWh, int totalLoadWh) =>
     pvWh <= 0 || input.DrawnWh(Math.Max(0, totalLoadWh - pvWh)) >= input.SocToWh(1);
+
+  /// <summary>
+  /// <see cref="HoldAllowed(SimulationInput, int, int)"/> of a whole quarter, the running one too: the rule is per quarter.
+  /// On the running quarter's rest it fell under 1 % a few minutes in and the minute's replan dropped the hold for the
+  /// rest of the quarter (live 2026-11-08 07:15–08:45, 14:15–14:45: grid_only at :00, normal 3–7 minutes later, every quarter).
+  /// </summary>
+  /// <param name="input">Simulation input (forecasts, capacity, losses).</param>
+  /// <param name="slot">Start of the quarter.</param>
+  public static bool HoldAllowed(SimulationInput input, DateTime slot)
+  {
+    var (pv, load, extra) = input.QuarterEnergyWh(slot);
+    return HoldAllowed(input, pv, load + extra);
+  }
+
+  /// <summary>
+  /// Whether a grid charge stores under 1 % SoC per quarter — a hold under another name where holds are ruled out
+  /// (2026-11-03). On the running quarter's rest the 1 % shrinks with it: the charge's rate decides, not how many minutes
+  /// are left (live 2026-11-08 10:13, 10:44, 12:29, 13:14: a charge to 99 % stopped late in its quarters).
+  /// </summary>
+  /// <param name="input">Simulation input (capacity, losses).</param>
+  /// <param name="chargeWh">The charge into the battery in the slot (or its rest), Wh.</param>
+  /// <param name="fraction">Share of the quarter the charge runs (<see cref="SimulationInput.SlotFraction"/>).</param>
+  internal static bool StoresUnderOnePercent(SimulationInput input, int chargeWh, double fraction) =>
+    input.StoredWh(chargeWh) < input.SocToWh(1) * fraction;
 
   /// <summary>The flows of an action, by the simulation's own function.</summary>
   private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction)

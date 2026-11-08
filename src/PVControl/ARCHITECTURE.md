@@ -1227,6 +1227,16 @@ another name (the battery doesn't discharge) — with holds ruled out the DP had
 so the same rule applies to them; and a charge block's VPP check counts the free quarters at the block's price next to
 it (the user's rule is "bulk only if VPP can't get it into the price slot"; the next replan charges there).
 
+Both 1 % rules are per quarter, and the running quarter is judged whole. The DP replans every minute on the running
+quarter's rest (`SlotFraction`), and the rules were first applied to that rest: 2026-11-08 07:15–08:45 and
+14:15–14:45 (PV 27–58 Wh against ~200 Wh) the hold was allowed at the quarter's start and ruled out 3–7 minutes in —
+grid_only at :00, normal minutes later, every quarter; and a charge to 99 % stopped in the last minute of its quarters
+(10:13, 10:44, 12:29, 13:14) because that minute stored under 1 % of a quarter. The keep-mode hysteresis couldn't help:
+it only keeps a mode that is allowed. Now the hold rule reads the whole quarter's forecast
+(`HoldAllowed(input, slot)`, `SimulationInput.QuarterEnergyWh` — not the rest scaled up: its PV rounds to 0 in the last
+minute, which reads as "no PV") and the charge rule scales the 1 % with the rest (`StoresUnderOnePercent`: the charge's
+rate decides, not the minutes left).
+
 ### A charge in the current price block starts now; bulk only beyond 5 %
 
 2026-11-04 12:00–12:08, the cheap hour 12:00–13:00 (0.421): the minute's replans moved the charge's start within the
