@@ -180,6 +180,7 @@ The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only 
 | `sensor.pv_control_sum_export_earnings_brutto` | Cumulative gross export earnings (€) |
 | `sensor.pv_control_sum_import_export_net_cost` | Net cost = import − export (€) |
 | `sensor.pv_control_battery_avg_cost_per_kwh` | Average cost per kWh stored in the battery: each charged kWh split by source (PV free, grid at the import price), blended into the stored energy — the same calculation as the loads' `total_cost` |
+| `sensor.pv_control_<slug>_total_cost` (`CostMeters`) | Cumulative cost of a consumer's energy counter (€): each increase priced by the house's source mix of the moment — every consumer in the house gets the same PV/grid/battery shares; PV free, grid at the import price, battery at its average cost ÷ the round trip. Configured: `heatpump` (total = heating + warm water + standby), `heatpump_heat`, `heatpump_ww`; the energy totals are the heat pump's own counters in HA |
 
 ## Battery / forecast entities
 
@@ -396,5 +397,6 @@ dotnet test tests/PVControl.Tests
 | `ImportCapSimulationTests` | Import cap in the plan: grid charging yields to the load, NeedToCharge under the cap, PriorityPlus never over it, warm-water starts wait, DataLogger v8 |
 | `HeldReadingTests` | Battery SoC held through sensor dropouts, stale after 2 min → normal mode |
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |
+| `CostMeterTests` | The cost meters' € totals: the first reading is the base, each increase at the price of its moment, a counter blip to 0 and back isn't booked, a daily reset is; every consumer gets the house's source mix |
 | `SourceSharesTests` | What a kWh costs by source (battery average cost, loads' cost totals) and the shared price lookup |
 | `HealthTests` | Health sensor: debounce (single blip stays ok, clear after 1 min, escalation), checks (SoC, prices incl. the disabled primary source, tomorrow's prices, cycle failures, DataLogger, forecasts, warm water) |

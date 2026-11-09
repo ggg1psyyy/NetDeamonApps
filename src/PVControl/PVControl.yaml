@@ -182,6 +182,24 @@ NetDeamon.apps.PVControl.PVConfig:
       ReplanIntervalMinutes: 5
       # Mode and TargetLevel omitted — HA entities auto-created
 
+  # Cost meters: every increase of a consumer's energy counter (kWh) is priced by the house's source mix of the
+  # moment (PV 0, battery at its average cost per kWh delivered, grid at the import price) into
+  # sensor.pv_control_<Slug>_total_cost (€). MaxPowerW: a counter step above 2 h of it is a glitch.
+  # The heat pump's never-resetting counters: total = heating + warm water + standby.
+  CostMeters:
+    - Name: "Heat pump"
+      Slug: heatpump
+      EnergyEntity: sensor.wp_total_energy_consumption_noreset
+      MaxPowerW: 4000
+    - Name: "Heat pump heating"
+      Slug: heatpump_heat
+      EnergyEntity: sensor.heating_energy_consumption_noreset
+      MaxPowerW: 4000
+    - Name: "Heat pump warm water"
+      Slug: heatpump_ww
+      EnergyEntity: sensor.ww_energy_consumption_noreset
+      MaxPowerW: 4000
+
   # Weather-aware load forecast (base load + heat pump heating by outside temperature).
   # Mode: Average (off) | Shadow (computed and published in sensor.pv_control_load_forecast,
   # PVControl keeps using the hour-of-day average) | Model (PVControl uses it; falls back to the

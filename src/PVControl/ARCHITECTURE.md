@@ -957,6 +957,15 @@ share at `SimulationInput.DeliveredPrice` = average ÷ round trip (0.355 → 0.3
 slot prices of the warm water and the EV) passes the export price: per slot it costs the import
 and earns the export (export = PV not used, a negative PV amount), which values PV by the export
 it displaces — what using a kWh costs, rather than what was paid for it.
+The heat pump's cost totals (`CostMeter`, 2026-11-09: the user's "as real as possible, taking PV/battery/grid
+into account") price each increase of its counters with the **whole house's** mix: `ForLoad` with the whole house
+load as the load makes its PV surplus the PV itself, so heat pump and the rest of the house share PV, grid and battery
+in proportion — nobody first. The EV takes PV first (`ForLoad` with its own power): an EV session in the sun and the
+heat pump are not split exactly against each other (the EV's PV is still in the house's mix); accepted, the EV runs
+on PV rarely in the heating season. The house load is a 1-min average of the raw meter (with EV and heat pump; the
+forecast's `_loadRunningAverage` subtracts both). A counter that blips to 0 and back reads as a reset, then its whole
+lifetime total as one step: a step above 2 h at the consumer's highest power (`CostMeter.MaxStepKwh`, the same limit
+as the EV's) is skipped as a glitch. Heating + warm water + standby = total, so the total costs more than the two parts.
 The battery input counter is read in Wh (base unit) like the import/export counters, and all
 three go through `CostTracker.CounterDeltaKwh`. The battery used its own copy that took the Wh
 value as kWh: each 0.1-kWh step counted as 100 kWh, so the average swung between the grid price

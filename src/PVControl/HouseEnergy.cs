@@ -26,6 +26,8 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _loadRunningAverage;
     private readonly RunningIntAverage _pvRunningAverage;
     private readonly RunningIntAverage _gridRunningAverage;
+    // The whole house's load (EV and heat pump included) over the same minute as the grid and battery averages: the cost meters' share.
+    private readonly RunningIntAverage _houseLoadAverage = new(TimeSpan.FromMinutes(1));
     public Prediction Prediction_Load
     { get; private set; }
     public Prediction Prediction_PV
@@ -45,7 +47,10 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.CurrentHouseLoadEntity is null)
         throw new NullReferenceException("HouseLoadEntity not available");
       if (PVCC_Config.CurrentHouseLoadEntity.TryGetStateValue(out int load))
+      {
         _loadRunningAverage.AddValue(load);
+        _houseLoadAverage.AddValue(load);
+      }
 
       _pvRunningAverage = new RunningIntAverage(TimeSpan.FromMinutes(15));
       if (PVCC_Config.CurrentPVPowerEntity is null)
@@ -135,6 +140,14 @@ namespace NetDeamon.apps.PVControl
         }
       }
 
+      CostMeters = PVCC_Config.CostMeters.Where(c => c.EnergyEntity is not null).Select(c => new CostMeter(c)).ToList();
+      foreach (var meter in CostMeters)
+      {
+        if (meter.Config.EnergyEntity!.TryGetStateValue(out float initWh))
+          meter.Book(initWh, 0);   // the base: the first reading books nothing
+        meter.Config.EnergyEntity.StateChanges().SubscribeAsync(async _ => await UserStateChanged(meter.Config.EnergyEntity));
+      }
+
     }
     // ── Sub-objects ───────────────────────────────────────────────────────────────────────
     /// <summary>Battery state (SoC, power average, floors).</summary>
@@ -181,6 +194,17 @@ namespace NetDeamon.apps.PVControl
     /// </summary>
     private const int PvBypassMinSocBufferPct = 3;
     /// <summary>Sum of average power (W) from all schedulable loads that are actively drawing above their minimum threshold.</summary>
+    /// <summary>Consumers priced by source into a € total (heat pump: total, heating, warm water).</summary>
+    public List<CostMeter> CostMeters { get; private set; } = [];
+
+    /// <summary>
+    /// €/kWh of energy from a source mix now: grid at the import price, battery at its average cost per kWh delivered,
+    /// PV at 0 (money paid) — the EV charger's and the cost meters' price.
+    /// </summary>
+    /// <param name="shares">The consumer's sources.</param>
+    private float PricePerKwh(SourceShares shares) => shares.Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now),
+      SimulationInput.DeliveredPrice(Costs.BatteryAvgCostPerKwh, SimulationInput.RoundTrip(Battery.InverterEfficiency)));
+
     private int ActiveSchedulableLoadPowerW() => SchedulableLoads
       .Where(l => l.PowerAverage != null && l.PowerAverage.GetAverage() > l.Config.MinActivePowerW)
       .Sum(l => l.PowerAverage!.GetAverage()) + (WarmWater?.ActivePowerW ?? 0);
@@ -253,6 +277,7 @@ namespace NetDeamon.apps.PVControl
         // MinActivePowerW) — this correctly handles cases where ChargeNow=true but the
         // load isn't actually drawing (e.g. EV not connected).
         _loadRunningAverage.AddValue(load - ActiveSchedulableLoadPowerW());
+        _houseLoadAverage.AddValue(load);
       }
       if (entity.EntityId == PVCC_Config.CurrentPVPowerEntity?.EntityId && PVCC_Config.CurrentPVPowerEntity.TryGetStateValue(out int pv))
       {
@@ -287,7 +312,7 @@ namespace NetDeamon.apps.PVControl
           continue;
         float diff = energy - schedLoad.LastEnergySum;
         // Clamp: a single delta larger than 2 h at the load's typical power is a sensor glitch.
-        float maxDiff = (float)Energy.Wh(Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW), TimeSpan.FromHours(2)) / 1000f;
+        float maxDiff = CostMeter.MaxStepKwh(Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW));
         if (diff > maxDiff)
         {
           PVCC_Logger.LogWarning("Ignoring implausibly large energy delta {Diff:F3} kWh (>{Max:F3}) for {Name} — likely sensor glitch",
@@ -297,10 +322,8 @@ namespace NetDeamon.apps.PVControl
         {
           // Energy source: PV (free) → grid → battery (avg cost per kWh delivered) — same calculation as the battery's cost.
           int schedPowerW = schedLoad.PowerAverage?.GetAverage() ?? schedLoad.LearnedPowerW;
-          float effectivePrice = SourceShares
-            .ForLoad(schedPowerW, Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower)
-            .Cost(Prices.PriceListImport.GetPriceOrMean(DateTime.Now),
-              SimulationInput.DeliveredPrice(Costs.BatteryAvgCostPerKwh, SimulationInput.RoundTrip(Battery.InverterEfficiency)));
+          float effectivePrice = PricePerKwh(
+            SourceShares.ForLoad(schedPowerW, Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower));
 
           // Maintain totals in memory — never read back from the entity to avoid the
           // MQTT read-modify-write race that causes exponential accumulation.
@@ -313,6 +336,18 @@ namespace NetDeamon.apps.PVControl
           await LearnEnergyPerLevelAsync(schedLoad);
         }
         schedLoad.LastEnergySum = energy;
+      }
+      foreach (var meter in CostMeters.Where(m => entity.EntityId == m.Config.EnergyEntity!.EntityId))
+      {
+        if (!meter.Config.EnergyEntity!.TryGetStateValue(out float counterWh))
+          continue;   // unavailable: the next reading books the whole step
+        // The house's mix: the whole load into ForLoad makes its PV surplus the PV itself (proportional, nobody first).
+        var (booked, skipped) = meter.Book(counterWh,
+          PricePerKwh(SourceShares.ForLoad(_houseLoadAverage.GetAverage(), Battery.CurrentAverageBatteryChargeDischargePower, CurrentAverageGridPower)));
+        if (skipped > 0)
+          PVCC_Logger.LogWarning("Ignoring implausibly large energy step {Diff:F3} kWh for {Name} — likely counter glitch", skipped, meter.Config.Name);
+        if (booked > 0 && meter.TotalCostEurEntity is not null)
+          await PVCC_EntityManager.SetStateAsync(meter.TotalCostEurEntity.EntityId, meter.TotalCostEur.ToString(CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == PVCC_Config.CurrentGridPowerEntity?.EntityId && PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
       {

@@ -1946,6 +1946,22 @@ namespace NetDeamon.apps.PVControl
     /// <param name="reset">Re-register (drops their configuration in HA).</param>
     private async Task RegisterLoadEntitiesAsync(bool reset)
     {
+      foreach (var meter in _house.CostMeters)
+      {
+        meter.TotalCostEurEntity = await RegisterSensor(
+          $"sensor.pv_control_{meter.Config.Slug}_total_cost",
+          $"{meter.Config.Name} - Total Cost",
+          "monetary", "mdi:cash",
+          addConfig: new { unit_of_measurement = "€" },
+          defaultValue: "0",
+          reRegister: reset);
+        // Seeded from HA like the loads' totals; numericalGetBaseValue:false — stored raw in €.
+        if (meter.TotalCostEurEntity.TryGetStateValue(out float savedEur, numericalGetBaseValue: false) && savedEur is >= 0f and <= 1_000_000f)
+          meter.TotalCostEur = savedEur;
+        else
+          PVCC_Logger.LogWarning("TotalCost for {Name} reset to 0 (persisted value {Val} out of range)", meter.Config.Name, savedEur);
+      }
+
       // Auto-create HA entities for each schedulable load.
       foreach (var load in _house.SchedulableLoads)
       {
