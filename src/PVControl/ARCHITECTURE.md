@@ -557,7 +557,14 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
 - heating rate per degree (`TankModel.RatesByDegree`, `RateAt`): 2026-11-09 a run to 49.5 °C (outside ~4 °C) took
   8 min for its last 0.12 K — the flow at the heat pump's ~55 °C cap leaves little ΔT to the tank, and a 2-min
   defrost (flow 55 → 18 °C at full power) fell into it. Over 22 runs the band 49 °C measured 8 K/h, every lower one
-  16–20 K/h; in October (warmer outside) a run reached 57 °C at ~17 K/h. So the rate is learned per 1-K band from the
+  16–20 K/h; in October (warmer outside) a run reached 57 °C at ~17 K/h. Per run the 49-°C band read 19.1, 14.6,
+  16.8 and 7.0 K/h: the 8 K/h was total rise / total time, where the defrost run's long stay outweighed the other
+  three — so a band's rate is the **median of its runs' rates** (each run ≥ 1 min in the band; with it, 2026-11-09,
+  the top learned band is 48 °C at 16.7 K/h — the slow top stays a single run until more show it). Outside
+  temperature is not in the fit: at ~1.7 kW the 38–47-°C rate is 14–18 K/h at 0–10 °C outside without a clear
+  trend, the heat pump's power level dominates (~3 kW runs: 25–31 K/h), and the cold's cost is already in the price
+  (`EfficiencyChangePerK`) — a slower rate at the same power would count it twice; the COP vs outside temperature
+  (follow-up, root CLAUDE.md) is the one model for both. So the rate is learned per 1-K band from the
   same history: runs closer than 5 min merged (a defrost is the degree's time, it is time-triggered, so the band is
   a proxy — accepted), the first 3 min of a run left out (the compressor's ramp-up isn't the degree's), only reading
   to reading (October's 0.8-K sensor stepped past the setpoint after the run: counted to the run's end, band 44 read

@@ -132,6 +132,8 @@ public sealed record TankModel(
   public static readonly TimeSpan MinBandTime = TimeSpan.FromMinutes(6);
   /// <summary>… from at least this many runs.</summary>
   public const int MinBandRuns = 3;
+  /// <summary>A run counts in a band with at least this long in it (a run passes a degree in ~3.5 min; shorter is a sensor step).</summary>
+  public static readonly TimeSpan MinRunInBand = TimeSpan.FromMinutes(1);
 
   /// <summary>Learns the model from history; every part with too little data keeps the fallback's value.</summary>
   /// <param name="temps">(time, °C) readings in time order.</param>
@@ -199,7 +201,7 @@ public sealed record TankModel(
   /// start-up; a step between two readings counts in the band of the first. Only reading to reading: the time after a
   /// run's last step isn't the band's (the sensor's next step can come after the run — 0.8-K steps in October made the
   /// last band of every run look 3 K/h). Only bands with
-  /// <see cref="MinBandTime"/> from <see cref="MinBandRuns"/> runs.
+  /// <see cref="MinBandTime"/> from <see cref="MinBandRuns"/> runs; the band's rate is the median of its runs' rates.
   /// </summary>
   /// <param name="temps">(time, °C) readings in time order.</param>
   /// <param name="runs">Heating runs.</param>
@@ -211,25 +213,28 @@ public sealed record TankModel(
       if (merged.Count > 0 && r.Start - merged[^1].End < RatePauseMerge) merged[^1] = (merged[^1].Start, r.End > merged[^1].End ? r.End : merged[^1].End);
       else merged.Add((r.Start, r.End));
 
-    var hours = new Dictionary<int, double>();
-    var rise = new Dictionary<int, double>();
-    var seen = new Dictionary<int, HashSet<int>>();
-    for (int n = 0; n < merged.Count; n++)
+    // Per band and run: (hours, rise).
+    var perRun = new Dictionary<int, List<(double Hours, double Rise)>>();
+    foreach (var (start, end) in merged)
     {
-      var (from, to) = (merged[n].Start + RateStartup, merged[n].End);
+      var (from, to) = (start + RateStartup, end);
       if (to <= from) continue;
       var points = temps.Where(t => t.Time >= from && t.Time <= to).ToList();
+      var run = new Dictionary<int, (double Hours, double Rise)>();
       for (int i = 0; i + 1 < points.Count; i++)
       {
         int band = (int)Math.Floor(points[i].Temp);
-        hours[band] = hours.GetValueOrDefault(band) + (points[i + 1].Time - points[i].Time).TotalHours;
-        rise[band] = rise.GetValueOrDefault(band) + points[i + 1].Temp - points[i].Temp;
-        (seen.TryGetValue(band, out var set) ? set : seen[band] = []).Add(n);
+        var (h, r) = run.GetValueOrDefault(band);
+        run[band] = (h + (points[i + 1].Time - points[i].Time).TotalHours, r + points[i + 1].Temp - points[i].Temp);
       }
+      foreach (var (band, x) in run)
+        if (x.Hours >= MinRunInBand.TotalHours)
+          (perRun.TryGetValue(band, out var list) ? list : perRun[band] = []).Add(x);
     }
-    return hours
-      .Where(h => h.Value >= MinBandTime.TotalHours && seen[h.Key].Count >= MinBandRuns)
-      .ToDictionary(h => h.Key, h => Math.Clamp(rise[h.Key] / h.Value, 3, 60));
+    // The median of the runs' rates: one slow run (a defrost) is one run, not the time it took.
+    return perRun
+      .Where(b => b.Value.Count >= MinBandRuns && b.Value.Sum(x => x.Hours) >= MinBandTime.TotalHours)
+      .ToDictionary(b => b.Key, b => Math.Clamp(Mean.Percentile(b.Value.Select(x => x.Rise / x.Hours), 0.5), 3, 60));
   }
 
   /// <summary>One standby hour for the loss fit.</summary>

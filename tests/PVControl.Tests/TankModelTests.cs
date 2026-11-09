@@ -233,6 +233,33 @@ public class TankModelTests : TestBase
   }
 
   [Fact]
+  public void RatesByDegree_OneSlowRun_IsOneRun_NotTheTimeItTook()
+  {
+    // Live 2026-11-09: 4 runs through 49 °C measured 19.1, 14.6, 16.8 and 7.0 K/h (a defrost); total rise over total
+    // time gave 8 K/h — the slow run's long stay outweighed the other three. The median of the runs: ~16.
+    var temps = new List<(DateTime, double)>();
+    var runs = new List<HeatingRun>();
+    var t0 = new DateTime(2026, 11, 1, 2, 0, 0);
+    foreach (var (n, stallMin) in new[] { (0, 0), (1, 0), (2, 0), (3, 12) })
+    {
+      var t = t0.AddHours(8 * n);
+      double temp = 46;
+      var now = t;
+      temps.Add((now, temp));
+      while (temp < 50.5)
+      {
+        now = now.AddSeconds(20);
+        if (stallMin > 0 && temp >= 49.4 && now < t.AddMinutes(30) + TimeSpan.FromMinutes(stallMin) && now > t.AddMinutes(10)) { temps.Add((now, Math.Floor(temp * 10) / 10)); if (temp < 49.5) temp += 0.001; continue; }
+        temp += 18 * 20 / 3600.0;
+        temps.Add((now, Math.Floor(temp * 10) / 10));
+      }
+      runs.Add(new HeatingRun(t, now, 46, 50.5));
+    }
+    var bands = TankModel.RatesByDegree(temps, runs);
+    Assert.InRange(bands[49], 16, 20);
+  }
+
+  [Fact]
   public void RatesByDegree_TooFewRuns_LearnsNothing()
   {
     var (temps, runs) = KneeHistory(2);
