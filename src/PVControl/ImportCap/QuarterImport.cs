@@ -77,7 +77,8 @@ public sealed class QuarterImport(int sources)
   /// <see cref="CounterAt"/>), so the guard knows what the quarter has imported instead of estimating it from the power
   /// now (which counted too little after a high start: a restart during a charge could take the quarter over the cap),
   /// and the finished quarter counts for the month's peak. Before the first <see cref="Update"/>; a source without a
-  /// reading stays null (the next one in priority is used).
+  /// reading stays null (the next one in priority is used). A start in a quarter's last seconds seeds that quarter and the
+  /// first update lands in the next one, which then starts incomplete as without the seed.
   /// </summary>
   /// <param name="now">Current time.</param>
   /// <param name="startKwh">Each counter's reading at the quarter's start, kWh (priority order).</param>

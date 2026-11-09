@@ -811,7 +811,7 @@ namespace NetDeamon.apps.PVControl
         (_publishedState, _publishedStateSince) = (new InverterState(sent.Mode, ForceChargeReasons.None, sent.ChargeEnabled, sent.ExportAllowed) { Bulk = sent.Bulk },
           _inverterCommandIssued);
       if (_modeEntity.TryGetJsonAttribute("extra_loads_paused", out var paused) && paused.ValueKind == System.Text.Json.JsonValueKind.True)
-        _importCap = _importCap with { PauseExtraLoads = true };
+        _importCap = _importCap with { PauseExtraLoads = true, Reason = "paused before the restart" };
     }
 
     /// <summary>

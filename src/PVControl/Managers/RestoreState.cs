@@ -67,7 +67,8 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <param name="now">Current time.</param>
     public void ApplyTo(SchedulableLoadRuntime load, DateTime now)
     {
-      var sessions = Sessions.Where(s => s.End > now)
+      var known = Sessions ?? [];   // an attribute of another shape: no sessions
+      var sessions = known.Where(s => s.End > now)
         .Select(s => new ExtraLoad { Name = load.Config.Name, Priority = load.Config.Priority, StartTime = s.Start, EndTime = s.End, PowerW = s.PowerW, FromGrid = s.FromGrid })
         .ToList();
       bool running = ChargeNow && sessions.Any(s => s.StartTime <= now);
@@ -77,7 +78,7 @@ namespace NetDeamon.apps.PVControl.Managers
       load.SessionStartTime = running ? StartTime : null;
       load.SessionStartMode = running ? StartMode : null;
       // A run that ended while PVControl was down stopped at its last session's end at the latest.
-      load.SessionStopTime = running ? null : StopTime ?? (ChargeNow ? Sessions.Where(s => s.End <= now).Select(s => (DateTime?)s.End).Max() : null);
+      load.SessionStopTime = running ? null : StopTime ?? (ChargeNow ? known.Where(s => s.End <= now).Select(s => (DateTime?)s.End).Max() : null);
       load.SessionStopMode = running ? null : StopMode ?? (ChargeNow ? StartMode : null);
       load.MarkSettingsRestore();
     }

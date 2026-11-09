@@ -121,7 +121,11 @@ public class RestartStateTests
   public void RestoreState_UnreadableOrOld_StartsAsBefore(string? json)
   {
     var state = RestoreState.FromJson<LoadSessionState>(json);
-    if (state is not null) Assert.Null(state.Sessions);   // an object of another shape: no sessions to restore
+    if (state is null) return;
+    var load = Ev();
+    state.ApplyTo(load, Now);   // an object of another shape: nothing to restore, and no failure at startup
+    Assert.False(load.ChargeNow);
+    Assert.Empty(load.ExtraLoads);
   }
 
   [Fact]
