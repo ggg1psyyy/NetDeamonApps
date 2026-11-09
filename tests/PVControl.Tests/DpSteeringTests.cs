@@ -140,7 +140,7 @@ public class DpSteeringTests : TestBase
     // and so in every quarter. From the mode it steers the hold runs the quarter out.
     static ForecastSnapshot Snap(string name) => ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(
       System.IO.Path.Combine(AppContext.BaseDirectory, "Data", name)));
-    var o = new DpOptions(BandPenaltyPerPctQuarter: 0.0005f, ChargeStartEur: 0.01f);   // the live settings
+    var o = new DpOptions(BandPenaltyPerPctQuarter: 0.0005f, ChargeStartEur: 0.01f, DeviationEurPerKwh: 0);   // the live settings then
     var late = (Snap("forecast_snapshot_2026-11-07_2300.json.gz") with
       { StartTime = new DateTime(2026, 11, 7, 23, 13, 30), CurrentMode = InverterModes.normal }).ToInput();
     var held = new InverterState(InverterModes.grid_only, ForceChargeReasons.AbsoluteMinimum);
@@ -155,7 +155,7 @@ public class DpSteeringTests : TestBase
     var db = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dpsteer-" + Guid.NewGuid().ToString("N") + ".db");
     try
     {
-      var shadow = new DpShadow(new DpShadowConfig { IntervalMinutes = 5, BandPenaltyPerPctQuarter = 0.0005f, ChargeStartEur = 0.01f }, db);
+      var shadow = new DpShadow(new DpShadowConfig { IntervalMinutes = 5, BandPenaltyPerPctQuarter = 0.0005f, ChargeStartEur = 0.01f, DeviationEurPerKwh = 0 }, db);
       await shadow.RunAsync(EnergySimulator.Simulate(late), late.StartTime, held);
       Assert.Equal(InverterModes.grid_only, shadow.LastPlan!.Slots[0].Mode);
     }

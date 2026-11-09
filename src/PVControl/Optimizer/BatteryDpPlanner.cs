@@ -26,6 +26,11 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// +0.1 ct/kWh). A running charge (the current mode) continues without it. It also drops a whole charge that saves less
 /// than this — 1 ct keeps a night charge worth 2 ct (2 ct dropped it), the 7 live snapshots of 2026-11-05…07 gave the same
 /// blocks at 1, 2 and 5 ct. 0 = off — the DP then has no charging flag in its state.</param>
+/// <param name="DeviationEurPerKwh">Cost of each kWh the battery doesn't deliver (a hold — a grid charge's too) or doesn't
+/// store (feed-in first) against normal, €/kWh: such a deviation must be at least this much cheaper per kWh (the user,
+/// 2026-11-09: 21:00 held at 0.506 against a battery worth 0.511 — 0.3 ct for the hour, not worth a mode). Not on what a
+/// grid charge stores: those kWh replace later charges, and charged at it they raised the battery's value as much as the
+/// hold paid — the hold won again (charges have <see cref="ChargeStartEur"/>). 0 = off.</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
@@ -34,7 +39,8 @@ public sealed record DpOptions(
   float TieEur = 0.0001f,
   float KeepModeEur = 0.001f,
   float ChargeNowEur = 0.01f,
-  float ChargeStartEur = 0.01f);
+  float ChargeStartEur = 0.01f,
+  float DeviationEurPerKwh = 0.01f);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -265,6 +271,7 @@ public static class BatteryDpPlanner
         var (band, floor) = PlanEvaluation.Penalty(input, pct, o, InverterModes.normal);
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
+        var normalFlows = Flows(input, actions[0], pv, totalLoad, wh, fractions[i]);
         foreach (var a in actions)
         {
           if (a.Mode == InverterModes.force_charge && a.TargetSocPct <= pct) continue;   // nothing to charge
@@ -273,7 +280,8 @@ public static class BatteryDpPlanner
           // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
           if (a.Mode == InverterModes.force_charge && !holdOk && StoresUnderOnePercent(input, ch, fractions[i])) continue;
           int next = input.NextEnergyWh(wh, ch, dis);
-          float rest = input.GridCostOf(times[i], imp, exp) + (PlanEvaluation.BandApplies(a.Mode) ? band : 0) + floor + ValueAt(value[i + 1][LayerAfter(a)], next);
+          float rest = input.GridCostOf(times[i], imp, exp) + DeviationEur(o, ch, dis, normalFlows)
+            + (PlanEvaluation.BandApplies(a.Mode) ? band : 0) + floor + ValueAt(value[i + 1][LayerAfter(a)], next);
           for (int c = 0; c < layers; c++)
           {
             float total = rest + StartCost(a, c);
@@ -326,13 +334,16 @@ public static class BatteryDpPlanner
         bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };
         Action? best = null;
         float bestRest = float.MaxValue;
-        foreach (var a in Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOk))
+        var actions0 = Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOk);
+        var normalFlows0 = Flows(input, actions0[0], pv0, load0 + extra0, startEnergy, fractions[0]);
+        foreach (var a in actions0)
         {
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
           var (ch, dis, imp, exp) = Flows(input, a, pv0, load0 + extra0, startEnergy, fractions[0]);
           if (!holdOk && StoresUnderOnePercent(input, ch, fractions[0])) continue;
           var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o, a.Mode);
-          float rest = input.GridCostOf(times[0], imp, exp) + band + floor + RestAt(0, a, input.NextEnergyWh(startEnergy, ch, dis));
+          float rest = input.GridCostOf(times[0], imp, exp) + DeviationEur(o, ch, dis, normalFlows0) + band + floor
+            + RestAt(0, a, input.NextEnergyWh(startEnergy, ch, dis));
           if (rest < bestRest - o.TieEur) (best, bestRest) = (a, rest);
         }
         if (best is { } charge)
@@ -359,13 +370,16 @@ public static class BatteryDpPlanner
       return planned;
     var keep = new Action(current, false, 0);
     bool held = input.BatteryHeldForLoad(time, pv, totalLoad);
-    if (!Actions(input, o, held, HoldAllowed(input, time)).Contains(keep))
+    var actions = Actions(input, o, held, HoldAllowed(input, time));
+    if (!actions.Contains(keep))
       return planned;
+    var normalFlows = Flows(input, actions[0], pv, totalLoad, energy, fraction);
     float Rest(Action a)
     {
       var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, energy, fraction);
       var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(energy), o, a.Mode);
-      return input.GridCostOf(time, imp, exp) + band + floor + restValue(a, input.NextEnergyWh(energy, ch, dis));
+      return input.GridCostOf(time, imp, exp) + DeviationEur(o, ch, dis, normalFlows) + band + floor
+        + restValue(a, input.NextEnergyWh(energy, ch, dis));
     }
     return Rest(keep) <= Rest(planned) + o.KeepModeEur ? keep : planned;
   }
@@ -456,6 +470,21 @@ public static class BatteryDpPlanner
   /// <param name="fraction">Share of the quarter the charge runs (<see cref="SimulationInput.SlotFraction"/>).</param>
   internal static bool StoresUnderOnePercent(SimulationInput input, int chargeWh, double fraction) =>
     input.StoredWh(chargeWh) < input.SocToWh(1) * fraction;
+
+  /// <summary>
+  /// The DP's cost of deviating from normal in a quarter, €: <see cref="DpOptions.DeviationEurPerKwh"/> per kWh the
+  /// battery doesn't deliver (a hold, a grid charge's hold of the house) or doesn't store (feed-in first's surplus
+  /// exported) against normal — the quarter's first action, grid_only where a load never draws the battery (no deviation
+  /// then). What a charge stores costs nothing here (<see cref="DpOptions.DeviationEurPerKwh"/>); without that, a
+  /// "charge" storing nothing was a hold without the cost. A decision cost like the charge start: it steers the choice,
+  /// the plan's cost (<see cref="PlanEvaluation"/>) stays the grid's.
+  /// </summary>
+  /// <param name="o">Options.</param>
+  /// <param name="chargeWh">The action's battery charge, Wh.</param>
+  /// <param name="dischargeWh">The action's battery discharge, Wh.</param>
+  /// <param name="normal">Normal's flows in the same quarter and state.</param>
+  public static float DeviationEur(DpOptions o, int chargeWh, int dischargeWh, (int ch, int dis, int imp, int exp) normal) =>
+    (Math.Max(0, normal.dis - dischargeWh) + Math.Max(0, normal.ch - chargeWh)) / 1000f * o.DeviationEurPerKwh;
 
   /// <summary>The flows of an action, by the simulation's own function.</summary>
   private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction)

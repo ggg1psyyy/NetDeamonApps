@@ -1357,6 +1357,19 @@ unchanged (1.2–2.4 s). Replayed on 7 live snapshots (2026-11-05…07): 3–7 c
 at 0 the DP's 0.25-% grid already gave plans that much dearer. 1, 2 and 5 ct gave the same blocks; 1 ct, because a start
 cost also drops a whole charge that saves less than it: a synthetic night charge worth 2.2 ct survives 1 ct, not 2.
 
+### A deviation from normal must save 1 ct/kWh (`DeviationEurPerKwh`)
+
+2026-11-09 21:00: the DP held at 0.506 against a battery worth 0.511 (filled to 99 % that night anyway, its last kWh
+bought at 0.461 ÷ 0.95²) — right by 0.5 ct/kWh, 0.3 ct for the hour, and the user asked for the sum every time. So a
+hold or feed-in first pays `DpOptions.DeviationEurPerKwh` (1 ct) per kWh the battery doesn't deliver or store against
+normal; like the charge start it steers the choice, `PlanEvaluation` keeps the real €. Two forms failed first: priced
+on every kWh of grid exchange moved, the night charge paid it too — each kWh used at 21:00 had to be recharged, 1.1 ct
+of cost later against the hold's 1 ct, and the plan held *more*; priced on holds only, a "charge" storing nothing held
+the battery at 22:00 for free. So it is per kWh not delivered (a charge's hold of the house too) or not stored, never
+on what a charge stores. Same case: 21:00 normal, 22:00 at 0.480 (3 ct) still held. On the 2026-11-07 23:00 snapshot it
+dropped a hold all night for a battery worth 0.412 against 0.37–0.41 — the battery covered the house instead
+(+1.2 ct grid over the horizon, within the rule's intent).
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

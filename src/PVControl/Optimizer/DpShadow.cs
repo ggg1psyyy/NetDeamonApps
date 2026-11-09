@@ -21,11 +21,14 @@ namespace NetDeamon.apps.PVControl.Optimizer
     public float BandPenaltyPerPctQuarter { get; set; } = 0.0005f;
     /// <summary>Cost of starting a grid charge, € (<see cref="DpOptions.ChargeStartEur"/>); 0 = off.</summary>
     public float ChargeStartEur { get; set; } = 0.01f;
+    /// <summary>Cost per kWh a quarter deviates from normal, €/kWh (<see cref="DpOptions.DeviationEurPerKwh"/>); 0 = off.</summary>
+    public float DeviationEurPerKwh { get; set; } = 0.01f;
     /// <summary>The shadow log (one row per quarter); relative = in the plugin's folder.</summary>
     public string DBLocation { get; set; } = "dp_shadow.db";
 
     /// <summary>The planner's options from this config.</summary>
-    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter, ChargeStartEur: ChargeStartEur);
+    public DpOptions Options => new(BandPenaltyPerPctQuarter: BandPenaltyPerPctQuarter, ChargeStartEur: ChargeStartEur,
+      DeviationEurPerKwh: DeviationEurPerKwh);
   }
 
   /// <summary>An entry of the DP's predicted SoC (the format of sensor.pv_control_info_predicted_soc's <c>data_actual</c>).</summary>
