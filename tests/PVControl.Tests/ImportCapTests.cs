@@ -342,6 +342,21 @@ public class ImportCapTests
   }
 
   [Fact]
+  public void Guard_OneFreeRaisePerQuarter_ALongChargeFollowsItsRoom()
+  {
+    // Live 2026-11-09 23:01: cut to 25 A (the quarter's budget), then the plan's room 27.9 A while the EV runs until
+    // 01:42 — 27 A needs 29 A of room, so 25 A all night. Once per quarter the raise needs no headroom.
+    Assert.Equal(25, ImportCapGuard.NextLimit(25, 27.9, 30, gridCharging: true));                    // as before
+    Assert.Equal(27, ImportCapGuard.NextLimit(25, 27.9, 30, gridCharging: true, freeRaise: true));   // 23:15: up to the room
+    Assert.Equal(26, ImportCapGuard.NextLimit(27, 26.4, 30, gridCharging: true, freeRaise: false));  // a cut: any time
+    Assert.Equal(26, ImportCapGuard.NextLimit(27, 26.4, 30, gridCharging: true, freeRaise: true));
+    Assert.Equal(27, ImportCapGuard.NextLimit(27, 29.0, 30, gridCharging: true, freeRaise: false));  // the quarter's raise used: headroom again
+    Assert.Equal(30, ImportCapGuard.NextLimit(27, 38.2, 30, gridCharging: true, freeRaise: false));  // the EV stops: straight to the maximum
+    Assert.Equal(30, ImportCapGuard.NextLimit(25, 41.0, 30, gridCharging: true, freeRaise: true));   // never above the maximum
+    Assert.Equal(30, ImportCapGuard.NextLimit(25, 20.0, 30, gridCharging: false, freeRaise: true));  // no grid charge: the maximum
+  }
+
+  [Fact]
   public void Guard_PlanRoom_ChargeStartsBelowTheEdge_AndStays()
   {
     // The same night from the plan: 9800 − house 450 − EV 1930 = 7420 W. At 245 V that's 30.3 A — the charge

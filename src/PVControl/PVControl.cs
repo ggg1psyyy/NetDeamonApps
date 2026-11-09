@@ -623,6 +623,8 @@ namespace NetDeamon.apps.PVControl
     private readonly ImportCap.MonthPeakTracker _monthPeak = new();
     private ImportCap.GuardDecision _importCap;
     private double? _chargeLimitA;
+    /// <summary>The quarter of the last raise of the charge limit: one raise per quarter needs no headroom (<see cref="ImportCap.ImportCapGuard.NextLimit"/>).</summary>
+    private DateTime _chargeRaisedQuarter;
     private InverterCommand? _inverterCommand;
     private int _restoredCommandSeq;
     private bool _chargeThrottled;
@@ -672,7 +674,9 @@ namespace NetDeamon.apps.PVControl
         ? ImportCap.ImportCapGuard.PlanRoomA(roomW, voltage)
         : null;
       double roomA = Math.Min(_importCap.RoomA, planRoomA ?? double.MaxValue);
-      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, roomA, maxA, gridCharging);
+      var quarter = TimeRange.Floor(now, TimeRange.SlotMinutes);
+      double limitA = ImportCap.ImportCapGuard.NextLimit(_chargeLimitA, roomA, maxA, gridCharging, freeRaise: _chargeRaisedQuarter != quarter);
+      if (gridCharging && limitA > _chargeLimitA) _chargeRaisedQuarter = quarter;   // a raise uses the quarter's free one
       if (limitA != _chargeLimitA && gridCharging)
         PVCC_Logger.LogInformation("Import cap: battery charge limit {Old} → {New:F0} A (room {Room:F1} A{Plan}; {Reason})", _chargeLimitA?.ToString("F0") ?? "-", limitA,
           roomA, planRoomA is { } p ? $", plan {p:F1} A" : "", _importCap.Reason);

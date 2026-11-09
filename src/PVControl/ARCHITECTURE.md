@@ -854,7 +854,14 @@ quarters (`SimulationResult.GridChargeRoomW`, planned EV sessions included, less
 `ImportCapGuard.PlanRoomA` — the "30 A" setting drew 7.52 kW, not the nominal 7.35, and the live house
 load runs above its forecast; without it that night's plan room was 30.3 A and the charge would have
 started at 30 A and been cut anyway) — around two current writes per charge (set, restore) instead of
-a charge rate far too low.
+a charge rate far too low. Since 2026-11-09 one raise per quarter needs no headroom beyond the room: that night the
+guard cut to 25 A at 23:01 (the quarter's budget while the EV and the battery ramped up), the plan's room was 27.9 A
+with the EV running until 01:42 — 27 A needed 29 A of room, so the charge would have run at 25 A all through the cheap
+hour (~0.7 kWh moved to 0.4614, ~3 ct). Bounded to one raise (and at most one cut) per quarter, a long charge follows
+its room quarter by quarter. Lowering stays as it was: the guard already works on the quarter's energy budget (what
+the quarter has imported, the rest's allowed mean, the reaction allowance), not on the instantaneous power, and the
+plan's room cuts ahead of a load from the forecast — waiting for an average over the cap would spend the time the
+quarter needs to correct.
 `charge_target_soc` is steadied for display (`InverterCommand.SteadyTarget`): the plan recomputes it
 every 15 s from live values and it jittered 56–59 % between cycles (2026-10-28 night), while the
 charge itself has a 2 % band; shown anew on a change of 2 % or more, or for the next charge.
