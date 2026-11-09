@@ -1406,6 +1406,11 @@ namespace NetDeamon.apps.PVControl
     /// null: the greedy simulation steers.</summary>
     public IReadOnlyList<SimulationSlot>? DpSteering { get; set; }
 
+    /// <summary>The plan's state before a restart (<see cref="InverterCommand.RunningStateFromPublished"/>): the first
+    /// simulation continues from it instead of "normal".</summary>
+    /// <param name="state">The state that ran.</param>
+    public void RestorePlanMode(InverterState state) => _planMode = state;
+
     /// <summary>The DP's options while its plan steers (set with <see cref="DpSteering"/>): EV and warm-water decisions are
     /// priced by the DP (<see cref="Optimizer.DpLoadPricer"/>); null: by the greedy simulation.</summary>
     public Optimizer.DpOptions? DpPricing { get; set; }

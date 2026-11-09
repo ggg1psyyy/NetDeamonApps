@@ -1412,6 +1412,17 @@ minimum, price limit, import cap), the follow-up preview, and the pricing while 
 interface (`ILoadPricer`) takes the loads, never a simulation, and the replay returns its quarters' flows — the rules can
 be computed from it once the greedy simulation goes. Tonight's snapshot (`Data/…2026-11-09_2215`) now picks 23:00.
 
+### After a restart the planners continue from what ran
+
+The first cycle after a start already waited for the DP's first plan (`WaitForFirstDpPlanAsync`), but that plan started
+from nothing: `_steeredState` was empty and the greedy simulation's own mode began as "normal", so the DP saw no charge
+running. Live 2026-11-09 23:27 (a deploy during the night charge): a bulk charge at 25 A next to the EV went on as VPP
+at 3.9 kW — a fresh charge's path choice, and from then on the running path (~1.2 kWh moved from 0.4154 to 0.4614). The
+published command (sensor.pv_control_mode) was restored, but only into the command's version and charge limit. Now its
+state, `charge_Reason`, `bulk` and flags seed both the DP's running mode and the greedy simulation's
+(`InverterCommand.RunningStateFromPublished`), except where the published mode wasn't the plan's own: the user override
+(UserMode) and the bug-fix kick (BugFixMode).
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

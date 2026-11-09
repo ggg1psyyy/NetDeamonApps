@@ -785,7 +785,22 @@ namespace NetDeamon.apps.PVControl
       if (_inverterCommand is { } flagged)
         _inverterCommand = flagged with { ChargeEnabled = Flag(_modeEntity, "charge_enabled"), ExportAllowed = Flag(_modeEntity, "export_allowed") };
       if (_inverterCommand is { Mode: InverterModes.force_charge or InverterModes.force_charge_grid_only, CurrentA: > 0 } charging)
+      {
         _chargeLimitA = charging.CurrentA;
+        // The quarter's free raise counts as used: the restored limit may be this quarter's cut, and the guard only
+        // estimates the running quarter after a start.
+        _chargeRaisedQuarter = TimeRange.Floor(DateTime.Now, TimeRange.SlotMinutes);
+      }
+      // The planners continue from the state that ran (the DP's first plan after the start plans from it): a running
+      // charge keeps its path, a hold its mode.
+      string? reason = _modeEntity.TryGetJsonAttribute("charge_Reason", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.String ? r.GetString() : null;
+      if (_inverterCommand is { } published
+          && InverterCommand.RunningStateFromPublished(_modeEntity.State, reason, published.Bulk, published.ChargeEnabled, published.ExportAllowed) is { } running)
+      {
+        _steeredState = running;
+        _house.RestorePlanMode(running);
+        PVCC_Logger.LogInformation("Restored the running mode: {Mode} ({Reason}{Bulk})", running.Mode, running.ModeReason, running.Bulk ? ", bulk" : "");
+      }
       _inverterCommandIssued = _modeEntity.TryGetJsonAttribute("issued", out var issued) && issued.ValueKind == System.Text.Json.JsonValueKind.String
         && DateTimeOffset.TryParse(issued.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
         ? at.LocalDateTime : DateTime.Now;

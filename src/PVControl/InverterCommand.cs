@@ -61,6 +61,27 @@ public readonly record struct InverterCommand(InverterModes Mode, int BatteryPow
       ? new InverterCommand(m, p, b, s, voltageV > 0 ? Math.Abs(p) / (double)voltageV : 0)
       : null;
 
+  /// <summary>
+  /// The plan's own running state as published before a restart (sensor.pv_control_mode: its state, charge_Reason,
+  /// bulk and the flags), for the planners to continue from: without it both started from "normal" — the first DP plan
+  /// saw no charge running and chose the path anew (live 2026-11-09 23:27: a bulk charge at 25 A went on as VPP at
+  /// 3.9 kW). Null where the published mode wasn't the plan's own — the user override (UserMode), the inverter bug-fix
+  /// kick (BugFixMode) — or can't be read: the planners then start as before.
+  /// </summary>
+  /// <param name="mode">The sensor's state.</param>
+  /// <param name="reason">Attribute charge_Reason; null or unknown = none.</param>
+  /// <param name="bulk">Attribute bulk (only a force_charge has a path).</param>
+  /// <param name="chargeEnabled">Attribute charge_enabled.</param>
+  /// <param name="exportAllowed">Attribute export_allowed.</param>
+  /// <returns>The state; null if it isn't the plan's.</returns>
+  public static InverterState? RunningStateFromPublished(string? mode, string? reason, bool bulk, bool chargeEnabled, bool exportAllowed)
+  {
+    if (!Enum.TryParse(mode, out InverterModes m) || m == InverterModes.automatic) return null;
+    var r = Enum.TryParse(reason, out ForceChargeReasons parsed) ? parsed : ForceChargeReasons.None;
+    if (r is ForceChargeReasons.UserMode or ForceChargeReasons.BugFixMode) return null;
+    return new InverterState(m, r, chargeEnabled, exportAllowed) { Bulk = bulk && m == InverterModes.force_charge };
+  }
+
   /// <summary>Battery power of a mode: charging at the current, discharging at it, otherwise 0.</summary>
   /// <param name="mode">Inverter mode.</param>
   /// <param name="currentA">Battery current, A: the cap's limit or the hardware maximum.</param>
