@@ -553,7 +553,17 @@ meant to be set low (e.g. 20 °C) as a safety net; PVControl heats with one-time
 the heat pump stops heating at the setpoint, but the switch stays on until switched off).
 
 **`TankModel`** — learned daily from 10 days of HA history (`WarmWaterController.RefitAsync`):
-- heating rate (K/h): total rise / total time of the heating runs ≥ 8 min (measured ~17 K/h at any temperature)
+- heating rate (K/h): total rise / total time of the heating runs ≥ 8 min (measured ~17 K/h up to 48 °C)
+- heating rate per degree (`TankModel.RatesByDegree`, `RateAt`): 2026-11-09 a run to 49.5 °C (outside ~4 °C) took
+  8 min for its last 0.12 K — the flow at the heat pump's ~55 °C cap leaves little ΔT to the tank, and a 2-min
+  defrost (flow 55 → 18 °C at full power) fell into it. Over 22 runs the band 49 °C measured 8 K/h, every lower one
+  16–20 K/h; in October (warmer outside) a run reached 57 °C at ~17 K/h. So the rate is learned per 1-K band from the
+  same history: runs closer than 5 min merged (a defrost is the degree's time, it is time-triggered, so the band is
+  a proxy — accepted), the first 3 min of a run left out (the compressor's ramp-up isn't the degree's), only reading
+  to reading (October's 0.8-K sensor stepped past the setpoint after the run: counted to the run's end, band 44 read
+  3 K/h), ≥ 6 min from ≥ 3 runs per band. A band counts only where slower than the constant (which keeps the
+  start-ups); above the highest band its rate — no data must not make a 55 °C target look cheap. The planner's step
+  heats band by band (`Heat` / `HoursToHeat`), so a hot run costs its real time
 - standby loss `k·(T − ambient)`, at least 0.2 K/h: linear fit of the drop over one-hour windows
   away from heating runs (+40 min sensor settling). Measured 0.75 K/h at 41 °C, 1.57 K/h at 55 °C
 - usage per hour of day: the mean extra drop of that hour beyond the standby loss (≈ 0 so far —

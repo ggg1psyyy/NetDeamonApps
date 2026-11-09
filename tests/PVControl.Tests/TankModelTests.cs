@@ -159,4 +159,106 @@ public class TankModelTests : TestBase
     Assert.Equal(40, StepFunction.ValueAt(values, t0.AddMinutes(9)));
     Assert.Equal(41, StepFunction.ValueAt(values, t0.AddMinutes(10)));
   }
+
+  // ── Heating rate per degree (the slower last few K) ─────────────────────────────────────────
+
+  static TankModel WithBands(params (int Band, double Rate)[] bands) =>
+    TankModel.Default with { HeatingRateKPerHour = 17.6, RateByDegree = bands.ToDictionary(b => b.Band, b => b.Rate) };
+
+  [Fact]
+  public void RateAt_SlowerBandsCount_FasterOnesAndGapsKeepTheConstant_AboveTheTopTheTopBand()
+  {
+    Assert.Equal(17.3, TankModel.Default.RateAt(49.5));                // nothing learned
+    var m = WithBands((42, 19.5), (44, 16.8), (49, 8.0));
+    Assert.Equal(17.6, m.RateAt(42.3));   // measured faster: the constant keeps the start-ups in it
+    Assert.Equal(16.8, m.RateAt(44.9));
+    Assert.Equal(17.6, m.RateAt(46.0));   // no data
+    Assert.Equal(8.0, m.RateAt(49.0));
+    Assert.Equal(8.0, m.RateAt(53.0));    // above the data: no faster than its top band
+  }
+
+  [Fact]
+  public void Heat_AndHoursToHeat_IntegrateAcrossBands_AndAreInverse()
+  {
+    var m = WithBands((49, 8.0));
+    // 47 → 49 at 17.6 K/h (0.1136 h), then 49 → 50 at 8 K/h (0.125 h)
+    Assert.Equal(2 / 17.6 + 1 / 8.0, m.HoursToHeat(47, 50), 6);
+    Assert.Equal(50, m.Heat(47, 2 / 17.6 + 1 / 8.0, 57), 6);
+    foreach (var h in new[] { 0.05, 0.2, 0.3 })
+      Assert.Equal(h, m.HoursToHeat(46.3, m.Heat(46.3, h, 57)), 6);
+    Assert.Equal(49.5, m.Heat(47, 1, 49.5), 6);   // stops at the maximum
+    Assert.Equal(0, m.HoursToHeat(50, 49));
+  }
+
+  /// <summary>Synthetic runs 40 → 50 °C: 18 K/h, 8 K/h from 48 °C; readings every 20 s in 0.1-K steps.</summary>
+  static (List<(DateTime Time, double Temp)> Temps, List<HeatingRun> Runs) KneeHistory(int runs, bool defrostPause = false)
+  {
+    var temps = new List<(DateTime, double)>();
+    var result = new List<HeatingRun>();
+    var t = new DateTime(2026, 11, 1, 2, 0, 0);
+    for (int n = 0; n < runs; n++, t = t.AddHours(8))
+    {
+      double temp = 40;
+      var now = t;
+      temps.Add((now, temp));
+      var pauseAt = t.AddMinutes(30);
+      while (temp < 50)
+      {
+        if (defrostPause && now >= pauseAt && now < pauseAt.AddMinutes(2)) { now = now.AddSeconds(20); continue; }
+        double rate = temp >= 48 ? 8 : 18;
+        now = now.AddSeconds(20);
+        temp = Math.Round(temp + rate * 20 / 3600.0, 3);
+        temps.Add((now, Math.Floor(temp * 10) / 10));
+      }
+      if (defrostPause)
+      {
+        result.Add(new HeatingRun(t, pauseAt, 40, 0));
+        result.Add(new HeatingRun(pauseAt.AddMinutes(2), now, 0, 50));
+      }
+      else result.Add(new HeatingRun(t, now, 40, 50));
+      temps.Add((now.AddMinutes(30), 50.5));   // the sensor's next step after the run: not the run's
+    }
+    return (temps, result);
+  }
+
+  [Fact]
+  public void RatesByDegree_LearnsTheSlowTop_AndLeavesTheRestAtTheMeasuredRate()
+  {
+    var (temps, runs) = KneeHistory(3);
+    var bands = TankModel.RatesByDegree(temps, runs);
+    Assert.InRange(bands[42], 16.5, 19.5);
+    Assert.InRange(bands[48], 7, 9);
+    Assert.InRange(bands[49], 7, 9);
+    Assert.False(bands.ContainsKey(50));     // after the run
+  }
+
+  [Fact]
+  public void RatesByDegree_TooFewRuns_LearnsNothing()
+  {
+    var (temps, runs) = KneeHistory(2);
+    Assert.Empty(TankModel.RatesByDegree(temps, runs));
+  }
+
+  [Fact]
+  public void RatesByDegree_ADefrostPause_StaysInTheRun()
+  {
+    // Live 2026-11-09 15:00: a 2-min defrost split the run in two; the second part (49.48 → 49.6 °C, 5 min) alone
+    // is shorter than MinFitRun. Merged, the pause counts as the degree's time.
+    var (temps, runs) = KneeHistory(3, defrostPause: true);
+    var bands = TankModel.RatesByDegree(temps, runs);
+    double band = Math.Floor(temps.First(x => x.Time >= runs[0].End).Temp);   // where the pause was
+    Assert.True(bands[(int)band] < (band >= 48 ? 8 : 18) - 1, $"{band}: {bands[(int)band]:F1}");
+  }
+
+  [Fact]
+  public void Fit_RealHistory_NoSlowBandFromTheSensorStepAfterTheRun()
+  {
+    // October 2026: the sensor stepped 44.28 → 45.08 only after the heat pump had stopped; counted to the run's end,
+    // band 44 read 3 K/h. Reading to reading, every learned band is at the measured ~19 K/h.
+    var (temps, runs) = LoadHistory();
+    var m = TankModel.Fit(temps, runs, Wrong);
+    Assert.NotNull(m.RateByDegree);
+    Assert.All(m.RateByDegree!, b => Assert.InRange(b.Value, 16, 22));
+    Assert.Equal(m.HeatingRateKPerHour, m.RateAt(44.5));
+  }
 }

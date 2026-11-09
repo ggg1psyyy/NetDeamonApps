@@ -271,8 +271,8 @@ public static class WarmWaterPlanner
   {
     var start = SlotStart(r, i);
     double hours = SlotHours(r, i);
-    peak = Math.Max(temp, Math.Min(r.MaxTemp, temp + r.Model.HeatingRateKPerHour * hours * fraction));
-    heatedHours = (peak - temp) / r.Model.HeatingRateKPerHour;
+    peak = Math.Max(temp, r.Model.Heat(temp, hours * fraction, r.MaxTemp));
+    heatedHours = r.Model.HoursToHeat(temp, peak);
     heatCost = r.Model.PowerW((temp + peak) / 2) * heatedHours / 1000 * r.PricePerKwh[i];
     double rest = hours - heatedHours;
     return rest > 1e-9 ? r.Model.Cool(peak, start, rest) : peak;

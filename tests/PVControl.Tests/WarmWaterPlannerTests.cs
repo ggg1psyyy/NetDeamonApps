@@ -105,6 +105,23 @@ public class WarmWaterPlannerTests : TestBase
   }
 
   [Fact]
+  public void SlowTopDegrees_TheSameRunTakesLongerAndCostsMore()
+  {
+    // Live 2026-11-09 14:19: a run to 49.5 °C took 8 min for its last 0.12 K (flow at its ~55 °C cap, a defrost);
+    // learned per degree, the plan books that time and its electricity.
+    var fast = WarmWaterPlanner.Plan(Request(45, _ => 0.30f, [], forced: 50));
+    var slowReq = Request(45, _ => 0.30f, [], forced: 50);
+    var slow = WarmWaterPlanner.Plan(slowReq with { Model = TankModel.Default with { RateByDegree = new Dictionary<int, double> { [49] = 8.0 } } });
+
+    var f = Assert.Single(fast.Runs);
+    var s = Assert.Single(slow.Runs);
+    Assert.Equal(f.TargetTemp, s.TargetTemp, 1);
+    // 49 → 50 °C: 1/8 h instead of 1/17.3 h ≈ +4 min
+    Assert.InRange((s.End - s.Start - (f.End - f.Start)).TotalMinutes, 3, 5);
+    Assert.True(slow.CostEur > fast.CostEur);
+  }
+
+  [Fact]
   public void RunningHeating_ExpensiveNow_StillFinishedFirst()
   {
     // Live 2026-10-20 16:26: a running heating was stopped after 3 min because a replan found

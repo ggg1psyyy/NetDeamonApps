@@ -464,6 +464,7 @@ public sealed class WarmWaterController
       model = new
       {
         heating_k_per_h = Math.Round(Model.HeatingRateKPerHour, 2),
+        heating_k_per_h_by_degree = Model.RateByDegree?.OrderBy(b => b.Key).ToDictionary(b => $"{b.Key}", b => Math.Round(b.Value, 1)),
         loss_k_per_h_at_42 = Math.Round(Model.LossKPerHour(42, 12) - Model.UsageKPerHour[12], 2),
         loss_k_per_h_at_55 = Math.Round(Model.LossKPerHour(55, 12) - Model.UsageKPerHour[12], 2),
         power_w_at_45 = Math.Round(Model.PowerW(45)),

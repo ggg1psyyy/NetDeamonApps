@@ -18,7 +18,7 @@ public readonly record struct HeatingRun(DateTime Start, DateTime End, double St
 
 /// <summary>
 /// Thermal model of the warm-water tank, learned from the history (<see cref="Fit"/>): heating at a
-/// constant rate; standby loss proportional to the difference to an apparent ambient temperature,
+/// constant rate, slower in the degrees where the history measured it slower (<see cref="RateByDegree"/>); standby loss proportional to the difference to an apparent ambient temperature,
 /// plus a usage term per hour of day; power rising slightly with the temperature.
 /// </summary>
 /// <param name="HeatingRateKPerHour">Temperature rise while heating, K/h.</param>
@@ -27,13 +27,16 @@ public readonly record struct HeatingRun(DateTime Start, DateTime End, double St
 /// <param name="PowerAt45W">Heating power at 45 °C, W.</param>
 /// <param name="PowerSlopeWPerK">Power change per K, W/K.</param>
 /// <param name="UsageKPerHour">Extra drop by usage per hour of day, K/h (24 values).</param>
+/// <param name="RateByDegree">Measured heating rate per 1-K band (key = the band's lower °C), K/h; only where slower than
+/// <paramref name="HeatingRateKPerHour"/> it counts (<see cref="RateAt"/>). Null/empty = the constant rate everywhere.</param>
 public sealed record TankModel(
   double HeatingRateKPerHour,
   double LossCoefficientPerHour,
   double AmbientTempC,
   double PowerAt45W,
   double PowerSlopeWPerK,
-  IReadOnlyList<double> UsageKPerHour)
+  IReadOnlyList<double> UsageKPerHour,
+  IReadOnlyDictionary<int, double>? RateByDegree = null)
 {
   /// <summary>Standby loss never drops below this, even below the fitted ambient temperature.</summary>
   public const double MinLossKPerHour = 0.2;
@@ -53,6 +56,56 @@ public sealed record TankModel(
   /// <returns>W.</returns>
   public double PowerW(double temp) => Math.Max(100, PowerAt45W + PowerSlopeWPerK * (temp - 45));
 
+  /// <summary>
+  /// Heating rate at a tank temperature: the learned band's where slower than the constant one (the constant keeps the
+  /// start-ups in it), else the constant. Above the highest learned band that band's rate: no data up there must not
+  /// make a high target look cheap.
+  /// </summary>
+  /// <param name="temp">Tank temperature, °C.</param>
+  /// <returns>K/h.</returns>
+  public double RateAt(double temp)
+  {
+    if (RateByDegree is not { Count: > 0 } bands) return HeatingRateKPerHour;
+    int band = (int)Math.Floor(temp), top = bands.Keys.Max();
+    return bands.TryGetValue(band, out var rate) ? Math.Min(HeatingRateKPerHour, rate)
+      : band > top ? Math.Min(HeatingRateKPerHour, bands[top])
+      : HeatingRateKPerHour;
+  }
+
+  /// <summary>Temperature after heating for a time, band by band (stops at the maximum).</summary>
+  /// <param name="temp">Start temperature, °C.</param>
+  /// <param name="hours">Heating time, hours.</param>
+  /// <param name="maxTemp">Highest temperature, °C.</param>
+  /// <returns>°C.</returns>
+  public double Heat(double temp, double hours, double maxTemp)
+  {
+    while (hours > 1e-12 && temp < maxTemp - 1e-9)
+    {
+      double bandEnd = Math.Min(Math.Floor(temp) + 1, maxTemp), rate = RateAt(temp);
+      double need = (bandEnd - temp) / rate;
+      if (need >= hours) return temp + rate * hours;
+      temp = bandEnd;
+      hours -= need;
+    }
+    return temp;
+  }
+
+  /// <summary>Heating time from one temperature to a higher one, band by band (the inverse of <see cref="Heat"/>).</summary>
+  /// <param name="from">Start temperature, °C.</param>
+  /// <param name="to">End temperature, °C.</param>
+  /// <returns>Hours; 0 if <paramref name="to"/> isn't higher.</returns>
+  public double HoursToHeat(double from, double to)
+  {
+    double hours = 0, temp = from;
+    while (temp < to - 1e-12)
+    {
+      double bandEnd = Math.Min(Math.Floor(temp) + 1, to);
+      hours += (bandEnd - temp) / RateAt(temp);
+      temp = bandEnd;
+    }
+    return hours;
+  }
+
   /// <summary>Temperature after a time without heating.</summary>
   /// <param name="temp">Start temperature, °C.</param>
   /// <param name="time">Start time (hour of day for the usage term).</param>
@@ -71,6 +124,14 @@ public sealed record TankModel(
   public static readonly TimeSpan LossWindow = TimeSpan.FromHours(1);
   /// <summary>The loss slope needs this temperature spread; below it only the offset is fitted.</summary>
   public const double MinSpreadForSlopeK = 4;
+  /// <summary>The start of every run (compressor ramp-up) is left out of the per-degree rates: it isn't the degree's.</summary>
+  public static readonly TimeSpan RateStartup = TimeSpan.FromMinutes(3);
+  /// <summary>Runs closer than this are one heating for the per-degree rates (a defrost pauses a run for ~2 min).</summary>
+  public static readonly TimeSpan RatePauseMerge = TimeSpan.FromMinutes(5);
+  /// <summary>A 1-K band's rate needs this much heating time …</summary>
+  public static readonly TimeSpan MinBandTime = TimeSpan.FromMinutes(6);
+  /// <summary>… from at least this many runs.</summary>
+  public const int MinBandRuns = 3;
 
   /// <summary>Learns the model from history; every part with too little data keeps the fallback's value.</summary>
   /// <param name="temps">(time, °C) readings in time order.</param>
@@ -107,6 +168,9 @@ public sealed record TankModel(
         model = model with { PowerAt45W = PowerAt45(model.PowerSlopeWPerK) };
     }
 
+    var byDegree = RatesByDegree(temps, runs);
+    model = model with { RateByDegree = byDegree.Count > 0 ? byDegree : null };
+
     // Standby loss: drop over one-hour windows (stepped every 15 min) away from any heating.
     var windows = StandbyWindows(temps, runs);
     if (windows.Count >= 20)
@@ -128,6 +192,44 @@ public sealed record TankModel(
       model = model with { UsageKPerHour = usage };
     }
     return model;
+  }
+
+  /// <summary>
+  /// Measured heating rate per 1-K band (key = the band's lower °C): runs with short pauses merged, each without its
+  /// start-up; a step between two readings counts in the band of the first. Only reading to reading: the time after a
+  /// run's last step isn't the band's (the sensor's next step can come after the run — 0.8-K steps in October made the
+  /// last band of every run look 3 K/h). Only bands with
+  /// <see cref="MinBandTime"/> from <see cref="MinBandRuns"/> runs.
+  /// </summary>
+  /// <param name="temps">(time, °C) readings in time order.</param>
+  /// <param name="runs">Heating runs.</param>
+  /// <returns>K/h per band.</returns>
+  public static Dictionary<int, double> RatesByDegree(IReadOnlyList<(DateTime Time, double Temp)> temps, IReadOnlyList<HeatingRun> runs)
+  {
+    var merged = new List<(DateTime Start, DateTime End)>();
+    foreach (var r in runs.OrderBy(r => r.Start))
+      if (merged.Count > 0 && r.Start - merged[^1].End < RatePauseMerge) merged[^1] = (merged[^1].Start, r.End > merged[^1].End ? r.End : merged[^1].End);
+      else merged.Add((r.Start, r.End));
+
+    var hours = new Dictionary<int, double>();
+    var rise = new Dictionary<int, double>();
+    var seen = new Dictionary<int, HashSet<int>>();
+    for (int n = 0; n < merged.Count; n++)
+    {
+      var (from, to) = (merged[n].Start + RateStartup, merged[n].End);
+      if (to <= from) continue;
+      var points = temps.Where(t => t.Time >= from && t.Time <= to).ToList();
+      for (int i = 0; i + 1 < points.Count; i++)
+      {
+        int band = (int)Math.Floor(points[i].Temp);
+        hours[band] = hours.GetValueOrDefault(band) + (points[i + 1].Time - points[i].Time).TotalHours;
+        rise[band] = rise.GetValueOrDefault(band) + points[i + 1].Temp - points[i].Temp;
+        (seen.TryGetValue(band, out var set) ? set : seen[band] = []).Add(n);
+      }
+    }
+    return hours
+      .Where(h => h.Value >= MinBandTime.TotalHours && seen[h.Key].Count >= MinBandRuns)
+      .ToDictionary(h => h.Key, h => Math.Clamp(rise[h.Key] / h.Value, 3, 60));
   }
 
   /// <summary>One standby hour for the loss fit.</summary>
