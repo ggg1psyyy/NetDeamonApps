@@ -1370,6 +1370,17 @@ on what a charge stores. Same case: 21:00 normal, 22:00 at 0.480 (3 ct) still he
 dropped a hold all night for a battery worth 0.412 against 0.37–0.41 — the battery covered the house instead
 (+1.2 ct grid over the horizon, within the rule's intent).
 
+### Charge targets above the quarter's limit are skipped (`PruneEqualCharges`)
+
+Every quarter and SoC state tried normal, feedin_priority, grid_only and a charge to every 2-% target on both paths —
+~100 actions, ~8 million flows a plan, 1.6–3.7 s (2026-11-09). A target only caps the charge (`ForceCharge`:
+min(the quarter's limit, energy to the target)); a quarter adds at most ~15 %, so from 30 % on each path ~8 targets
+differ and ~27 are the same charge at full power. The DP now stops a path at the first target whose flows equal the one
+before: the same flows cost the same and the lower target, earlier in the list, wins the tie anyway — so it is the
+same plan, not an approximation. All 13 live snapshots in `Data/` gave identical plans quarter by quarter, 0.45–0.99 s
+instead of 1.6–3.7 s. The prune compares flows rather than computing the cap, so a new limit in `ForceCharge` can't
+break it.
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

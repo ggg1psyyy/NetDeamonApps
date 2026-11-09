@@ -31,6 +31,8 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// 2026-11-09: 21:00 held at 0.506 against a battery worth 0.511 — 0.3 ct for the hour, not worth a mode). Not on what a
 /// grid charge stores: those kWh replace later charges, and charged at it they raised the battery's value as much as the
 /// hold paid — the hold won again (charges have <see cref="ChargeStartEur"/>). 0 = off.</param>
+/// <param name="PruneEqualCharges">Skip the charge targets above the first one the quarter's limit caps (same flows, same
+/// cost — the lower target wins the tie anyway): the same plan, 3–5× fewer flows. False only to check that in a test.</param>
 public sealed record DpOptions(
   float BandPenaltyPerPctQuarter = 0.0005f,
   float FloorPenaltyPerPctQuarter = 1f,
@@ -40,7 +42,8 @@ public sealed record DpOptions(
   float KeepModeEur = 0.001f,
   float ChargeNowEur = 0.01f,
   float ChargeStartEur = 0.01f,
-  float DeviationEurPerKwh = 0.01f);
+  float DeviationEurPerKwh = 0.01f,
+  bool PruneEqualCharges = true);
 
 /// <summary>A quarter of a DP plan.</summary>
 /// <param name="Time">Slot start.</param>
@@ -272,10 +275,23 @@ public static class BatteryDpPlanner
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
         var normalFlows = Flows(input, actions[0], pv, totalLoad, wh, fractions[i]);
+        // Per path (VPP, bulk): the last charge target's flows, and whether the targets above give the same (see below)
+        var lastCharge = new (int, int, int, int)?[2];
+        var capped = new bool[2];
         foreach (var a in actions)
         {
           if (a.Mode == InverterModes.force_charge && a.TargetSocPct <= pct) continue;   // nothing to charge
-          var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, wh, fractions[i]);
+          int path = a.Bulk ? 1 : 0;
+          if (a.Mode == InverterModes.force_charge && capped[path]) continue;
+          var flows = Flows(input, a, pv, totalLoad, wh, fractions[i]);
+          if (a.Mode == InverterModes.force_charge && o.PruneEqualCharges)
+          {
+            // A target only caps the charge: once the quarter's limit (power, VPP curve, import cap, capacity) caps it
+            // instead, every higher target has the same flows — and loses the tie to the lower one, which comes first.
+            if (lastCharge[path] == flows) { capped[path] = true; continue; }
+            lastCharge[path] = flows;
+          }
+          var (ch, dis, imp, exp) = flows;
           // A "charge" that stores under 1 % is a hold under another name (the battery doesn't discharge): the hold rule
           // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
           if (a.Mode == InverterModes.force_charge && !holdOk && StoresUnderOnePercent(input, ch, fractions[i])) continue;

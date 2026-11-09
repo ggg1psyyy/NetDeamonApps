@@ -79,3 +79,26 @@ public class DpDeviationTests
     Assert.Equal(eur, BatteryDpPlanner.DeviationEur(new DpOptions(), ch, dis, (normalCh, normalDis, 0, 0)), 5);
   }
 }
+
+/// <summary>
+/// <see cref="DpOptions.PruneEqualCharges"/>: a charge target only caps the quarter's charge, so above the first target the
+/// quarter's limit caps, every target has the same flows (and loses the tie to the lower one) — skipping them gives the
+/// same plan. Checked on live snapshots (all 13 of Data/ were identical quarter by quarter, 3–4× faster, 2026-11-09).
+/// </summary>
+public class DpPruneEqualChargesTests
+{
+  [Theory]
+  [InlineData("forecast_snapshot_2026-11-02_0600.json.gz")]   // night charge, morning, a sunny day
+  [InlineData("forecast_snapshot_2026-11-07_1100.json.gz")]   // midday charges near-tied (the charge start cost)
+  [InlineData("forecast_snapshot_2026-11-07_2300.json.gz")]   // night at a low SoC
+  public void Pruned_GivesTheSamePlan(string snapshot)
+  {
+    var input = ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(
+      System.IO.Path.Combine(AppContext.BaseDirectory, "Data", snapshot))).ToInput();
+    var full = BatteryDpPlanner.Plan(input, new DpOptions(PruneEqualCharges: false));
+    var pruned = BatteryDpPlanner.Plan(input, new DpOptions());
+    Assert.Equal(full.Cost, pruned.Cost);
+    Assert.Equal(full.EndSocPct, pruned.EndSocPct);
+    Assert.Equal(full.Slots, pruned.Slots);
+  }
+}
