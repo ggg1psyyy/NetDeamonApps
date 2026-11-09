@@ -1423,6 +1423,16 @@ state, `charge_Reason`, `bulk` and flags seed both the DP's running mode and the
 (`InverterCommand.RunningStateFromPublished`), except where the published mode wasn't the plan's own: the user override
 (UserMode) and the bug-fix kick (BugFixMode).
 
+The same night's audit of what a restart loses found more of the kind, now restored too: a load's session
+(`LoadSessionState` in `binary_sensor.<load>_charge_now`'s `restore_state` — a running EV counted as stopped: the "never
+stop a running session for a cheaper start" rule, its supply and the min-on/min-off latches were gone; the latches'
+settings are today's, taken at the first plan), the warm-water control's timers and boost (`WarmWaterControlState` —
+within 10 min of a start the start-acknowledge wait was lost and the heating was stopped and restarted), the running
+quarter's import (`QuarterImport.Seed` from the meters' history at the quarter start — the guard estimated it from the
+power now, too low after a high start, and the quarter was missing from the month's peak), the cap's paused loads and a
+charge's minimum run. Left as they are, minor: counters re-seeded (the downtime's few Wh unbooked), the tank model
+refitted (seconds), the DP plan recomputed (the first cycle waits for it), running averages and learning warm-ups.
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

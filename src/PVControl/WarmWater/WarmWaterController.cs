@@ -67,6 +67,17 @@ public sealed class WarmWaterController
   public double BoostTemp => _boostTempEntity is not null && _boostTempEntity.TryGetStateValue(out float v, numericalGetBaseValue: false) ? v : Config.BoostTempDefault;
   /// <summary>A boost is going: the boost button was pressed and the boost hasn't ended yet (kept in memory only).</summary>
   public bool BoostOn => _boostSince is not null;
+
+  /// <summary>The control's timers and the boost — what a restart would lose (<see cref="WarmWaterControlState"/>).</summary>
+  public WarmWaterControlState ControlState => new(_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning);
+
+  /// <summary>Continues from the control state published before a restart.</summary>
+  /// <param name="state">The state.</param>
+  public void RestoreControl(WarmWaterControlState state)
+  {
+    (_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning) =
+      (state.LastCommand, state.LastStart, state.LastStop, state.WasActive, state.BoostSince, state.BoostSawRunning);
+  }
   double? Temperature => Config.TemperatureEntity.TryGetStateValue(out float t, numericalGetBaseValue: false) ? t : null;
   bool IsOn(Entity e) => e.State?.Equals("on", StringComparison.OrdinalIgnoreCase) ?? false;
   bool Heating => IsOn(Config.HeatingActiveEntity);
@@ -380,6 +391,9 @@ public sealed class WarmWaterController
       reRegister: reset);
     _planEntity = await RegisterSensor($"sensor.{p}_plan", $"{Config.Name} - Plan", null, "mdi:water-boiler-auto",
       defaultValue: "unknown", reRegister: reset);
+    if (!reset && _planEntity.TryGetJsonAttribute("restore_state", out System.Text.Json.JsonElement rs) && rs.ValueKind == System.Text.Json.JsonValueKind.String
+        && RestoreState.FromJson<WarmWaterControlState>(rs.GetString()) is { } state)
+      RestoreControl(state);
     foreach (var period in Config.ComfortPeriods)
     {
       string ps = $"{p}_{period.Name.ToSlug()}";
@@ -460,6 +474,7 @@ public sealed class WarmWaterController
       prices_known_until = PricesKnownUntil?.ToISO8601(),
       outside_efficiency = OutsideEfficiencyUsed,
       priced_by = PricedBy,
+      restore_state = RestoreState.ToJson(ControlState),   // read back after a restart (RestoreControl)
       plan_cost_eur = Math.Round(Plan.CostEur, 3),
       automatic_cost_eur = Math.Round(Automatic.CostEur, 3),
       comfort_deficit_k = Math.Round(Plan.ComfortDeficitK, 1),

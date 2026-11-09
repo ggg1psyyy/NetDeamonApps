@@ -543,12 +543,19 @@ namespace NetDeamon.apps.PVControl
     private void FindLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
     {
       bool wasActive = load.ChargeNow;
-      DecideLoadWindow(load, baseInput, baseResult);
-
-      var now = DateTime.Now;
       var settings = new SessionStartSettings(
         baseInput.PreferredMinSocPercent, baseInput.AbsoluteMinSocPercent, baseInput.EnforcePreferredSoc,
         baseInput.ForceChargeMaxPrice, load.TargetLevel, load.ReadyByTime);
+      // After a restart the session (and its latches) came back without the settings it started under: today's, as
+      // nothing changed over the restart (LoadSessionState.ApplyTo).
+      if (load.TakeSettingsRestore())
+      {
+        if (load.SessionStartTime is not null) load.SessionStartSettings = settings;
+        if (load.SessionStopTime is not null) load.SessionStopSettings = settings;
+      }
+      DecideLoadWindow(load, baseInput, baseResult);
+
+      var now = DateTime.Now;
 
       // Min-off latch: a restart within MinOffMinutes of the last stop is held back — the planned
       // session moves to the end of the off-time. Only restarts: stops are never delayed.

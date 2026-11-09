@@ -235,6 +235,20 @@ namespace NetDeamon.apps.PVControl.Managers
     public LoadSchedulingMode? SessionStopMode { get; internal set; }
     public SessionStartSettings? SessionStopSettings { get; internal set; }
 
+    private bool _settingsRestore;
+
+    /// <summary>The session state was restored after a restart (<see cref="LoadSessionState.ApplyTo"/>): the latches'
+    /// settings are taken at the first plan.</summary>
+    internal void MarkSettingsRestore() => _settingsRestore = true;
+
+    /// <summary>Whether the latches' settings are still to be set after a restore; clears it.</summary>
+    public bool TakeSettingsRestore()
+    {
+      bool r = _settingsRestore;
+      _settingsRestore = false;
+      return r;
+    }
+
     /// <summary>Clears the min-off latch (e.g. the load became available again).</summary>
     public void ClearOffLatch() => SessionStopTime = null;
 

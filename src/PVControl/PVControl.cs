@@ -145,6 +145,7 @@ namespace NetDeamon.apps.PVControl
       if (PVCC_Config.DpShadow is { Enabled: true } dpConfig)
         _dpShadow = new Optimizer.DpShadow(dpConfig, AppFiles.PathOf(dpConfig.DBLocation, typeof(PVConfig).Assembly));
       await _house.SeedSoCHistoryAsync(cancellationToken);
+      await SeedQuarterImportAsync(cancellationToken);
       await RegisterControlSensors(false);
       #region Load settings from HA if available
 
@@ -804,6 +805,35 @@ namespace NetDeamon.apps.PVControl
       _inverterCommandIssued = _modeEntity.TryGetJsonAttribute("issued", out var issued) && issued.ValueKind == System.Text.Json.JsonValueKind.String
         && DateTimeOffset.TryParse(issued.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)
         ? at.LocalDateTime : DateTime.Now;
+      // What ran on the inverter and since when (a grid charge's minimum run), and whether the cap had paused the loads
+      // (they resume only with the cap's margin).
+      if (_inverterCommand is { } sent)
+        (_publishedState, _publishedStateSince) = (new InverterState(sent.Mode, ForceChargeReasons.None, sent.ChargeEnabled, sent.ExportAllowed) { Bulk = sent.Bulk },
+          _inverterCommandIssued);
+      if (_modeEntity.TryGetJsonAttribute("extra_loads_paused", out var paused) && paused.ValueKind == System.Text.Json.JsonValueKind.True)
+        _importCap = _importCap with { PauseExtraLoads = true };
+    }
+
+    /// <summary>
+    /// After a start: the running quarter's import from the counters' readings at its start (HA history,
+    /// <see cref="ImportCap.QuarterImport.Seed"/>) — the import cap guard then knows what the quarter has imported instead
+    /// of estimating it from the power now.
+    /// </summary>
+    /// <param name="ct">Cancels the history requests.</param>
+    private async Task SeedQuarterImportAsync(CancellationToken ct)
+    {
+      var now = DateTime.Now;
+      var quarterStart = TimeRange.Floor(now, TimeRange.SlotMinutes);
+      var readings = new List<double?>();
+      foreach (var counter in PVCC_Config.TotalImportEnergyEntities)
+      {
+        var (ok, history) = await PVCC_ApiManager.GetEntityHistoryAsync(counter, quarterStart.AddMinutes(-1), ct, getMinimal: true, endDateTime: now);
+        readings.Add(ok ? ImportCap.QuarterImport.CounterAt(history.Select(h => (h.LastChanged.ToLocalTime(), (string?)h.State)),
+          quarterStart, counter.GetUnitMultiplicator() / 1000.0) : null);   // the entity's unit → Wh → kWh, as ReadImportCounters
+      }
+      _quarterImport.Seed(now, readings);
+      PVCC_Logger.LogInformation("Import quarter {Quarter:HH:mm} seeded from history: {Readings}", quarterStart,
+        string.Join(", ", readings.Select(r => r?.ToString("F3", CultureInfo.InvariantCulture) ?? "-")));
     }
 
     /// <summary>Restores the health issues that counted before a restart (<see cref="HealthMonitor.Restore"/>) from the sensor's <c>issues</c>.</summary>
@@ -1201,6 +1231,7 @@ namespace NetDeamon.apps.PVControl
           last_plan = load.LastPlan?.Time.ToISO8601() ?? "n/a",
           last_plan_reason = load.LastPlanReason,
           price_scan = load.PriceScan,
+          restore_state = Managers.RestoreState.ToJson(Managers.LoadSessionState.Of(load)),   // read back after a restart
           planned_sessions = allSessions.Select(e => new { start = e.StartTime.ToISO8601(), end = e.EndTime.ToISO8601() }).ToList(),
           zz_charge_timeline = chargeTimeline,
         };
@@ -2034,6 +2065,14 @@ namespace NetDeamon.apps.PVControl
           load.Config.ChargeNowDeviceClass, load.Config.Icon,
           defaultValue: "OFF",
           reRegister: reset);
+        // The session as it was before a restart: a running one goes on as running (its latches, supply and planned start).
+        if (!reset && load.ChargeNowEntity.TryGetJsonAttribute("restore_state", out var rs) && rs.ValueKind == System.Text.Json.JsonValueKind.String
+            && Managers.RestoreState.FromJson<Managers.LoadSessionState>(rs.GetString()) is { } session)
+        {
+          session.ApplyTo(load, DateTime.Now);
+          PVCC_Logger.LogInformation("{Load}: restored the session ({State}, start {Start}, stop {Stop}, {Sessions} planned)", load.Config.Name,
+            load.ChargeNow ? "running" : "not running", load.SessionStartTime?.ToString("HH:mm") ?? "-", load.SessionStopTime?.ToString("HH:mm") ?? "-", load.ExtraLoads.Count);
+        }
 
         if (load.Config.ActualEnergyEntity is not null)
         {

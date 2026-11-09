@@ -72,6 +72,38 @@ public sealed class QuarterImport(int sources)
   /// <param name="time">Local or UTC-kind time.</param>
   static DateTime ToUtc(DateTime time) => time.Kind == DateTimeKind.Utc ? time : time.ToUniversalTime();
 
+  /// <summary>
+  /// After a restart: the running quarter from the counters' readings at its start (from HA history,
+  /// <see cref="CounterAt"/>), so the guard knows what the quarter has imported instead of estimating it from the power
+  /// now (which counted too little after a high start: a restart during a charge could take the quarter over the cap),
+  /// and the finished quarter counts for the month's peak. Before the first <see cref="Update"/>; a source without a
+  /// reading stays null (the next one in priority is used).
+  /// </summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="startKwh">Each counter's reading at the quarter's start, kWh (priority order).</param>
+  public void Seed(DateTime now, IReadOnlyList<double?> startKwh)
+  {
+    if (startKwh.All(v => v is null)) return;
+    var quarter = DateTime.SpecifyKind(ToUtc(now).Floor(TimeRange.SlotMinutes), DateTimeKind.Utc);
+    _quarter = quarter;
+    _start = [.. startKwh];
+    _startTime = quarter;
+  }
+
+  /// <summary>A counter's reading at a time from its HA history (the last at or before it), kWh.</summary>
+  /// <param name="history">(time, state) in time order — the history from before the time on.</param>
+  /// <param name="at">The time.</param>
+  /// <param name="toKwh">Factor from the entity's unit to kWh.</param>
+  /// <returns>kWh; null without a numeric reading at or before the time.</returns>
+  public static double? CounterAt(IEnumerable<(DateTime Time, string? State)> history, DateTime at, double toKwh)
+  {
+    var readings = history
+      .Where(h => h.Time <= at && double.TryParse(h.State, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+      .Select(h => (h.Time, Value: double.Parse(h.State!, System.Globalization.CultureInfo.InvariantCulture) * toKwh))
+      .ToList();
+    return readings.Count > 0 ? StepFunction.ValueAt(readings, at) : null;
+  }
+
   /// <summary>Whether the running quarter is tracked from its start (not the first one after a restart).</summary>
   public bool Complete => _start is not null;
 
