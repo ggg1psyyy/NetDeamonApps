@@ -24,7 +24,7 @@ public class DpDeviationTests
     < 21 => 0.57f, < 22 => 0.506f, < 23 => 0.480f, < 24 => 0.415f, < 30 => 0.461f, < 45 => 0.65f, _ => 0.45f,
   };
 
-  static SimulationInput Input()
+  internal static SimulationInput Input()
   {
     var prices = new List<PriceTableEntry>();
     var export = new List<PriceTableEntry>();

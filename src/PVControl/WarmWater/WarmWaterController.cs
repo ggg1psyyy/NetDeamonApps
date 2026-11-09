@@ -117,12 +117,17 @@ public sealed class WarmWaterController
   /// <summary>The last plan scaled prices by the outside temperature.</summary>
   public bool OutsideEfficiencyUsed { get; private set; }
 
+  /// <summary>Which pricer priced the last plan's heating (<see cref="ILoadPricer.Name"/>).</summary>
+  public string PricedBy { get; private set; } = "greedy";
+
   /// <summary>Plans against the house simulation (heating prices per slot) and forecasts the automatic.</summary>
   /// <param name="baseInput">Simulation input without warm-water heating.</param>
   /// <param name="baseline">Simulation of <paramref name="baseInput"/>.</param>
   /// <param name="now">Current time.</param>
   /// <param name="reason">Why (published).</param>
-  public void Replan(SimulationInput baseInput, SimulationResult baseline, DateTime now, string reason)
+  /// <param name="pricer">What heating in a slot costs (<see cref="ILoadPricer"/>: the DP's while it steers); null: the
+  /// greedy simulation's.</param>
+  public void Replan(SimulationInput baseInput, SimulationResult baseline, DateTime now, string reason, ILoadPricer? pricer = null)
   {
     _replanRequest = null;
     _lastHeating = Heating;
@@ -137,7 +142,8 @@ public sealed class WarmWaterController
 
     var slots = baseline.Slots.Select(s => s.Time).ToList();
     var horizonEnd = slots[^1].AddMinutes(15);
-    var prices = WarmWaterPlanner.HeatingPricesPerKwh(baseInput, baseline, slots, now, (int)Math.Round(Model.PowerW(45)));
+    var prices = WarmWaterPlanner.HeatingPricesPerKwh(baseInput, baseline, slots, now, (int)Math.Round(Model.PowerW(45)), pricer: pricer);
+    PricedBy = pricer?.Name ?? "greedy";
     // Unpublished hours are priced by the simulation from estimated prices (PriceList.WithEstimatedPrices).
     PricesKnownUntil = baseInput.PriceHorizonEnd(now);
     OutsideEfficiencyUsed = Weather is { } weather && !weather.IsStale(now) && Config.EfficiencyChangePerK > 0;
@@ -453,6 +459,7 @@ public sealed class WarmWaterController
       boost_since = _boostSince?.ToISO8601(),
       prices_known_until = PricesKnownUntil?.ToISO8601(),
       outside_efficiency = OutsideEfficiencyUsed,
+      priced_by = PricedBy,
       plan_cost_eur = Math.Round(Plan.CostEur, 3),
       automatic_cost_eur = Math.Round(Automatic.CostEur, 3),
       comfort_deficit_k = Math.Round(Plan.ComfortDeficitK, 1),

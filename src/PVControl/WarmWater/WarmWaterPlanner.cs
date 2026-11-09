@@ -63,15 +63,18 @@ public static class WarmWaterPlanner
   public const float DeficitPenaltyPerK = 10f;
   const int SlotMinutes = TimeRange.SlotMinutes;
 
-  /// <summary>Cost of one kWh of heating per slot: the extra grid cost of heating in that slot (<see cref="SimulationResult.NetGridCostVs"/>), never below 0.</summary>
+  /// <summary>Cost of one kWh of heating per slot: what heating in that slot adds (<see cref="ILoadPricer"/>; the greedy
+  /// simulation's <see cref="SimulationResult.NetGridCostVs"/> without one), never below 0.</summary>
   /// <param name="baseInput">House simulation input without the heating.</param>
   /// <param name="baseline">Simulation of <paramref name="baseInput"/>.</param>
   /// <param name="slots">Slot starts to price.</param>
   /// <param name="now">Current time (the first slot from here on).</param>
   /// <param name="powerW">Heating power, W.</param>
   /// <param name="probeSlots">Slots priced by one simulation (speed).</param>
+  /// <param name="pricer">The pricer; null: the greedy simulation's (each probe then runs one).</param>
   /// <returns>€/kWh per slot.</returns>
-  public static float[] HeatingPricesPerKwh(SimulationInput baseInput, SimulationResult baseline, IReadOnlyList<DateTime> slots, DateTime now, int powerW, int probeSlots = 2)
+  public static float[] HeatingPricesPerKwh(SimulationInput baseInput, SimulationResult baseline, IReadOnlyList<DateTime> slots, DateTime now, int powerW,
+    int probeSlots = 2, ILoadPricer? pricer = null)
   {
     var prices = new float[slots.Count];
     for (int i = 0; i < slots.Count; i += probeSlots)
@@ -81,8 +84,9 @@ public static class WarmWaterPlanner
       var end = slots[last].AddMinutes(SlotMinutes);
       double kwh = Energy.Wh(powerW, end - start) / 1000;
       if (kwh <= 0) continue;
-      var sim = baseInput.SimulateWith(new ExtraLoad { Name = "Warm water (price probe)", StartTime = start, EndTime = end, PowerW = powerW });
-      float price = (float)Math.Max(0, sim.NetGridCostVs(baseline) / kwh);
+      var probe = new ExtraLoad { Name = "Warm water (price probe)", StartTime = start, EndTime = end, PowerW = powerW };
+      float cost = pricer?.Cost([probe], () => baseInput.SimulateWith(probe)) ?? baseInput.SimulateWith(probe).NetGridCostVs(baseline);
+      float price = (float)Math.Max(0, cost / kwh);
       for (int j = i; j <= last; j++) prices[j] = price;
     }
     return prices;

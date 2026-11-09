@@ -66,12 +66,14 @@ public static class SessionPlanner
   /// <param name="minWindowMinutes">Shortest session worth starting (<see cref="StartChoice.Partial"/>); at least one slot.</param>
   /// <param name="now">Current time: a session starting in the running slot delivers its energy from now
   /// (<see cref="EndForEnergy"/>); null = from its start.</param>
+  /// <param name="pricer">What a candidate costs (<see cref="ILoadPricer"/>); null: the greedy simulation's
+  /// <see cref="SimulationResult.NetGridCostVs"/>. With another pricer the scan shows the greedy cost next to it.</param>
   /// <returns>The start and why; null if none passes, not even shortened (no deadline).</returns>
   public static PlannedStart? FindBestPriceAwareStart(
     DateTime minStart, DateTime horizonEnd, int energyWh, int powerW,
     Func<DateTime, DateTime, SimulationResult> runSim, SimulationResult baseline,
     DateTime? deadline = null, float minSavingFraction = DefaultMinSavingFraction,
-    DateTime? preferredStart = null, int minWindowMinutes = 0, DateTime? now = null)
+    DateTime? preferredStart = null, int minWindowMinutes = 0, DateTime? now = null, ILoadPricer? pricer = null)
   {
     // Every candidate delivers the same energy: its end from the energy, not from start + duration.
     int durationMinutes = Energy.Minutes(energyWh, powerW);
@@ -92,10 +94,12 @@ public static class SessionPlanner
     if (lastStart > lastFullStart) lastStart = lastFullStart < minStart ? minStart : lastFullStart;
 
     (DateTime Start, float Cost)? earliest = null, cheapest = null, preferred = null, earliestAny = null, cheapestAny = null, preferredAny = null;
+    var greedyCost = new Dictionary<DateTime, float>();   // for the scan, next to another pricer's
     for (var candidate = minStart; candidate <= lastStart; candidate = candidate.AddMinutes(15))
     {
       var sim = runSim(candidate, End(candidate));
-      float cost = sim.NetGridCostVs(baseline);
+      float cost = LoadPricing.CostOf(pricer, sim, baseline);
+      if (pricer is not null) greedyCost[candidate] = sim.NetGridCostVs(baseline);
       earliestAny ??= (candidate, cost);
       if (cheapestAny is null || cost < cheapestAny.Value.Cost) cheapestAny = (candidate, cost);
       if (candidate == preferredStart) preferredAny = (candidate, cost);
@@ -106,8 +110,11 @@ public static class SessionPlanner
       if (candidate == preferredStart) preferred = (candidate, cost);
     }
 
-    string F((DateTime Start, float Cost)? x) => x is { } v ? string.Create(CultureInfo.InvariantCulture, $"{v.Start:HH:mm} {v.Cost:F2} €") : "–";
-    string scan = $"earliest {F(earliestAny)} · cheapest {F(cheapestAny)} · last plan {F(preferredAny)}"
+    string F((DateTime Start, float Cost)? x) => x is { } v
+      ? string.Create(CultureInfo.InvariantCulture, $"{v.Start:HH:mm} {v.Cost:F2} €")
+        + (greedyCost.TryGetValue(v.Start, out float g) ? string.Create(CultureInfo.InvariantCulture, $" (greedy {g:F2} €)") : "")
+      : "–";
+    string scan = (pricer is null ? "" : $"{pricer.Name}: ") + $"earliest {F(earliestAny)} · cheapest {F(cheapestAny)} · last plan {F(preferredAny)}"
                   + (earliest is null ? " · none under the price limit" : $" · under the limit from {F(earliest)}");
 
     if (earliest is { } e && cheapest is { } c)
@@ -240,11 +247,12 @@ public static class SessionPlanner
   /// <param name="keepFromGrid">A running session keeps its supply (true: from the grid, false: via the battery; null:
   /// choose) — live 2026-10-28 03:53–05:00 the choice flipped every ~10 min and the EV drew the battery a night charge
   /// had just filled.</param>
+  /// <param name="pricer">What each supply costs; null: <see cref="SimulationResult.NetGridCostVs"/>.</param>
   /// <returns>The session as supplied and its simulation.</returns>
   public static (ExtraLoad Load, SimulationResult Sim) ChooseSupply(Func<ExtraLoad, SimulationResult> simulate, ExtraLoad session, SimulationResult baseline,
-    bool? keepFromGrid = null)
+    bool? keepFromGrid = null, ILoadPricer? pricer = null)
   {
-    var (loads, sim) = ChooseSupply(l => simulate(l[0]), [session], baseline, keepFromGrid);
+    var (loads, sim) = ChooseSupply(l => simulate(l[0]), [session], baseline, keepFromGrid, pricer);
     return (loads[0], sim);
   }
 
@@ -254,9 +262,10 @@ public static class SessionPlanner
   /// <param name="sessions">The blocks.</param>
   /// <param name="baseline">Simulation without them.</param>
   /// <param name="keepFromGrid">A running session's supply (true: grid, false: battery); null: choose.</param>
+  /// <param name="pricer">What each supply costs; null: <see cref="SimulationResult.NetGridCostVs"/>.</param>
   /// <returns>The blocks as supplied and their simulation.</returns>
   public static (IReadOnlyList<ExtraLoad> Loads, SimulationResult Sim) ChooseSupply(Func<IReadOnlyList<ExtraLoad>, SimulationResult> simulate,
-    IReadOnlyList<ExtraLoad> sessions, SimulationResult baseline, bool? keepFromGrid = null)
+    IReadOnlyList<ExtraLoad> sessions, SimulationResult baseline, bool? keepFromGrid = null, ILoadPricer? pricer = null)
   {
     List<ExtraLoad> As(bool fromGrid) => sessions.Select(e => e.WithFromGrid(fromGrid)).ToList();
     if (keepFromGrid is { } keep)
@@ -269,7 +278,7 @@ public static class SessionPlanner
     if (!sim.HasNewGridVs(baseline)) return (viaBattery, sim);
     var direct = As(true);
     var directSim = simulate(direct);
-    return sim.NetGridCostVs(baseline) < directSim.NetGridCostVs(baseline) ? (viaBattery, sim) : (direct, directSim);
+    return LoadPricing.CostOf(pricer, sim, baseline) < LoadPricing.CostOf(pricer, directSim, baseline) ? (viaBattery, sim) : (direct, directSim);
   }
 
   /// <summary>Saving a split needs over the unbroken session, as a fraction of its cost (every block is one more on/off of the charger).</summary>
@@ -355,10 +364,11 @@ public static class SessionPlanner
   /// <param name="baseline">Simulation without the load.</param>
   /// <param name="unbroken">The unbroken choice (<see cref="FindBestPriceAwareStart"/>) with its cost.</param>
   /// <param name="now">Current time.</param>
+  /// <param name="pricer">What the split costs (the unbroken cost came from the same one); null: <see cref="SimulationResult.NetGridCostVs"/>.</param>
   /// <returns>The split; null if none beats the unbroken session clearly.</returns>
   public static SplitPlan? FindSplit(PriceList quarterPrices, DateTime minStart, DateTime lastEnd, int energyWh, ExtraLoad template,
     int minRunMinutes, int minOffMinutes, bool startNow, Func<IReadOnlyList<ExtraLoad>, SimulationResult> runSim, SimulationResult baseline,
-    PlannedStart unbroken, DateTime? now)
+    PlannedStart unbroken, DateTime? now, ILoadPricer? pricer = null)
   {
     if (unbroken.Cost is not { } unbrokenCost
         || CheapestTwoBlocks(quarterPrices, minStart, lastEnd, energyWh, template.PowerW, minRunMinutes, minOffMinutes, startNow, now) is not { } b)
@@ -367,7 +377,7 @@ public static class SessionPlanner
     var sim = runSim(sessions);
     bool underLimit = unbroken.Choice is StartChoice.Earliest or StartChoice.Cheaper;
     if (underLimit ? !PassesPriceCheck(sim, baseline) : sim.ExceedsImportCapVs(baseline)) return null;
-    float cost = sim.NetGridCostVs(baseline);
+    float cost = LoadPricing.CostOf(pricer, sim, baseline);
     float saving = unbrokenCost - cost;
     return saving >= SplitMinSavingEur && saving >= SplitMinSavingFraction * Math.Abs(unbrokenCost)
       ? new SplitPlan(sessions, cost, saving)

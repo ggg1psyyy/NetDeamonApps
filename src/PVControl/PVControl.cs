@@ -1081,6 +1081,9 @@ namespace NetDeamon.apps.PVControl
         PVCC_Logger.LogInformation("Planner steering: {Planner}{Stale}", effective, dpStale ? " (DP plan stale)" : "");
       _house.DpSteering = dpTimeline;
       _steeredState = _house.SteeredState(now);
+      // The loads are priced by the plan that steers (from the next cycle's planning on): the DP's while it does.
+      _house.DpPricing = effective == Optimizer.Planner.dp ? PVCC_Config.DpShadow?.Options : null;
+      _house.RunningState = _steeredState;
       (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
       await PublishPricePublicationAsync(now);

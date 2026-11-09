@@ -1381,6 +1381,30 @@ same plan, not an approximation. All 13 live snapshots in `Data/` gave identical
 instead of 1.6–3.7 s. The prune compares flows rather than computing the cap, so a new limit in `ForceCharge` can't
 break it.
 
+### Loads priced by the DP while it steers (`DpLoadPricer`)
+
+Every EV and warm-water decision priced a load as the greedy simulation with it minus without (`NetGridCostVs`). The
+greedy plan's charge rules are discontinuous — a 1-% shift in the battery's path flips which night quarters it charges —
+and that jump landed in the load's price. Live 2026-11-09 22:15: EV 39 → 45 % (4.97 kWh from the grid), 23:15 priced at
+1.98 €, 23:00 at 2.20 €; with the EV from 23:00 the greedy run stopped its charge at 23:15, reached 03:00 at 43 % and
+bought at 05:00–06:15 (0.47–0.53), from 23:15 it reached 03:00 at 44 % and charged three quarters at 0.458. The EV's own
+energy made 23:00 2.1 ct cheaper (0.46 kWh at 0.4154 instead of 0.4611), and the DP, which steers, would have charged in
+one block from 23:00 either way.
+
+So while the DP steers, a load is priced against a DP plan of the house without it, in two parts: its quarters replayed
+with the plan's modes held (the simulation's own flows — `BatteryHeldForLoad` turns normal into grid_only for a load from
+the grid, so the house goes to the grid with it, as live), then the battery's energy difference after them at the DP's
+table of the cheapest rest (`DpRestCost`, kept with every plan). The table, not the marginal `BatteryValue`: on the
+synthetic dear day 115 Wh cost 0.49 €/kWh stored, 2 kWh 0.60 — a little is replaced by a slightly larger later charge, a
+lot pushes the battery under the preferred minimum and into the dear hours. Nothing in it re-plans the night. The base
+plan is a DP run per load when that load replans (EV ~every 5 min, warm water ~15, ~0.5–1 s each, lazily — only when a
+candidate is priced): a plan with the load in it would count its last session twice, and its holds for that session
+would sit in the modes. The table holds the DP's decision costs too (charge start, `DeviationEurPerKwh`): up to ~1 ct/kWh
+of bias, against greedy's 22-ct jumps. Kept on the greedy simulation for now: the yes/no rules (no new grid, overnight
+minimum, price limit, import cap), the follow-up preview, and the pricing while the greedy plan steers. The pricer
+interface (`ILoadPricer`) takes the loads, never a simulation, and the replay returns its quarters' flows — the rules can
+be computed from it once the greedy simulation goes. Tonight's snapshot (`Data/…2026-11-09_2215`) now picks 23:00.
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

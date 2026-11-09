@@ -477,7 +477,7 @@ namespace NetDeamon.apps.PVControl
       if (WarmWater is not null)
       {
         if (WarmWater.ReplanReason(now) is { } wwReason)
-          WarmWater.Replan(baseInput, baseResult, now, wwReason);
+          WarmWater.Replan(baseInput, baseResult, now, wwReason, PricerFor(baseInput, baseResult).Value);
         var wwLoads = WarmWater.ExtraLoads(now);
         if (wwLoads.Count > 0)
         {
@@ -593,7 +593,16 @@ namespace NetDeamon.apps.PVControl
     /// <param name="baseInput">Simulation input without this load.</param>
     /// <param name="baseResult">Simulation of <paramref name="baseInput"/>.</param>
     private void DecideLoadWindow(SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult) =>
-      new LoadWindowSearch(this, load, baseInput, baseResult).Run();
+      new LoadWindowSearch(this, load, baseInput, baseResult, PricerFor(baseInput, baseResult)).Run();
+
+    /// <summary>
+    /// The pricer of a load planned against a base (<see cref="Optimizer.DpLoadPricer.For"/>): the DP's while its plan
+    /// steers, else the greedy simulation's. Lazy — the DP plans the base (~1 s) only once the load prices a candidate.
+    /// </summary>
+    /// <param name="baseInput">The house without the load.</param>
+    /// <param name="baseResult">Its greedy simulation.</param>
+    private Lazy<ILoadPricer?> PricerFor(SimulationInput baseInput, SimulationResult baseResult) =>
+      new(() => Optimizer.DpLoadPricer.For(DpPricing, baseInput, RunningState));
 
     /// <summary>
     /// One load's window search of one cycle: the gates, then the rulesets Optimal → Priority → PriorityPlus
@@ -607,6 +616,7 @@ namespace NetDeamon.apps.PVControl
       readonly SchedulableLoadRuntime load;
       readonly SimulationInput baseInput;
       readonly SimulationResult baseResult;
+      readonly Lazy<ILoadPricer?> pricer;   // what a candidate costs (null: the greedy simulation's)
       DateTime now, currentSlot, farFuture, todayMax, tomorrowMax, priceHorizonEnd;
       DateTime? previousEnd, readyBy;
       bool wasActive, decided;
@@ -614,12 +624,14 @@ namespace NetDeamon.apps.PVControl
       int chargeRateW, energyNeededWh, durationMinutes;
       ExtraLoad session = null!;
 
-      public LoadWindowSearch(HouseEnergy house, SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult)
+      public LoadWindowSearch(HouseEnergy house, SchedulableLoadRuntime load, SimulationInput baseInput, SimulationResult baseResult,
+        Lazy<ILoadPricer?> pricer)
       {
         _house = house;
         this.load = load;
         this.baseInput = baseInput;
         this.baseResult = baseResult;
+        this.pricer = pricer;
       }
 
       /// <summary>Decides the load: the gates, the ladder, the follow-up preview.</summary>
@@ -1155,13 +1167,15 @@ namespace NetDeamon.apps.PVControl
         // A split session (two blocks) whose first block has ended pauses as planned: it isn't "running" for the
         // rule that keeps a running session going — that rule is for noise, not for the planned pause.
         bool running = wasActive && !(previousLoads.Count > 1 && previousLoads[0].EndTime <= now);
+        var price = pricer.Value;
         ExtraLoad Supplied(DateTime start, DateTime end) =>
-          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Load;
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid, price).Load;
         SimulationResult RunSuppliedSimFrom(DateTime start, DateTime end) =>
-          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid).Sim;
+          SessionPlanner.ChooseSupply(l => baseInput.SimulateWith(l), session.Between(start, end), baseResult, keepFromGrid, price).Sim;
         var planned = SessionPlanner.FindBestPriceAwareStart(currentSlot, priceHorizonEnd, energyNeededWh, chargeRateW, RunSuppliedSimFrom, baseResult,
           readyBy, running ? float.PositiveInfinity : SessionPlanner.DefaultMinSavingFraction,
-          preferredStart: running ? null : previousLoads.FirstOrDefault(e => e.EndTime > now)?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now);
+          preferredStart: running ? null : previousLoads.FirstOrDefault(e => e.EndTime > now)?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now,
+          pricer: price);
         if (planned is not { } p) return;
         load.PriceScan = p.Scan ?? "n/a";
 
@@ -1169,9 +1183,10 @@ namespace NetDeamon.apps.PVControl
         if (p.Choice is StartChoice.Earliest or StartChoice.Cheaper or StartChoice.DeadlineEarliest or StartChoice.DeadlineCheapest
             && SessionPlanner.FindSplit(baseInput.QuarterHourlyImportPrices, currentSlot, readyBy ?? SplitHorizon(), energyNeededWh, session,
                  load.Config.MinWindowMinutes, load.Config.MinOffMinutes, startNow: running,
-                 l => SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), l, baseResult, keepFromGrid).Sim, baseResult, p, now) is { } split)
+                 l => SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), l, baseResult, keepFromGrid, price).Sim, baseResult, p, now,
+                 price) is { } split)
         {
-          var blocks = SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), split.Sessions, baseResult, keepFromGrid).Loads;
+          var blocks = SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), split.Sessions, baseResult, keepFromGrid, price).Loads;
           var first = blocks[0];
           bool firstNow = first.StartTime <= currentSlot;
           load.PriceScan = $"{p.Scan} · split {first.StartTime:HH:mm}–{first.EndTime:HH:mm} + {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} saves {split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} €";
@@ -1390,6 +1405,13 @@ namespace NetDeamon.apps.PVControl
     /// <summary>The DP plan as slots while it steers (select.pv_control_planner = dp and fresh, Optimizer.DpSteering);
     /// null: the greedy simulation steers.</summary>
     public IReadOnlyList<SimulationSlot>? DpSteering { get; set; }
+
+    /// <summary>The DP's options while its plan steers (set with <see cref="DpSteering"/>): EV and warm-water decisions are
+    /// priced by the DP (<see cref="Optimizer.DpLoadPricer"/>); null: by the greedy simulation.</summary>
+    public Optimizer.DpOptions? DpPricing { get; set; }
+
+    /// <summary>The mode the steering plan runs now (<see cref="Optimizer.DpSteering.RunningInput"/>): the DP pricer's base plans from it.</summary>
+    public InverterState? RunningState { get; set; }
 
     /// <summary>The plan the inverter command comes from: the DP's while it steers, else the greedy simulation's.</summary>
     public IReadOnlyList<SimulationSlot> SteeringTimeline => DpSteering is { Count: > 0 } dp ? dp : SimulationTimeline;

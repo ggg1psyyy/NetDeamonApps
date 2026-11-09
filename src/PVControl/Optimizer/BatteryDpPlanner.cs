@@ -58,8 +58,9 @@ public sealed record DpOptions(
 /// <param name="BatteryValue">What a kWh the battery delivers is worth at the end of the quarter, €/kWh: how much cheaper
 /// the rest of the plan gets with it (<see cref="BatteryDpPlanner.BatteryValueOf"/>). Above it the battery covers the
 /// house, below it the plan buys from the grid and keeps the battery — the line that explains the plan's holds.</param>
+/// <param name="EnergyWh">Battery energy at the slot start, Wh (exact; <paramref name="SocPct"/> is it in whole %).</param>
 public sealed record DpSlot(DateTime Time, int SocPct, InverterModes Mode, bool Bulk, int TargetSocPct,
-  int GridImportWh, int GridExportWh, int BatteryChargeWh, int BatteryDischargeWh, float BatteryValue = 0);
+  int GridImportWh, int GridExportWh, int BatteryChargeWh, int BatteryDischargeWh, float BatteryValue = 0, int EnergyWh = 0);
 
 /// <summary>What a plan costs over the horizon, €: <see cref="Total"/> = grid cost + penalties − the value of the energy left at the end.</summary>
 /// <param name="GridCost">Import cost − export earnings.</param>
@@ -77,7 +78,43 @@ public sealed record PlanCost(float GridCost, float BandPenalty, float FloorPena
 /// <param name="Slots">The quarters.</param>
 /// <param name="Cost">What it costs (<see cref="PlanEvaluation"/>).</param>
 /// <param name="EndSocPct">SoC at the end, %.</param>
-public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndSocPct);
+/// <param name="Rest">The DP's cost of the rest from every quarter and battery energy (<see cref="DpRestCost"/>).</param>
+public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndSocPct, DpRestCost? Rest = null);
+
+/// <summary>
+/// The DP's table of the cheapest rest: for each quarter of the plan (and the horizon's end) and each battery energy, what
+/// the rest of the horizon costs from there, € — grid cost, penalties and the decision costs (charge start, deviation)
+/// the DP optimises, less the end value. A difference of two entries is what an energy difference at that quarter is worth:
+/// the DP's own answer to "a kWh more or less in the battery here", for small differences and large ones.
+/// </summary>
+public sealed class DpRestCost
+{
+  private readonly float[][][] _value;   // [slot][layer][state]
+  private readonly double _whPerState;
+
+  internal DpRestCost(DateTime start, float[][][] value, double whPerState)
+  {
+    Start = start;
+    _value = value;
+    _whPerState = whPerState;
+  }
+
+  /// <summary>The plan's first slot.</summary>
+  public DateTime Start { get; }
+
+  /// <summary>Quarters of the plan; <see cref="At"/> takes 0…this (this = the horizon's end).</summary>
+  public int Slots => _value.Length - 1;
+
+  /// <summary>The rest's cost from a quarter at an energy, €.</summary>
+  /// <param name="slot">The quarter's index in the plan (<see cref="Slots"/>: after the last).</param>
+  /// <param name="chargedBefore">The quarter before charged from the grid (a charge continuing pays no start cost).</param>
+  /// <param name="energyWh">Battery energy at the quarter's start, Wh.</param>
+  public float At(int slot, bool chargedBefore, int energyWh)
+  {
+    var layers = _value[slot];
+    return BatteryDpPlanner.Interpolate(layers[chargedBefore && layers.Length > 1 ? 1 : 0], energyWh, _whPerState);
+  }
+}
 
 /// <summary>
 /// The one cost model of a plan — the DP's objective and the yardstick both plans are compared with: grid cost per slot
@@ -221,15 +258,7 @@ public static class BatteryDpPlanner
     double whPerState = input.BatteryCapacityWh / (double)(states - 1);
     int StateOf(int wh) => Math.Clamp((int)Math.Round(wh / whPerState), 0, states - 1);
     int WhOf(int state) => (int)Math.Round(state * whPerState);
-    // The rest's cost at an exact energy: linear between the two grid states around it. Rounding to the nearest state
-    // instead biased every quarter's small flow (100 Wh = 3.47 steps → 3) and the plan was dearer than it believed.
-    float ValueAt(float[] v, int wh)
-    {
-      double x = Math.Clamp(wh / whPerState, 0, states - 1);
-      int lo = (int)Math.Floor(x), hi = Math.Min(lo + 1, states - 1);
-      double w = x - lo;
-      return (float)(v[lo] * (1 - w) + v[hi] * w);
-    }
+    float ValueAt(float[] v, int wh) => Interpolate(v, wh, whPerState);
 
     var energies = times.Select(t => input.SlotEnergyWh(t)).ToArray();
     var fractions = times.Select(t => input.SlotFraction(t)).ToArray();
@@ -326,7 +355,7 @@ public static class BatteryDpPlanner
         var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
         int next = input.NextEnergyWh(energy, ch, dis);
         list.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis,
-          BatteryValueOf(input, value[i + 1][LayerAfter(a)], next, ValueAt)));
+          BatteryValueOf(input, value[i + 1][LayerAfter(a)], next, ValueAt), energy));
         energy = next;
         layer = LayerAfter(a);
       }
@@ -370,7 +399,22 @@ public static class BatteryDpPlanner
         }
       }
     }
-    return new DpPlan(plan.Slots, cost, input.WhToSoc(plan.End));
+    return new DpPlan(plan.Slots, cost, input.WhToSoc(plan.End), new DpRestCost(start, value, whPerState));
+  }
+
+  /// <summary>
+  /// The rest's cost at an exact energy: linear between the two grid states around it. Rounding to the nearest state
+  /// instead biased every quarter's small flow (100 Wh = 3.47 steps → 3) and the plan was dearer than it believed.
+  /// </summary>
+  /// <param name="v">The rest's cost by state.</param>
+  /// <param name="wh">Energy, Wh.</param>
+  /// <param name="whPerState">Wh between two states.</param>
+  internal static float Interpolate(float[] v, int wh, double whPerState)
+  {
+    double x = Math.Clamp(wh / whPerState, 0, v.Length - 1);
+    int lo = (int)Math.Floor(x), hi = Math.Min(lo + 1, v.Length - 1);
+    double w = x - lo;
+    return (float)(v[lo] * (1 - w) + v[hi] * w);
   }
 
   /// <summary>
@@ -503,9 +547,19 @@ public static class BatteryDpPlanner
     (Math.Max(0, normal.dis - dischargeWh) + Math.Max(0, normal.ch - chargeWh)) / 1000f * o.DeviationEurPerKwh;
 
   /// <summary>The flows of an action, by the simulation's own function.</summary>
-  private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction)
-  {
-    var state = new InverterState(a.Mode) { Bulk = a.Bulk };
-    return EnergySimulator.ComputeEnergyFlows(state, pv, totalLoad, wh, input, a.TargetSocPct, fraction);
-  }
+  private static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, Action a, int pv, int totalLoad, int wh, double fraction) =>
+    Flows(input, a.Mode, a.Bulk, a.TargetSocPct, pv, totalLoad, wh, fraction);
+
+  /// <summary>The flows of a mode in a quarter (<see cref="EnergySimulator.ComputeEnergyFlows"/>) — the DP's and its replays' one source.</summary>
+  /// <param name="input">Simulation input (with the DP's losses).</param>
+  /// <param name="mode">Inverter mode.</param>
+  /// <param name="bulk">A grid charge's path.</param>
+  /// <param name="targetSocPct">A grid charge's target, %.</param>
+  /// <param name="pv">PV, Wh.</param>
+  /// <param name="totalLoad">Load incl. extra loads, Wh.</param>
+  /// <param name="wh">Battery energy at the start, Wh.</param>
+  /// <param name="fraction">Share of the quarter (<see cref="SimulationInput.SlotFraction"/>).</param>
+  internal static (int ch, int dis, int imp, int exp) Flows(SimulationInput input, InverterModes mode, bool bulk, int targetSocPct,
+    int pv, int totalLoad, int wh, double fraction) =>
+    EnergySimulator.ComputeEnergyFlows(new InverterState(mode) { Bulk = bulk }, pv, totalLoad, wh, input, targetSocPct, fraction);
 }
