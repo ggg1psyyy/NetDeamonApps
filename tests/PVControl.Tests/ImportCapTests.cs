@@ -354,6 +354,11 @@ public class ImportCapTests
     Assert.Equal(30, ImportCapGuard.NextLimit(27, 38.2, 30, gridCharging: true, freeRaise: false));  // the EV stops: straight to the maximum
     Assert.Equal(30, ImportCapGuard.NextLimit(25, 41.0, 30, gridCharging: true, freeRaise: true));   // never above the maximum
     Assert.Equal(30, ImportCapGuard.NextLimit(25, 20.0, 30, gridCharging: false, freeRaise: true));  // no grid charge: the maximum
+    // A room at a whole amp (23:43–23:45: 28.0 A, 27 ↔ 28 A): the free raise keeps 0.5 A below it, so no cut follows.
+    Assert.Equal(27, ImportCapGuard.NextLimit(27, 28.0, 30, gridCharging: true, freeRaise: true));
+    Assert.Equal(27, ImportCapGuard.NextLimit(27, 28.4, 30, gridCharging: true, freeRaise: true));
+    Assert.Equal(28, ImportCapGuard.NextLimit(27, 28.5, 30, gridCharging: true, freeRaise: true));
+    Assert.Equal(27, ImportCapGuard.NextLimit(27, 27.2, 30, gridCharging: true, freeRaise: true));   // never a cut by the margin
   }
 
   [Fact]

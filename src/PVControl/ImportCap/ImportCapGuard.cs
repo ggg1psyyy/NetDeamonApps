@@ -109,6 +109,10 @@ public static class ImportCapGuard
   /// <summary>Smallest raise of the published limit below the maximum, A (a lower limit follows in whole amps).</summary>
   public const double RaiseStepA = 2;
 
+  /// <summary>Margin a free raise keeps below the room, A: a room hovering at a whole amp (2026-11-09 23:43–23:45: 28.0 A,
+  /// 27 → 28 → 27 → 28 → 27 A) raised to it and was cut again within a minute, every quarter.</summary>
+  public const double FreeRaiseMarginA = 0.5;
+
   /// <summary>
   /// The charge current to publish, in whole amps: each change is an EEPROM write on the inverter (the
   /// SolaX charge current register a bulk charge runs at), so it is lowered at once, by whole amps, as far
@@ -116,7 +120,7 @@ public static class ImportCapGuard
   /// while the room is at least R + (R − L), at least by <see cref="RaiseStepA"/> or straight to the maximum.
   /// A load that brought the import near the cap (the EV) usually keeps running, and a raise into the same
   /// edge was lowered again a moment later. Once per quarter (<paramref name="freeRaise"/>) a raise goes straight
-  /// to the room's whole amps without that headroom: a long charge next to a load that stays (2026-11-09 23:01: cut
+  /// to the whole amps of the room less <see cref="FreeRaiseMarginA"/>, without that headroom: a long charge next to a load that stays (2026-11-09 23:01: cut
   /// to 25 A, the plan's room 27.9 A with the EV running until 01:42 — never twice covered) follows its room quarter by
   /// quarter, for at most one raise (and a cut) per quarter. No grid charging: the maximum (the battery then only
   /// charges from PV surplus, which never imports).
@@ -132,7 +136,7 @@ public static class ImportCapGuard
     if (!gridCharging) return maxA;
     double level = Math.Clamp(Math.Floor(roomA), 0, maxA);
     if (previousA is not { } p || level < p) return level;
-    if (freeRaise) return level;
+    if (freeRaise) return Math.Max(p, Math.Clamp(Math.Floor(roomA - FreeRaiseMarginA), 0, maxA));
     double raise = Math.Min(maxA, Math.Floor((roomA + p) / 2));    // the highest R with room ≥ R + (R − p)
     return raise >= maxA || raise >= p + RaiseStepA ? raise : p;
   }

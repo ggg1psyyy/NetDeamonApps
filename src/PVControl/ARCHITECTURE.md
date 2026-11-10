@@ -858,7 +858,9 @@ a charge rate far too low. Since 2026-11-09 one raise per quarter needs no headr
 guard cut to 25 A at 23:01 (the quarter's budget while the EV and the battery ramped up), the plan's room was 27.9 A
 with the EV running until 01:42 — 27 A needed 29 A of room, so the charge would have run at 25 A all through the cheap
 hour (~0.7 kWh moved to 0.4614, ~3 ct). Bounded to one raise (and at most one cut) per quarter, a long charge follows
-its room quarter by quarter. Lowering stays as it was: the guard already works on the quarter's energy budget (what
+its room quarter by quarter. The free raise keeps 0.5 A below the room (`FreeRaiseMarginA`): the same night the
+room hovered right at 28.0 A and the limit went 27 → 28 → 27 → 28 → 27 A between 23:43 and 23:45 — a raise to the
+room's whole amp and a cut a few seconds later, each a current write on a bulk charge. Lowering stays as it was: the guard already works on the quarter's energy budget (what
 the quarter has imported, the rest's allowed mean, the reaction allowance), not on the instantaneous power, and the
 plan's room cuts ahead of a load from the forecast — waiting for an average over the cap would spend the time the
 quarter needs to correct.
