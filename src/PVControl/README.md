@@ -66,6 +66,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 | `sensor.pv_control_version` | Deployed build (see [Build & Deploy](../../README.md#build--deploy)), also the "Firmware" of the PV Control device |
 | `sensor.pv_control_health` | `ok` / `degraded` / `error` — see [Health](#health) |
 | `sensor.pv_control_load_forecast` | Coming night's load (22:00–08:00, kWh) by the weather-aware model — see [Load forecast](#load-forecast) |
+| `sensor.pv_control_pv_forecast` | Tomorrow's PV (kWh) of the main forecast source, corrected by what it learned — see [PV forecast](#pv-forecast) |
 
 **Minimum SoC.** Two floors:
 - **Absolute minimum** (the inverter's minimum + 2 %): the hard floor, never drained below — held with `grid_only` (the grid covers the load) once the battery reaches it, released only 2 % above it.
@@ -79,6 +80,32 @@ Grid charge (`need_to_charge_from_grid_today`): the target for the low is the ha
 The house load forecast is the hour-of-day average of the last days (recent days weighted more). With `LoadForecast:` in `PVControl.yaml` a weather-aware model is added: base load (that average without the heat pump, plus half of its deviation over the last 48 h) plus the heat pump's space heating from the outside temperature forecast (Pirate Weather hourly) — learned from DataLogger's history as an energy signature (Wh per heating degree below 13 °C, per hour of the day). The heat pump mode decides whether it heats at all. In the backtest over the last year it missed the night load 15 % less than the average, in winter 20 % less (`tools/LoadBacktest/README.md`).
 
 `Mode: Model` (configured) makes PVControl use it, with the average as fallback when the weather forecast or history is missing; `Mode: Shadow` (code default) computes it next to the average without using it. `sensor.pv_control_load_forecast` shows tonight's forecast and its parts (`average_kwh`, `night_base_kwh`, `night_heat_pump_kwh`, `night_temp24`, `heating_on`, `heat_pump_scale`, `source`, `used_by_pvcontrol`), the next 24 h of both forecasts (`next_24h`), and the nights scored so far (`nights`, `model_mae_kwh` vs `average_mae_kwh`) — the comparison keeps running in both modes.
+
+## PV forecast
+
+`PvForecast:` in `PVControl.yaml` compares PV forecast sources and learns a correction for each of them. `Mode: Shadow`
+computes, logs and publishes it; the planners keep planning with the raw Open-Meteo forecast.
+
+- **Sources** (`Sources:`, by `Type`; each one a class behind `IPvForecastSource`, so a source can be added or removed
+  in the YAML alone):
+  - `OpenMeteoEntities` — the forecast entities PVControl plans with (`ForecastPVEnergy…Entities`), raw.
+  - `GeoSphere` — GeoSphere Austria's data hub at HA's home zone: the 1-km C-LAEF control run's global radiation as
+    the expected value and the ensemble's 10th/90th percentile as a band, times `KwhPerKwhM2` (PV per kWh/m²), fetched
+    every `RefreshMinutes`. It also logs each ended day's measured radiation (INCA at the home zone, the configured
+    stations) and sunshine (`ValleyStation`, `HillStations`: the hills' sunshine minus the valley's is the inversion
+    signal of a foggy day). Data: GeoSphere Austria, CC BY 4.0.
+- **Log** (`DBLocation`, SQLite in the plugin's folder): at `SnapshotHour` every source's forecast for tomorrow is
+  noted once (`dayahead`: total, band, hourly, the day's forecast temperature 09–14 h); after the day ends its
+  measured PV and temperature come from DataLogger's hours (`actual`); the weather service's measured days go to
+  `observation`.
+- **Correction:** the median of actual ÷ forecast over the last `WindowDays` scored days (at least `MinScoredDays`,
+  otherwise none), shifted by `TemperatureSlopePerK` per K the day is forecast warmer than those days were. The
+  cautious value is the source's band low end corrected, or the `CautiousPercentile` of the ratios for a source
+  without a band.
+- **`sensor.pv_control_pv_forecast`**: state = the main (first) source's corrected forecast for tomorrow; `sources`
+  (per source: today and tomorrow raw and corrected, tomorrow cautious and high, factor, scored days, temperature
+  anomaly, the mean absolute error raw vs corrected over the backtest window), `recent` (the main source's scored
+  days: forecast, corrected, actual), `measured_day`/`measured` (the newest measured day), `attribution`.
 
 ## Health
 
@@ -398,6 +425,7 @@ dotnet test tests/PVControl.Tests
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) and their first/last year |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax; a fixed-price contract's energy price) |
 | `PVControlExtensionsTests` | PVControl's helpers: prediction windows, quarter hours, daily running sums, running averages |
+| `PvForecastTests` | PV forecast shadow: the learned correction (median, window, temperature, limits, backtest), GeoSphere's recorded responses (forecast, ensemble, station, INCA), the measured day from DataLogger's hours (reset hour, DST), the log, an evening snapshot and scoring with fake sources |
 | `LoadModelTests`, `WeatherForecastTests` | Weather-aware load forecast: data cleaning, heat demand (energy signature, 48-h scaling, heating off / just switched on), base level, night scoring, model vs fallback on a temporary DB; parsing a real Pirate Weather forecast |
 | `ChargeAbovePriceLimitTests` | Above the force-charge price limit a grid charge only protects the floor, never the forecast margin alone |
 | `EvDirectFromGridTests` | PriorityPlus: battery if no grid is needed or it costs less, otherwise directly from the grid; a running session keeps its supply (battery held, or alongside a force_charge), round-trip loss in the cost |

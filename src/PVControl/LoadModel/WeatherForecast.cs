@@ -50,6 +50,17 @@ public sealed class WeatherForecast(LoadForecastConfig config)
     return null;
   }
 
+  /// <summary>Mean forecast temperature of the hours starting in a time range.</summary>
+  /// <param name="hours">Forecast hours.</param>
+  /// <param name="from">Start (inclusive).</param>
+  /// <param name="to">End (exclusive).</param>
+  /// <returns>°C; null unless every hour of the range is covered.</returns>
+  public static double? MeanTemperature(IReadOnlyList<HourlyWeather> hours, DateTime from, DateTime to)
+  {
+    var range = hours.Where(h => h.Local >= from && h.Local < to).ToList();
+    return range.Count == 0 || range.Count < (to - from).TotalHours ? null : range.Average(h => h.Temperature);
+  }
+
   /// <summary>Sets the forecast directly, e.g. in tests.</summary>
   /// <param name="hours">Forecast hours.</param>
   /// <param name="at">Time it counts as fetched.</param>

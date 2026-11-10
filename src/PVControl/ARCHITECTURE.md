@@ -247,6 +247,53 @@ subtracted from the house load (`avg_house_load_now` down to −1.2 kW) until th
 
 ---
 
+### PV forecast correction (`PvForecast/`, shadow)
+
+**Why — the forecast was 2× too high every day of 2026-11-01…09** (Open-Meteo, noted the evening before: 6.0–14.0
+kWh, actual 2.1–11.2; the forecast at 06:00 was no better). Scribe's TimescaleDB holds the forecast entities since
+2024-09 (daily totals; the hourly `watts` since 2026-09-02) and the inverter's PV since 2023-11: actual ÷ day-ahead by
+month repeats every year — Sep/Jul ~0.95–1.0, Oct ~0.8–0.9, Nov ~0.55, Dec/Jan 0.4–0.7 (single snow days near 0).
+In Sep/Oct the hours around noon are right and the first and last hours ~0.8 (low sun on 10° east-west panels); in
+November every hour is ~0.5 — a whole day under fog or low stratus, which the global models behind the forecast
+don't see. The running-average correction (`WithRunningAvgCorrection`) only acts once PV is producing; the decisions
+that cost — the night's grid charge — are made the evening before on tomorrow's raw forecast.
+
+**What explains the ratio** (winter half-years 2024–26, 342 days, correlation with actual ÷ forecast): Pirate
+Weather's cloud cover +0.08 and humidity −0.05 (model data as well — no fog in them), wind +0.03, the day's temperature
+against the days before +0.49 (cold under an inversion: fog, snow), yesterday's ratio +0.42 (fog persists). The
+lux sensors follow the PV (hourly r 0.80) but measure what the inverter measures — not used.
+
+**Backtest** (day-ahead, only what was known the evening before; 2025-09…2026-11, winter Nov–Feb, 129 days):
+
+| Method | MAE kWh/day | Bias kWh/day | Days > 2 kWh too high |
+|---|---|---|---|
+| Raw | 3.58 | +3.49 | 90 |
+| × median of the last 14 days | 1.72 | +0.12 | 24 |
+| … + 0.035 per K temperature anomaly | 1.56 | −0.03 | 17 |
+| × the same months of the other year | 1.93 | +1.48 | 41 |
+
+The median of recent days beats a seasonal climatology (the weather of a winter differs from the last one); the
+slope was fitted on 2024-09…2025-08 with measured temperatures — with the forecast temperature it will gain a little
+less. A fog day right after sunny days stays hard (11-09: 10.3 → 7.0, actual 3.0).
+
+**GeoSphere Austria** (2026-11-10): the measured data follows our PV closely — INCA's radiation at the home zone
+r 0.978 (≈ 4.9 kWh PV per kWh/m²), the nearest valley station r 0.986, the Open-Meteo forecast r 0.74. On 11-06,
+11-07 and 11-09 the hill stations had 4–8 h of sunshine and the valley 0–3 h: the inversion seen directly. Its
+forecast (the 1-km C-LAEF control run and ensemble, the only forecast here with a band) can't be backtested: the
+data hub keeps only the last ~6 runs. So the shadow logs every source's day-ahead forecast from now on, and the
+decision which source (or mix) the planners use — and the cautious value for the DP — waits for weeks of logged days.
+No HA integration exposes the ensemble's percentiles; the source calls the data hub itself (240 requests/h allowed,
+it needs ~16 a day). A value is taken as the mean of the hour ending at its timestamp (consistent with its sunshine
+parameter; unconfirmed) — the daily totals don't depend on it.
+
+**Exchangeable sources:** `IPvForecastSource` (forecast in Wh per slot, optionally a band) and
+`IPvObservationSource` (measured days); every source gets the same dimensionless correction (actual ÷ its Wh), so
+GeoSphere's `KwhPerKwhM2` is only a first scale the learned factor corrects.
+
+**DataLogger's PV before 2026-04:** the last hour of each day held the inverter counter's midnight reset (down to
+−43.8 kWh), so `daily.pvyield` summed to ~0 for months; the hourly values are right. `PvActual.OfDay` counts a negative
+hour as 0 (it lies at night), so the shadow scores those days correctly either way.
+
 ## RunSimulation() step by step
 
 ```

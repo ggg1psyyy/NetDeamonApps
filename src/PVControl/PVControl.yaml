@@ -246,6 +246,32 @@ NetDeamon.apps.PVControl.PVConfig:
       - Name: Evening
         DefaultTime: "19:00"
         DurationMinutes: 120
+  # PV forecast shadow (sensor.pv_control_pv_forecast, log in DBLocation): every source's forecast for tomorrow is
+  # noted at SnapshotHour, scored against the measured day (DataLogger) and corrected by the median actual ÷ forecast
+  # of the last WindowDays scored days, shifted by TemperatureSlopePerK per K the day is forecast warmer than those
+  # days were (fog/inversion days are cold; 0.035 fitted on measured temperatures 2024-09…2025-08). Cautious value:
+  # the source's band (GeoSphere's ensemble p10) corrected, else the CautiousPercentile of the ratios. Published only —
+  # the planners keep the raw Open-Meteo forecast. Sources (Type): OpenMeteoEntities (ForecastPVEnergy…Entities above),
+  # GeoSphere (the data hub's 1-km forecast and ensemble at zone.home; KwhPerKwhM2: PV per global radiation;
+  # ValleyStation/HillStations: klima station ids whose measured day is logged — sunshine on the hills above a
+  # fogged valley is the inversion signal). The first source is the sensor's state.
+  PvForecast:
+    Mode: Shadow
+    DBLocation: "pv_forecast.db"
+    SnapshotHour: 21   # GeoSphere's 15Z run is out by ~20:10
+    WindowDays: 14
+    MinScoredDays: 7
+    TemperatureSlopePerK: 0.035
+    CautiousPercentile: 0.25
+    Sources:
+      - Type: OpenMeteoEntities
+        Name: OpenMeteo
+      - Type: GeoSphere
+        Name: GeoSphere
+        RefreshMinutes: 180
+        KwhPerKwhM2: 4.9   # 2026-11-01…09: daily PV ÷ INCA radiation
+        ValleyStation: 23  # Enns
+        HillStations: [3425, 161]   # Bad Zell, Reichenau
   # DP shadow planner: plans the battery globally (dynamic program) next to the greedy plan every IntervalMinutes,
   # publishes the comparison (sensor.pv_control_dp_shadow) and logs it per quarter (DBLocation, in this plugin's
   # folder) — never steers. BandPenaltyPerPctQuarter: € per % below the preferred minimum per quarter.

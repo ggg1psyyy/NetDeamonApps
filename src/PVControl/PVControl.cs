@@ -149,6 +149,7 @@ namespace NetDeamon.apps.PVControl
       _house = new HouseEnergy();
       if (PVCC_Config.DpShadow is { Enabled: true } dpConfig)
         _dpShadow = new Optimizer.DpShadow(dpConfig, AppFiles.PathOf(dpConfig.DBLocation, typeof(PVConfig).Assembly));
+      CreatePvForecast();
       await _house.SeedSoCHistoryAsync(cancellationToken);
       await SeedQuarterImportAsync(cancellationToken);
       await RegisterControlSensors(false);
@@ -618,6 +619,106 @@ namespace NetDeamon.apps.PVControl
           average_kwh = Kwh(n.Average),
           actual_kwh = n.Actual is { } a ? Kwh(a) : (double?)null,
         }).ToList(),
+      });
+    }
+    #endregion
+
+    #region PV forecast (sources compared, learned correction — shadow)
+    private PvForecast.PvForecastShadow? _pvForecast;
+    private Entity? _pvForecastEntity;
+    private DateTime _pvForecastStarted = DateTime.MinValue;
+    private int _pvForecastRunning;
+    /// <summary>Minutes between two runs (each source fetches on its own interval).</summary>
+    private const int PvForecastEveryMinutes = 5;
+
+    /// <summary>Creates the PV forecast shadow from <c>PvForecast:</c> (none when off or without a source).</summary>
+    private void CreatePvForecast()
+    {
+      if (PVCC_Config.PvForecast is not { Mode: PvForecast.PvForecastMode.Shadow } config) return;
+      try
+      {
+        (double, double)? home = null;
+        if (PVCC_HaContext.GetState("zone.home")?.AttributesJson is { } z && z.TryGetProperty("latitude", out var lat) && z.TryGetProperty("longitude", out var lon))
+          home = (lat.GetDouble(), lon.GetDouble());
+        var sources = config.Sources.Where(s => s.Enabled)
+          .Select(s => PvForecast.PvForecastSources.Create(s, () => _house.Prediction_PV.TodayAndTomorrow, home))
+          .OfType<PvForecast.IPvForecastSource>().ToList();
+        if (sources.Count == 0) return;
+        var log = new PvForecast.PvForecastLog(AppFiles.PathOf(config.DBLocation, typeof(PVConfig).Assembly));
+        string dataLogger = PVCC_Config.DBFullLocation;
+        _pvForecast = new PvForecast.PvForecastShadow(config, sources, log,
+          day => PvForecast.PvActual.FromDataLogger(dataLogger, day),
+          day => _house.Weather is { } w ? LoadModel.WeatherForecast.MeanTemperature(w.Hours, day.Date.AddHours(9), day.Date.AddHours(15)) : null);
+      }
+      catch (Exception ex)
+      {
+        PVCC_Logger.LogWarning(ex, "PV forecast shadow not started");
+      }
+    }
+
+    /// <summary>Starts a run of the PV forecast shadow in the background (the cycle doesn't wait for the sources' HTTP calls).</summary>
+    /// <param name="now">Current time.</param>
+    private void StartPvForecast(DateTime now)
+    {
+      if (_pvForecast is not { } shadow || now - _pvForecastStarted < TimeSpan.FromMinutes(PvForecastEveryMinutes)
+          || Interlocked.CompareExchange(ref _pvForecastRunning, 1, 0) != 0)
+        return;
+      _pvForecastStarted = now;
+      _ = Task.Run(async () =>
+      {
+        try
+        {
+          await shadow.RunAsync(now, CancellationToken.None);
+          await PublishPvForecastAsync(shadow);
+        }
+        catch (Exception ex)
+        {
+          PVCC_Logger.LogWarning(ex, "PV forecast shadow run failed");
+        }
+        finally
+        {
+          Interlocked.Exchange(ref _pvForecastRunning, 0);
+        }
+      });
+    }
+
+    /// <summary>Publishes sensor.pv_control_pv_forecast: the main source's corrected forecast for tomorrow; every source raw,
+    /// corrected and cautious; the recent scored days; the newest measured day.</summary>
+    /// <param name="shadow">The shadow after its run.</param>
+    private async Task PublishPvForecastAsync(PvForecast.PvForecastShadow shadow)
+    {
+      if (_pvForecastEntity is null || shadow.Last.Count == 0) return;
+      var main = shadow.Last[0];
+      await PVCC_EntityManager.SetStateAsync(_pvForecastEntity.EntityId,
+        main.TomorrowCorrected is { } t ? t.ToString(CultureInfo.InvariantCulture) : "unknown");
+      await PVCC_EntityManager.SetAttributesAsync(_pvForecastEntity.EntityId, new
+      {
+        used_by_pvcontrol = false,
+        main_source = main.Source,
+        sources = shadow.Last.Select(r => new
+        {
+          source = r.Source,
+          run = r.Run,
+          fetched = r.FetchedAt?.ToISO8601(),
+          today_raw_kwh = r.TodayRaw,
+          today_corrected_kwh = r.TodayCorrected,
+          tomorrow_raw_kwh = r.TomorrowRaw,
+          tomorrow_corrected_kwh = r.TomorrowCorrected,
+          tomorrow_cautious_kwh = r.TomorrowCautious,
+          tomorrow_high_kwh = r.TomorrowHigh,
+          factor = Math.Round(r.Correction.Factor, 3),
+          cautious_factor = Math.Round(r.Correction.CautiousFactor, 3),
+          scored_days = r.Correction.ScoredDays,
+          median_ratio = Math.Round(r.Correction.MedianRatio, 3),
+          temp_anomaly_k = r.Correction.TempAnomaly is { } a ? Math.Round(a, 1) : (double?)null,
+          mae_raw_kwh = r.MaeRaw,
+          mae_corrected_kwh = r.MaeCorrected,
+          backtest_days = r.BacktestDays,
+        }).ToList(),
+        recent = shadow.Recent.Select(d => new { day = d.Day.ToString("yyyy-MM-dd"), forecast_kwh = d.Forecast, corrected_kwh = d.Corrected, actual_kwh = d.Actual }).ToList(),
+        measured_day = shadow.LastObservation?.Day.ToString("yyyy-MM-dd"),
+        measured = shadow.LastObservation?.Values,
+        attribution = shadow.Sources.OfType<PvForecast.GeoSphereSource>().Any() ? "Datenquelle: GeoSphere Austria (CC BY 4.0)" : null,
       });
     }
     #endregion
@@ -1168,6 +1269,7 @@ namespace NetDeamon.apps.PVControl
       _house.RunningState = _steeredState;
       (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
+      StartPvForecast(now);
       await PublishPricePublicationAsync(now);
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
@@ -1724,6 +1826,9 @@ namespace NetDeamon.apps.PVControl
           addConfig: new { unit_of_measurement = "kWh" }, reRegister: reset);
         RestoreNights();
       }
+      if (_pvForecast is not null)
+        _pvForecastEntity = await RegisterSensor("sensor.pv_control_pv_forecast", "PV forecast tomorrow (corrected)", "energy", "mdi:solar-power-variant",
+          addConfig: new { unit_of_measurement = "kWh" }, reRegister: reset);
     }
 
     /// <summary>The user's controls (mode override, switches, numbers), the mode sensor (the inverter command, restored) and its two switches.</summary>
