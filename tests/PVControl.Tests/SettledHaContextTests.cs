@@ -92,6 +92,16 @@ public class SettledHaContextTests
   }
 
   [Fact]
+  public void Newer_IsComparedInUtc()
+  {
+    // 07:34:00 local (+01:00) is after 06:33:47 UTC, whatever Kind each side was parsed with.
+    var cached = State(InSync, "off", T0);
+    var fresh = State(InSync, "on", new DateTime(2026, 11, 9, 7, 34, 0, DateTimeKind.Utc).AddHours(-1).ToLocalTime());
+    Assert.True(SettledHaContext.IsNewer(fresh, cached));
+    Assert.False(SettledHaContext.IsNewer(cached, fresh));
+  }
+
+  [Fact]
   public void NotInTheCache_TakesHAs()
   {
     var settled = new SettledHaContext(new Cache());

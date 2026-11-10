@@ -85,7 +85,8 @@ namespace NetDeamon.apps.PVControl
       PVCC_EntityManager = mqttEntityManager;
       PVCC_Logger = logger;
       PVCC_Config = pVConfig.Value;
-      EntityRebinder.Rebind(PVCC_Config, PVCC_States);
+      try { EntityRebinder.Rebind(PVCC_Config, PVCC_States); }
+      catch (Exception ex) { logger.LogWarning(ex, "Configuration entities not rebound: they read NetDaemon's cache only"); }   // degraded, not dead
       PVCC_Scheduler = scheduler;
       PVCC_ApiManager = apiManager;
     }

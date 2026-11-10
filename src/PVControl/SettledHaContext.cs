@@ -62,7 +62,7 @@ namespace NetDeamon.apps.PVControl
     /// <param name="fresh">Read from HA.</param>
     /// <param name="cached">The cache's.</param>
     public static bool IsNewer(EntityState fresh, EntityState? cached) =>
-      cached?.LastUpdated is not { } c || fresh.LastUpdated is { } f && f > c;
+      cached?.LastUpdated is not { } c || fresh.LastUpdated is { } f && f.ToUniversalTime() > c.ToUniversalTime();   // websocket and REST parse alike; UTC whatever the Kind
 
     /// <summary>"unknown"/"unavailable" from HA is no information (an entity during HA's start): the cache's stays.</summary>
     /// <param name="state">Read from HA.</param>
