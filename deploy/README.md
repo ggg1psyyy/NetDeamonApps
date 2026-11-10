@@ -18,11 +18,15 @@ python -m unittest discover deploy      # the script's tests
 - publishes `src/Host` (`dotnet publish src/Host -c Release`: the host plus `apps/plugins/<Name>/`)
 - never restarts from 2 min before until 15 s after a quarter boundary (:00/:15/:30/:45: the DataLogger rows,
   the cost log and the quarter tracking write then) — it waits
+- waits while the Supervisor runs a backup or restore (`ha jobs info` over SSH — `ssh` in `local.json`, default
+  `root@<HA host>`, the SSH add-on), up to 15 min: during one it refuses to start an add-on, and a stopped NetDaemon
+  stayed down; if the jobs can't be read it warns and goes on
 - refuses while the grid import is high or a force charge runs (after a restart the import cap guard only
   estimates the running quarter); `--force` overrides
 - stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json` and every DB;
   files the build no longer has are removed from the plugin folders) and starts it again — also if the copy fails;
-  never copies over the running add-on (it would rewrite the DLLs under the process)
+  never copies over the running add-on (it would rewrite the DLLs under the process); a refused start (a backup began after the check)
+  is retried every 15 s for up to 10 min
 - waits until `version_entities` show the deployed commit
 
 `ha`: replaces PVControl's automations in `automations.yaml` by `id` (appends missing ones), the

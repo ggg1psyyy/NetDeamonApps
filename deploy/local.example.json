@@ -2,6 +2,7 @@
   "addon_folder": "<the add-on's folder, e.g. a mounted /config/netdaemon6>",
   "addon": "<the NetDaemon add-on slug>",
   "ha_config_folder": "<the mounted HA /config folder>",
+  "ssh": "<optional: user@host of the SSH add-on for the Supervisor's jobs; default root@<HA host>>",
   "grid_power_entity": "sensor.solax_measured_power",
   "grid_power_import_negative": true,
   "max_import_w": 2500,

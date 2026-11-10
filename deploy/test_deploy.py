@@ -68,3 +68,51 @@ class InstallTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+JOBS_RUNNING = """{"result":"ok","data":{"ignore_conditions":[],"jobs":[
+ {"name":"backup_manager_partial_backup","reference":"cf09fd9a","done":false,"child_jobs":[
+   {"name":"backup_store_apps","reference":"cf09fd9a","done":false,"child_jobs":[]}]},
+ {"name":"backup_manager_partial_backup","reference":"0983fef2","done":true,"child_jobs":[]}]}}"""
+JOBS_DONE = """{"result":"ok","data":{"jobs":[{"name":"backup_manager_partial_backup","reference":"cf09fd9a","done":true,"child_jobs":[]},
+ {"name":"addon_update","reference":"x","done":false,"child_jobs":[]}]}}"""
+
+
+class BackupTests(unittest.TestCase):
+    """2026-11-10 09:48: the add-on stopped during an add-on update's backup, the Supervisor refused the start (500)."""
+
+    def test_a_running_backup_blocks_also_as_a_child_job(self):
+        self.assertEqual(['backup_manager_partial_backup cf09fd9a', 'backup_store_apps cf09fd9a'], deploy.blocking_jobs(JOBS_RUNNING))
+
+    def test_done_backups_and_other_jobs_dont(self):
+        self.assertEqual([], deploy.blocking_jobs(JOBS_DONE))
+        self.assertEqual([], deploy.blocking_jobs('{"result":"ok","data":{"jobs":[]}}'))
+
+    def test_waits_until_the_backup_is_done(self):
+        answers, slept = [JOBS_RUNNING, JOBS_RUNNING, JOBS_DONE], []
+        self.assertTrue(deploy.wait_for_jobs(lambda: answers.pop(0), sleep=slept.append, clock=lambda: 0))
+        self.assertEqual([deploy.JOB_POLL_S] * 2, slept)
+
+    def test_gives_up_after_the_wait(self):
+        t = [0]
+        def sleep(s): t[0] += s
+        self.assertFalse(deploy.wait_for_jobs(lambda: JOBS_RUNNING, sleep=sleep, clock=lambda: t[0], wait_s=60, poll_s=15))
+
+    def test_jobs_unreadable_doesnt_block(self):
+        self.assertTrue(deploy.wait_for_jobs(lambda: None, sleep=lambda s: self.fail('slept')))
+
+    def test_a_refused_start_is_retried_until_it_succeeds(self):
+        calls, slept = [], []
+        def start():
+            calls.append(1)
+            if len(calls) < 3: raise RuntimeError('HTTP Error 500')
+            return 'ok'
+        self.assertEqual('ok', deploy.retrying(start, sleep=slept.append, clock=lambda: 0))
+        self.assertEqual(3, len(calls))
+
+    def test_a_start_still_refused_after_the_retry_time_raises(self):
+        t = [0]
+        def sleep(s): t[0] += s
+        def start(): raise RuntimeError('HTTP Error 500')
+        with self.assertRaises(RuntimeError):
+            deploy.retrying(start, sleep=sleep, clock=lambda: t[0], retry_s=30, poll_s=15)

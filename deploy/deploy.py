@@ -25,6 +25,10 @@ PACKAGE = ('packages/pv_control_inverter.yaml', 'InverterHelpers.yaml')
 # Writes at every quarter boundary (DataLogger rows, the cost log, the quarter tracking): no restart from
 # BEFORE_S before a boundary until AFTER_S after it.
 BEFORE_S, AFTER_S = 120, 15
+# The Supervisor refuses to start an add-on while a backup or restore runs (HTTP 500): 2026-11-10 09:48 a deploy
+# stopped NetDaemon during an add-on update's backup and couldn't start it again. Waited for before the stop.
+JOB_WAIT_S, JOB_POLL_S = 900, 15
+START_RETRY_S, START_POLL_S = 600, 15
 
 
 def load_config():
@@ -34,6 +38,7 @@ def load_config():
     cfg = json.load(io.open(path, encoding='utf-8'))
     ha = json.load(io.open(os.path.join(ROOT, 'src', 'Host', 'appsettings.json'), encoding='utf-8-sig'))['HomeAssistant']
     cfg['url'] = f"http://{ha['Host']}:{ha.get('Port', 8123)}/api/"
+    cfg.setdefault('ssh', f"root@{ha['Host']}")   # the SSH add-on: runs the Supervisor's `ha` CLI
     cfg['token'] = ha['Token']
     return cfg
 
@@ -64,6 +69,55 @@ def seconds_until_allowed(t):
     if into < AFTER_S: return AFTER_S - into
     if into >= 900 - BEFORE_S: return 900 - into + AFTER_S
     return 0
+
+
+def blocking_jobs(jobs_json):
+    """The Supervisor jobs (`ha jobs info --raw-json`) that block an add-on start: a backup or restore not done yet,
+    as their names with the reference (the backup's slug)."""
+    found = []
+    def walk(jobs):
+        for j in jobs or []:
+            name = j.get('name') or ''
+            if not j.get('done') and ('backup' in name or 'restore' in name):
+                found.append(f"{name} {j.get('reference') or ''}".strip())
+            walk(j.get('child_jobs'))
+    walk((json.loads(jobs_json).get('data') or {}).get('jobs'))
+    return found
+
+
+def supervisor_jobs(cfg):
+    """The Supervisor's jobs as JSON, via the SSH add-on's `ha` CLI; None if they can't be read."""
+    try:
+        r = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', cfg['ssh'], 'ha jobs info --raw-json'],
+                           capture_output=True, text=True, timeout=30)
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def wait_for_jobs(read, sleep=time.sleep, clock=time.time, wait_s=JOB_WAIT_S, poll_s=JOB_POLL_S):
+    """Waits while a backup or restore runs (`read` returns the jobs JSON or None). True when none runs (or the jobs
+    can't be read — the start retries then), False if one still runs after `wait_s`."""
+    deadline = clock() + wait_s
+    while True:
+        raw = read()
+        if raw is None:
+            print(now(), "warning: the Supervisor's jobs can't be read (ssh); not checked for a backup"); return True
+        jobs = blocking_jobs(raw)
+        if not jobs: return True
+        if clock() >= deadline: return False
+        print(now(), 'waiting: ' + ', '.join(jobs)); sleep(poll_s)
+
+
+def retrying(action, sleep=time.sleep, clock=time.time, retry_s=START_RETRY_S, poll_s=START_POLL_S):
+    """Runs `action` until it succeeds, for up to `retry_s` (a start refused while a backup began after the check)."""
+    deadline = clock() + retry_s
+    while True:
+        try:
+            return action()
+        except Exception as e:
+            if clock() >= deadline: raise
+            print(now(), f'refused ({e}), retrying in {poll_s} s'); sleep(poll_s)
 
 
 def stale_files(published, deployed):
@@ -105,8 +159,11 @@ def apps(cfg, dry_run, force):
     if dry_run:
         print('dry run: nothing copied, no restart'); return
 
-    wait = seconds_until_allowed(datetime.datetime.now())
-    if wait:
+    while True:   # no backup running, outside the quarter-boundary window — a wait for one can end in the other
+        if not wait_for_jobs(lambda: supervisor_jobs(cfg)):
+            sys.exit('not deployed: a backup or restore still runs (the add-on could not be started again during it); retry later')
+        wait = seconds_until_allowed(datetime.datetime.now())
+        if not wait: break
         print(now(), f'waiting {wait} s (quarter-boundary writes)'); time.sleep(wait)
     imp, mode = ha.state(cfg['grid_power_entity']), ha.state(cfg['mode_entity'])
     grid_w = float(imp['state']) if imp else 0.0
@@ -135,7 +192,7 @@ def apps(cfg, dry_run, force):
         print(now(), 'stopped', cfg['addon'])
 
     def start():
-        ha.call('services/hassio/addon_start', {'addon': cfg['addon']})
+        retrying(lambda: ha.call('services/hassio/addon_start', {'addon': cfg['addon']}))
         print(now(), 'started', cfg['addon'])
 
     install(stop, copy, start)
