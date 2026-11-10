@@ -48,11 +48,12 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 |---|---|
 | `select.pv_control_mode_override` | Manually override the current mode |
 | `switch.pv_control_enforce_preferred_soc` | The preferred minimum becomes the hard floor: never drained below, not even by an unforeseen load (reserve for power outages) |
-| `switch.pv_control_force_charge_at_cheapest_period` | Daily target charge: reach `number.pv_control_forcecharge_target_soc` by the end of the day's PV (headroom for the evening and the night), buying only what PV won't deliver by then, in the cheapest quarters under the price limit before it — tomorrow's PV end once today's has passed |
+| `switch.pv_control_force_charge_at_cheapest_period` | Battery top-up (one-shot): reach `number.pv_control_forcecharge_target_soc` by `time.pv_control_topup_ready_by` — the first time it comes round after the switch went on; never set, the next start of PV — buying only what PV won't deliver by then, only in quarters at or under `number.pv_control_max_price_for_forcecharge` (a shortfall is accepted). Turns itself off once the deadline has passed |
+| `time.pv_control_topup_ready_by` | Ready-by time of the battery top-up (once set, HA keeps a time; unset means the next start of PV) |
 | `switch.pv_control_enable_opportunistic_export` | Enable opportunistic discharge to grid during high-price periods |
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%): what planning keeps (see below) |
 | `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge; also the "cheap grid" threshold for PriorityPlus loads |
-| `number.pv_control_forcecharge_target_soc` | Target SoC (%) of the daily target charge |
+| `number.pv_control_forcecharge_target_soc` | Target SoC (%) of the battery top-up |
 
 ## Status entities
 
@@ -373,7 +374,7 @@ where the house's deficit under PV would take at least 1 % SoC in the quarter �
 is judged whole, not its rest; in the current quarter the
 running mode stays while switching is worth under 0.1 ct; a charge the plan has later in the current price block starts
 or keeps running now): while it steers there is no grid charge at a negative import
-price, no feed-in before a negative export price, no opportunistic discharge and no daily target charge.
+price, no feed-in before a negative export price, no opportunistic discharge. The battery top-up is a goal of the DP: missing its target at the deadline costs like the hard floor (practically a rule), on a target capped at what charging in every quarter at or under the price limit could reach — the limit stays hard (reason `TopUp`).
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
 quarter in which the battery delivers — not while it is held or charged; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
@@ -421,7 +422,8 @@ dotnet test tests/PVControl.Tests
 | `NetEnergyPredictionTests` | PV running-average correction: near-term ramp |
 | `PricePublicationTrackerTests` | When tomorrow's prices first appear (once per day, not after a restart) |
 | `PriceListTests` | Hourly/quarter-hourly price normalization, list comparison (a replan only on a real price change), hourly billing averages, estimates for unpublished hours with risk premium (a published cheap slot vs a slightly cheaper estimated one) |
-| `DailyTargetChargeTests` | Daily target charge: the target by the end of the day's PV, only what PV won't deliver, in the cheapest quarters under the limit |
+| `DailyTargetChargeTests` | Battery top-up in the greedy simulation: the target by the deadline, only what PV won't deliver, in the cheapest quarters under the limit; the deadline (ready-by after arming, else the next start of PV), the one-shot |
+| `TopUpDpTests` | Battery top-up in the DP: the target in the cheap quarters, the limit hard, the target capped at what they deliver, an already met target changes nothing, the reason, the evaluation's shortfall |
 | `NetworkPricePeriodTests` | Month/hour windows of network price overrides (SNAP, WiNAP) and their first/last year |
 | `EnergyCostTests` | Gross import price composition (markup, network fee, tax; a fixed-price contract's energy price) |
 | `PVControlExtensionsTests` | PVControl's helpers: prediction windows, quarter hours, daily running sums, running averages |

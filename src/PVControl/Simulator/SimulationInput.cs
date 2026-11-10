@@ -201,7 +201,8 @@ public class SimulationInput
   /// <summary>Loads on top of <see cref="LoadPredictionWh"/> (EV sessions, warm-water heatings).</summary>
   public List<ExtraLoad> ExtraLoads { get; init; } = [];
 
-  /// <summary>User switch: charge to <see cref="ForceChargeTargetSocPercent"/> in the cheapest window.</summary>
+  /// <summary>User switch (battery top-up, one-shot): charge to <see cref="ForceChargeTargetSocPercent"/> by
+  /// <see cref="TopUpDeadline"/> in the cheapest quarters at or under <see cref="ForceChargeMaxPrice"/>.</summary>
   public required bool EnableCheapForceCharge { get; init; }
 
   /// <summary>Allows discharging to the grid at the day's price peaks when the SoC forecast allows it.</summary>
@@ -330,21 +331,29 @@ public class SimulationInput
     RelevantPVEdge(date, first: true, from) ?? date.AddDays(2).AddMinutes(-1);
 
   /// <summary>
-  /// Deadline of the daily target charge (<see cref="EnergySimulator.DailyTargetChargeSoc"/>): when the day's PV is
-  /// over — the end of its last slot with PV, or the day's end on a day without any — tomorrow's once today's has passed.
+  /// Deadline of the battery top-up (<see cref="EnergySimulator.DailyTargetChargeSoc"/>, the DP's
+  /// <see cref="Optimizer.PlanEvaluation.TopUpShortfall"/>): the first time after it was armed that the ready-by time comes
+  /// round (set 07:00 at 15:00: tomorrow 07:00); without a ready-by time the next start of relevant PV after arming (armed
+  /// at 03:00: that morning's). Fixed by the arming time, so it passes once and the one-shot switch turns off.
   /// </summary>
   /// <param name="now">Current slot.</param>
-  /// <returns>The deadline; null if none lies ahead within the forecast.</returns>
-  public DateTime? DailyTargetDeadline(DateTime now)
-  {
-    for (var date = now.Date; date <= now.Date.AddDays(1); date = date.AddDays(1))
-    {
-      var lastPv = PVPredictionWh.Where(k => k.Key.Date == date && k.Value > 0).Select(k => (DateTime?)k.Key).Max();
-      var deadline = lastPv is { } last ? last.AddMinutes(TimeRange.SlotMinutes) : date.AddDays(1);
-      if (deadline > now) return deadline;
-    }
-    return null;
-  }
+  /// <returns>The deadline; null when not armed or already passed.</returns>
+  public DateTime? DailyTargetDeadline(DateTime now) => TopUpDeadline is { } d && d > now ? d : null;
+
+  /// <summary>When the top-up was armed (the switch's last change); null = not armed.</summary>
+  public DateTime? TopUpArmedAt { get; init; }
+
+  /// <summary>The top-up's ready-by time of day; null = the next start of PV.</summary>
+  public TimeOnly? TopUpReadyBy { get; init; }
+
+  /// <summary>The top-up's deadline (see <see cref="DailyTargetDeadline"/>), whether passed or not; null when not armed.</summary>
+  public DateTime? TopUpDeadline => EnableCheapForceCharge && TopUpArmedAt is { } armed ? TopUp.Deadline(armed, TopUpReadyBy, NextPVStart) : null;
+
+  /// <summary>The next start of relevant PV after a time: that day's first relevant slot if it lies later, else the next day's.</summary>
+  /// <param name="from">Time.</param>
+  /// <returns>Slot start; null if the forecast has none.</returns>
+  public DateTime? NextPVStart(DateTime from) =>
+    RelevantPVEdge(from.Date, first: true) is { } t && t > from ? t : RelevantPVEdge(from.Date.AddDays(1), first: true);
 
   /// <summary>End of the day's relevant PV (<see cref="RelevantPVEdge"/>, last).</summary>
   /// <param name="date">Day.</param>
@@ -402,6 +411,8 @@ public class SimulationInput
     OpportunisticDischarge = OpportunisticDischarge,
     ForceChargeMaxPrice = ForceChargeMaxPrice,
     ForceChargeTargetSocPercent = ForceChargeTargetSocPercent,
+    TopUpArmedAt = TopUpArmedAt,
+    TopUpReadyBy = TopUpReadyBy,
     CurrentMode = mode ?? CurrentMode,
     ChargeVoltageV = ChargeVoltageV,
     MaxGridImportW = MaxGridImportW,

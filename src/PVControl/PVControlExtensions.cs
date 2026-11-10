@@ -80,6 +80,8 @@ namespace NetDeamon.apps
     /// <summary>DP: PV surplus fed in now instead of stored (feedin_priority) — the battery fills anyway or the export is
     /// worth more now; it still covers the house when PV falls short.</summary>
     FeedInFirst,
+    /// <summary>DP: grid charge for the battery top-up — without it the target would be missed at the deadline.</summary>
+    TopUp,
   }
 
   public enum PriceResolution

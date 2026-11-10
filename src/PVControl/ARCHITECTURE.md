@@ -88,10 +88,14 @@ of ~260 W — and was topped up at 07:45 for 0.426 €/kWh):
   The same fix holds the floor instead of charging at the same price when only later hours are
   cheap (an afternoon EV drain: grid_only at 0.30 until a 0.05 hour, not a 0.30 charge + loss).
 
-**Daily target charge** (`switch.pv_control_force_charge_at_cheapest_period`,
-`DailyTargetChargeSoc`/`DailyTargetChargeMode`): reach `ForceChargeTargetSoC` by the end of the
-day's PV (`SimulationInput.DailyTargetDeadline`: the end of the last slot with PV, a day without
-PV at its end; tomorrow's once today's has passed) — headroom for the evening and the night. It
+**Battery top-up** (`switch.pv_control_force_charge_at_cheapest_period`, one-shot,
+`DailyTargetChargeSoc`/`DailyTargetChargeMode`): reach `ForceChargeTargetSoC` by the deadline
+(`SimulationInput.TopUpDeadline`: the first time `time.pv_control_topup_ready_by` comes round after
+the switch went on, else the next start of PV). Why one-shot with a time (the user, 2026-11-10): the
+switch began as "always reach 100 % for unforeseen loads", but the DP keeps that reserve itself
+(preferred minimum, end value); what's left is a deliberate top-up before known extra loads or a
+day the PV forecast overrates — set for one occasion, it must not keep buying afterwards, and the
+deadline counts from the arming time so it passes once. It
 buys only what the no-charging look-ahead doesn't reach at the deadline, at most the room a PV
 peak before it leaves (`PvRoomBeforeLow`), and only when that's more than `MinPvRoomPct`; the
 quarters are the N cheapest under the price limit before the deadline, on the same machinery as
@@ -101,6 +105,21 @@ switch was the hourly-price-era code: the cheapest *hour* of the calendar day (1
 after it, ±1 h price ranks, "start `chargeTime − 50` min early"), the duration sized to 100 %
 regardless of the PV still to come, stopping at min(96 %, target) — it charged the full
 target even when the afternoon PV would have delivered most of it.
+
+**The top-up in the DP** (`PlanEvaluation.TopUpGoalOf`/`TopUpShortfall`): a cost on the states below
+the target at the deadline's quarter. Not a price per kWh missing (the limit plus a margin): the DP
+adds what a stored kWh is worth later, so it would buy above the limit — a kWh worth 0.30 in the
+evening against a 1-ct margin over a 0.40 limit is bought at up to ~0.58. Instead the shortfall
+costs like the hard floor (1 €/%, practically a rule) and the target is capped at what charging
+in every quarter at or under the limit (the faster path, the same flows: PV, loads, import cap)
+and running normally in the others reaches, one DP state below it; aimed half a state higher in
+the table like the end rule. So the plan reaches the target where the cheap quarters allow and
+accepts the shortfall otherwise — without buying a quarter above the limit for it. Its charges
+show `TopUp` (`DpSteering.ReasonOf`, before the floor reasons when the battery stays above the
+preferred minimum until the deadline without them: after the deadline a later charge would have
+refilled it, which the top-up made unnecessary). The greedy fallback keeps its rule and its
+reason `ForcedChargeAtMinimumPrice`, on the same deadline. The planners use the same forecast as
+always (the user: no special PV handling; the corrected forecast replaces it once it holds).
 
 **Mode order** (`ComputeMode`): negative import price → opportunistic discharge → daily target
 charge → NeedToCharge → normal. A negative export price is not a step but a modifier
@@ -1210,8 +1229,8 @@ for the minimum run (1 min) whatever the DP said. The first cycle therefore wait
 start, at most 30 s — a failed run then falls back as above) before it chooses (`DpSteering.WaitsForFirstPlan`), which
 was simpler and safer than restoring the last published command from HA. While the DP steers it runs
 every minute (~1 s in the background) so a changed SoC or forecast reaches the command quickly. Known gap: the DP's
-actions are normal, feedin_priority, grid_only and grid charges only — negative-price handling, opportunistic discharge and the daily
-target charge exist in the greedy rules only.
+actions are normal, feedin_priority, grid_only and grid charges only — negative-price handling and opportunistic discharge exist in
+the greedy rules only (the battery top-up is a goal of the DP since 2026-11-10).
 
 ### The DP's reasons
 

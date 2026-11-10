@@ -26,7 +26,8 @@ public sealed record ForecastSnapshot(
   float ForceChargeMaxPrice, int ForceChargeTargetSocPercent, bool EnableCheapForceCharge, bool OpportunisticDischarge,
   DateTime? PublishedPricesUntil, InverterModes CurrentMode, ForceChargeReasons CurrentReason, bool CurrentBulk,
   bool CurrentChargeEnable, bool CurrentExportAllowed, List<PricePoint> ImportPrices, List<PricePoint> ExportPrices,
-  Dictionary<DateTime, int> Pv, Dictionary<DateTime, int> Load, List<LoadPoint> ExtraLoads, int[]? VppW)
+  Dictionary<DateTime, int> Pv, Dictionary<DateTime, int> Load, List<LoadPoint> ExtraLoads, int[]? VppW,
+  DateTime? TopUpArmedAt = null, TimeOnly? TopUpReadyBy = null)
 {
   /// <summary>The snapshot of an input.</summary>
   /// <param name="i">The simulation input.</param>
@@ -40,7 +41,7 @@ public sealed record ForecastSnapshot(
     i.ExportPrices.Select(p => new PricePoint(p.StartTime, p.EndTime, p.Price)).ToList(),
     new Dictionary<DateTime, int>(i.PVPredictionWh), new Dictionary<DateTime, int>(i.LoadPredictionWh),
     i.ExtraLoads.Select(e => new LoadPoint(e.Name, e.Priority, e.StartTime, e.EndTime, e.PowerW, e.FromGrid)).ToList(),
-    i.VppChargePowerW is { } vpp ? Enumerable.Range(0, 101).Select(vpp).ToArray() : null);
+    i.VppChargePowerW is { } vpp ? Enumerable.Range(0, 101).Select(vpp).ToArray() : null, i.TopUpArmedAt, i.TopUpReadyBy);
 
   /// <summary>The simulation input again.</summary>
   public SimulationInput ToInput()
@@ -53,6 +54,7 @@ public sealed record ForecastSnapshot(
       EnforcePreferredSoc = EnforcePreferredSoc, MaxChargePowerAmps = MaxChargePowerAmps, InverterEfficiency = InverterEfficiency,
       ChargeVoltageV = ChargeVoltageV, MaxGridImportW = MaxGridImportW, ForceChargeMaxPrice = ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = ForceChargeTargetSocPercent, EnableCheapForceCharge = EnableCheapForceCharge,
+      TopUpArmedAt = TopUpArmedAt, TopUpReadyBy = TopUpReadyBy,
       OpportunisticDischarge = OpportunisticDischarge, PublishedPricesUntil = PublishedPricesUntil,
       CurrentMode = new InverterState(CurrentMode, CurrentReason, CurrentChargeEnable, CurrentExportAllowed) { Bulk = CurrentBulk },
       ImportPrices = ImportPrices.Select(p => new PriceTableEntry(p.Start, p.End, p.Price)).ToList(),

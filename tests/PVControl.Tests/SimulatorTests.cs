@@ -558,6 +558,8 @@ public class SimulatorTests : TestBase
       LoadPredictionWh           = load,
       PVPredictionWh             = pv,
       EnableCheapForceCharge     = true,
+      TopUpArmedAt               = start,                     // the top-up, armed now, ready by midnight
+      TopUpReadyBy               = new TimeOnly(0, 0),
       OpportunisticDischarge     = false,
       ForceChargeMaxPrice        = 0.25f,
       ForceChargeTargetSocPercent = 95,

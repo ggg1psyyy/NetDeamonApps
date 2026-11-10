@@ -157,8 +157,12 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Midnight snapshot of the predictions, to compare with what happened.</summary>
     public DailySnapshots Snapshots { get; }
 
-    /// <summary>UserSetting: ForceCharge to 100%</summary>
+    /// <summary>User setting: the battery top-up is armed (one-shot).</summary>
     public bool EnableCheapForceCharge { get; set; }
+    /// <summary>When the top-up was armed (the switch's last change); null = not armed.</summary>
+    public DateTime? TopUpArmedAt { get; set; }
+    /// <summary>The top-up's ready-by time; null = the next start of PV.</summary>
+    public TimeOnly? TopUpReadyBy { get; set; }
     /// <summary>
     /// UserSetting: Discharge if the export price is high and we can stay over preferred minimal SoC and still reach 100% SoC
     /// </summary>
@@ -458,6 +462,8 @@ namespace NetDeamon.apps.PVControl
         OpportunisticDischarge = OpportunisticDischarge,
         ForceChargeMaxPrice = Prices.ForceChargeMaxPrice,
         ForceChargeTargetSocPercent = ForceChargeTargetSoC,
+        TopUpArmedAt = EnableCheapForceCharge ? TopUpArmedAt : null,
+        TopUpReadyBy = TopUpReadyBy,
         CurrentMode = _planMode,
         ChargeVoltageV = PVCC_Config.BatteryVoltageV,
         MaxGridImportW = PVCC_Config.MaxGridImportW,

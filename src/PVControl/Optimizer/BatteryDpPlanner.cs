@@ -68,11 +68,18 @@ public sealed record DpSlot(DateTime Time, int SocPct, InverterModes Mode, bool 
 /// <param name="FloorPenalty">Quarters below the hard floor.</param>
 /// <param name="EndValue">Energy above the hard floor at the end, at what refilling it would cost (<see cref="PlanEvaluation.EndValue"/>).</param>
 /// <param name="EndShortfall">Ending the horizon under the preferred minimum (<see cref="PlanEvaluation.EndShortfall"/>).</param>
-public sealed record PlanCost(float GridCost, float BandPenalty, float FloorPenalty, float EndValue, float EndShortfall = 0)
+/// <param name="TopUpShortfall">Missing the battery top-up's target at its deadline (<see cref="PlanEvaluation.TopUpShortfall"/>).</param>
+public sealed record PlanCost(float GridCost, float BandPenalty, float FloorPenalty, float EndValue, float EndShortfall = 0, float TopUpShortfall = 0)
 {
   /// <summary>The objective, €.</summary>
-  public float Total => GridCost + BandPenalty + FloorPenalty - EndValue + EndShortfall;
+  public float Total => GridCost + BandPenalty + FloorPenalty - EndValue + EndShortfall + TopUpShortfall;
 }
+
+/// <summary>The battery top-up as the DP pursues it: the energy to have at a quarter's start.</summary>
+/// <param name="Deadline">The quarter (the horizon's end at the latest).</param>
+/// <param name="TargetWh">Battery energy to have then, Wh — the target SoC, capped at what charging in every quarter at or
+/// under the price limit could reach (<see cref="PlanEvaluation.TopUpGoalOf"/>).</param>
+public readonly record struct TopUpGoal(DateTime Deadline, int TargetWh);
 
 /// <summary>A DP plan: the quarters from now to the simulation's end and its cost.</summary>
 /// <param name="Slots">The quarters.</param>
@@ -196,8 +203,9 @@ public static class PlanEvaluation
   /// <param name="slots">(slot start, SoC % at the start, import Wh, export Wh, mode) of each quarter.</param>
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   /// <param name="o">Options.</param>
+  /// <param name="energyAt">The plan's exact battery energy at a quarter's start, Wh (for the top-up's deadline); null: none.</param>
   public static PlanCost Evaluate(SimulationInput input, IEnumerable<(DateTime Time, double SocPct, int ImportWh, int ExportWh, InverterModes Mode)> slots,
-    int endEnergyWh, DpOptions o)
+    int endEnergyWh, DpOptions o, Func<DateTime, int?>? energyAt = null)
   {
     float grid = 0, band = 0, floor = 0;
     foreach (var s in slots)
@@ -207,7 +215,57 @@ public static class PlanEvaluation
       band += b;
       floor += f;
     }
-    return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh), EndShortfall(input, endEnergyWh, o));
+    float topUp = 0;
+    if (TopUpGoalOf(input, o) is { } goal
+        && (goal.Deadline >= BatteryDpPlanner.HorizonEnd(input) ? endEnergyWh : energyAt?.Invoke(goal.Deadline)) is { } atDeadline)
+      topUp = TopUpShortfall(input, goal, atDeadline, o);
+    return new PlanCost(grid, band, floor, EndValue(input, endEnergyWh), EndShortfall(input, endEnergyWh, o), topUp);
+  }
+
+  /// <summary>
+  /// Penalty for missing the battery top-up's target at its deadline, €: per % missing (exact SoC) at the hard floor's
+  /// rate — practically a rule. Not a price per kWh: the DP adds what a kWh is worth later to it and would then buy above
+  /// the limit (a kWh worth 0.30 in the evening against a 1-ct margin over a 0.40 limit bought at up to 0.58). The limit
+  /// holds because the target itself is capped at what the quarters at or under it can deliver (<see cref="TopUpGoalOf"/>).
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="goal">The top-up's goal.</param>
+  /// <param name="energyWh">Battery energy at the deadline, Wh.</param>
+  /// <param name="o">Options (the floor's rate).</param>
+  public static float TopUpShortfall(SimulationInput input, TopUpGoal goal, int energyWh, DpOptions o) =>
+    (float)Math.Max(0, Soc.FromWhExact(goal.TargetWh, input.BatteryCapacityWh) - Soc.FromWhExact(energyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
+
+  /// <summary>
+  /// The top-up's goal (null when not armed, its deadline passed, or nothing to add): the target SoC at the deadline
+  /// (capped at the horizon's end), at most what the battery reaches charging at full power in every quarter at or under
+  /// the price limit before it and running normally in the others — the same flows as the plan (PV, loads, the import cap),
+  /// one DP state below it so a plan following it with exact energies doesn't miss it by a fraction.
+  /// </summary>
+  /// <param name="input">Simulation input (with the DP's losses).</param>
+  /// <param name="o">Options (the state grid).</param>
+  public static TopUpGoal? TopUpGoalOf(SimulationInput input, DpOptions o)
+  {
+    var start = input.StartTime.RoundToNearestQuarterHour();
+    var end = BatteryDpPlanner.HorizonEnd(input);
+    if (input.TopUpDeadline is not { } d || d <= start) return null;
+    var deadline = d > end ? end : d;
+    int energy = input.SocToWh(input.StartSocPercent);
+    for (var t = start; t < deadline; t = t.AddMinutes(TimeRange.SlotMinutes))
+    {
+      var (pv, load, extra) = input.SlotEnergyWh(t);
+      bool cheap = input.ImportPrices.GetPriceOrMean(t) <= input.ForceChargeMaxPrice;
+      double fraction = input.SlotFraction(t);
+      var (ch, dis, _, _) = BatteryDpPlanner.Flows(input, InverterModes.normal, false, 0, pv, load + extra, energy, fraction);
+      if (cheap)
+        foreach (bool bulk in new[] { false, true })   // the faster path at this SoC (VPP follows its curve, bulk the current)
+        {
+          var c = BatteryDpPlanner.Flows(input, InverterModes.force_charge, bulk, 100, pv, load + extra, energy, fraction);
+          if (c.ch - c.dis > ch - dis) (ch, dis) = (c.ch, c.dis);
+        }
+      energy = input.NextEnergyWh(energy, ch, dis);
+    }
+    int target = Math.Min(input.SocToWh(Math.Min(100, input.ForceChargeTargetSocPercent)), energy - (int)Math.Ceiling(BatteryDpPlanner.WhPerState(input, o)));
+    return target > 0 ? new TopUpGoal(deadline, target) : null;
   }
 
   /// <summary>Cost of the greedy simulation's plan under the one model: its flows against a battery with the conversion
@@ -220,7 +278,8 @@ public static class PlanEvaluation
     var input = result.Input.WithBatteryLosses();
     var path = result.EnergyPathWh(input);
     var slots = result.Slots.Select((s, i) => (s.Time, (double)input.WhToSoc(path[i]), s.GridImportWh, s.GridExportWh, s.State.Mode));
-    return Evaluate(input, slots, path[^1], o);
+    var index = result.Slots.Select((s, i) => (s.Time, i)).ToDictionary(x => x.Time, x => x.i);
+    return Evaluate(input, slots, path[^1], o, t => index.TryGetValue(t, out int i) ? path[i] : null);
   }
 }
 
@@ -241,6 +300,11 @@ public static class BatteryDpPlanner
   /// <param name="input">Simulation input.</param>
   public static DateTime HorizonEnd(SimulationInput input) => input.StartTime.RoundToNearestQuarterHour().Date.AddDays(2);
 
+  /// <summary>Wh between two states of the program's grid.</summary>
+  /// <param name="input">Simulation input (the capacity).</param>
+  /// <param name="o">Options (states per %).</param>
+  public static double WhPerState(SimulationInput input, DpOptions o) => input.BatteryCapacityWh / (double)(100 * o.StatesPerPercent);
+
   /// <summary>Plans the battery over the simulation's horizon (the running quarter through the end of tomorrow).</summary>
   /// <param name="input">The simulation input (the greedy run's: same forecasts, prices, extra loads).</param>
   /// <param name="options">Settings; defaults if null.</param>
@@ -255,7 +319,7 @@ public static class BatteryDpPlanner
     for (var t = start; t < end; t = t.AddMinutes(SlotMinutes)) times.Add(t);
     int n = times.Count;
     int states = 100 * o.StatesPerPercent + 1;
-    double whPerState = input.BatteryCapacityWh / (double)(states - 1);
+    double whPerState = WhPerState(input, o);
     int StateOf(int wh) => Math.Clamp((int)Math.Round(wh / whPerState), 0, states - 1);
     int WhOf(int state) => (int)Math.Round(state * whPerState);
     float ValueAt(float[] v, int wh) => Interpolate(v, wh, whPerState);
@@ -277,12 +341,23 @@ public static class BatteryDpPlanner
     // nearest state's policy and drifts by up to half a step — aimed at exactly 20 % it ended at 19.9x % and paid the
     // rule's 1 €/% (live 2026-11-07: 5 of 119 quarters, 1.7–9.5 ct). PlanEvaluation judges at exactly the minimum.
     int endMarginWh = (int)Math.Ceiling(whPerState / 2);
+    // The top-up's target at its deadline's quarter (aimed half a state higher, like the end rule).
+    var goal = PlanEvaluation.TopUpGoalOf(input, o);
+    int goalSlot = goal is { } g0 ? (int)((g0.Deadline - start).TotalMinutes / SlotMinutes) : -1;
+    void AddTopUp(int slot)
+    {
+      if (goal is not { } g || slot != goalSlot) return;
+      for (int c = 0; c < layers; c++)
+        for (int s = 0; s < states; s++)
+          value[slot][c][s] += PlanEvaluation.TopUpShortfall(input, g, WhOf(s) - endMarginWh, o);
+    }
     for (int c = 0; c < layers; c++)
     {
       value[n][c] = new float[states];
       for (int s = 0; s < states; s++)
         value[n][c][s] = -PlanEvaluation.EndValue(input, WhOf(s), refill) + PlanEvaluation.EndShortfall(input, WhOf(s) - endMarginWh, o);
     }
+    AddTopUp(n);
 
     var bestRestOf = new float[2];
     var bestActionOf = new Action[2];
@@ -335,6 +410,7 @@ public static class BatteryDpPlanner
         }
         for (int c = 0; c < layers; c++) { value[i][c][s] = bestRestOf[c]; policy[i][c][s] = bestActionOf[c]; }
       }
+      AddTopUp(i);
     }
 
     // Forwards from the real SoC with exact energies (the policy by the nearest state)
@@ -362,7 +438,8 @@ public static class BatteryDpPlanner
       return (list, energy);
     }
     PlanCost CostOf((List<DpSlot> Slots, int End) f) =>
-      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh, s.Mode)), f.End, o);
+      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh, s.Mode)), f.End, o,
+        t => f.Slots.FirstOrDefault(s => s.Time == t)?.EnergyWh);
 
     var plan = Forward(null);
     var cost = CostOf(plan);

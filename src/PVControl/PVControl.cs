@@ -55,6 +55,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _enforcePreferredSocEntity = null!;
     private Entity _forceChargeEntity = null!;
     private Entity _forceChargeTargetSoCEntity = null!;
+    private Entity _topUpReadyByEntity = null!;
     private Entity _forceChargeMaxPriceEntity = null!;
     private Entity _info_chargeTodayEntity = null!;
     private Entity _info_dischargeTodayEntity = null!;
@@ -167,7 +168,13 @@ namespace NetDeamon.apps.PVControl
       if (_forceChargeTargetSoCEntity.TryGetStateValue(out int targetSoC))
         _house.ForceChargeTargetSoC = targetSoC;
       if (_forceChargeEntity.TryGetStateValue(out bool forceCharge))
+      {
         _house.EnableCheapForceCharge = forceCharge;
+        // Armed before the restart: its deadline counts from when it was armed.
+        _house.TopUpArmedAt = forceCharge ? _forceChargeEntity.EntityState?.LastChanged?.ToLocalTime() ?? DateTime.Now : null;
+      }
+      if (Managers.SchedulableLoadRuntime.TryParseReadyBy(_topUpReadyByEntity.State, out var topUpReadyBy))
+        _house.TopUpReadyBy = topUpReadyBy;
       if (_overrideModeEntity.TryGetStateValue(out InverterModes mode))
         _house.OverrideMode = mode;
       if (_plannerEntity.TryGetStateValue(out Optimizer.Planner planner))
@@ -221,6 +228,7 @@ namespace NetDeamon.apps.PVControl
       await SubscribeCommandAsync(_forceChargeTargetSoCEntity);
       await SubscribeCommandAsync(_enforcePreferredSocEntity);
       await SubscribeCommandAsync(_forceChargeEntity);
+      await SubscribeCommandAsync(_topUpReadyByEntity);
       await SubscribeCommandAsync(_overrideModeEntity);
       await SubscribeCommandAsync(_plannerEntity);
       await SubscribeCommandAsync(_enableOpportunisticExport);
@@ -350,8 +358,17 @@ namespace NetDeamon.apps.PVControl
       }
       if (entity.EntityId == _forceChargeEntity.EntityId && entity.State is not null)
       {
-        _house.EnableCheapForceCharge = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
-        await PVCC_EntityManager.SetStateAsync(entity.EntityId, _house.EnableCheapForceCharge ? "ON" : "OFF");
+        bool armed = newState.Equals("on", StringComparison.CurrentCultureIgnoreCase);
+        if (armed != _house.EnableCheapForceCharge)
+          _house.TopUpArmedAt = armed ? DateTime.Now : null;
+        _house.EnableCheapForceCharge = armed;
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, armed ? "ON" : "OFF");
+      }
+      if (entity.EntityId == _topUpReadyByEntity.EntityId && Managers.SchedulableLoadRuntime.TryParseReadyBy(newState, out var readyBy))
+      {
+        _house.TopUpReadyBy = readyBy;
+        PVCC_Logger.LogInformation("Battery top-up ready-by changed: {Time}", readyBy.ToString("HH:mm", CultureInfo.InvariantCulture));
+        await PVCC_EntityManager.SetStateAsync(entity.EntityId, readyBy.ToString("HH:mm:ss", CultureInfo.InvariantCulture));
       }
       if (entity.EntityId == _enableOpportunisticExport.EntityId && entity.State is not null)
       {
@@ -620,6 +637,20 @@ namespace NetDeamon.apps.PVControl
           actual_kwh = n.Actual is { } a ? Kwh(a) : (double?)null,
         }).ToList(),
       });
+    }
+    #endregion
+
+    #region Battery top-up (one-shot)
+    /// <summary>Turns the battery top-up off once its deadline has passed (whether the target was reached or not).</summary>
+    /// <param name="now">Current time.</param>
+    private async Task ExpireTopUpAsync(DateTime now)
+    {
+      if (!_house.EnableCheapForceCharge || !Simulator.TopUp.Expired(_house.SimulationState?.Input.TopUpDeadline, now)) return;
+      var deadline = _house.SimulationState!.Input.TopUpDeadline!.Value;
+      _house.EnableCheapForceCharge = false;
+      _house.TopUpArmedAt = null;
+      PVCC_Logger.LogInformation("Battery top-up done: deadline {Deadline:HH:mm} passed at {Soc} %", deadline, _house.Battery.BatterySoc);
+      await PVCC_EntityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
     }
     #endregion
 
@@ -1270,6 +1301,7 @@ namespace NetDeamon.apps.PVControl
       (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
       StartPvForecast(now);
+      await ExpireTopUpAsync(now);
       await PublishPricePublicationAsync(now);
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
@@ -1845,8 +1877,11 @@ namespace NetDeamon.apps.PVControl
         defaultValue: Optimizer.Planner.greedy.ToString(),
         reRegister: reset);
 
-      _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Force charge at cheapest price", "switch", "mdi:transmission-tower",
+      _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Battery top-up", "switch", "mdi:transmission-tower",
         defaultValue: "OFF",
+        reRegister: reset);
+      // The top-up's ready-by time; never set = the next start of PV.
+      _topUpReadyByEntity = await RegisterSensor("time.pv_control_topup_ready_by", "Battery top-up - Ready By", null, "mdi:clock-end",
         reRegister: reset);
 
       _enforcePreferredSocEntity = await RegisterSensor("switch.pv_control_enforce_preferred_soc", "Enforce the preferred SoC", "switch", "mdi:battery-plus-variant",

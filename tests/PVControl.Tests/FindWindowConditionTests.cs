@@ -628,6 +628,8 @@ public class FindWindowConditionTests : TestBase
       PVPredictionWh              = FlatLoad(baseDate, 0), // no PV: the daily target (60 %) is bought in the cheap hour
       ExtraLoads                  = [],
       EnableCheapForceCharge      = true, // switch.pv_control_force_charge_at_cheapest_period
+      TopUpArmedAt                = start,  // the top-up, armed now, ready by midnight
+      TopUpReadyBy                = new TimeOnly(0, 0),
       OpportunisticDischarge      = false,
       ForceChargeMaxPrice         = MaxPrice,
       ForceChargeTargetSocPercent = 60,

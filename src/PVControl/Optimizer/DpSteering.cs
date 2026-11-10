@@ -116,6 +116,18 @@ public static class DpSteering
     for (; end < slots.Count && slots[end].Mode == s.Mode && !HeldForLoad(slots[end]); end++)
       addedWh += s.Mode == InverterModes.force_charge ? input.StoredWh(slots[end].BatteryChargeWh)
         : greedyBySlot.TryGetValue(slots[end].Time, out var g) ? Math.Max(0, g.LoadWh - g.PVWh) : 0;
+    // The top-up: a charge before its deadline without which the SoC there would be under the target, while the battery
+    // stays above the preferred minimum until the deadline without it (after the deadline a later charge would have
+    // refilled it — the top-up made that one unnecessary, it isn't a floor charge).
+    if (s.Mode == InverterModes.force_charge && input.TopUpDeadline is { } deadline && s.Time < deadline)
+    {
+      double added = Soc.FromWhExact(addedWh, input.BatteryCapacityWh);
+      int at = slots.ToList().FindIndex(x => x.Time == deadline);
+      double atDeadline = at >= 0 ? Soc.FromWhExact(slots[at].EnergyWh, input.BatteryCapacityWh) : dp.EndSocPct;
+      int lowBefore = slots.Skip(end).Take((at >= 0 ? at : slots.Count) - end).Select(x => x.SocPct).DefaultIfEmpty((int)atDeadline).Min();
+      if (atDeadline - added < input.ForceChargeTargetSocPercent && lowBefore - added >= input.GetPreferredMinSoC())
+        return ForceChargeReasons.TopUp;
+    }
     int low = dp.EndSocPct;   // the horizon's end, if nothing fills the battery before
     for (int j = end; j < slots.Count; j++)
     {

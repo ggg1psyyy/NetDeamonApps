@@ -6,10 +6,10 @@ using Xunit;
 namespace NetDeamonApps.Tests;
 
 /// <summary>
-/// The daily target charge (switch.pv_control_force_charge_at_cheapest_period): reach the target SoC by
-/// the end of the day's PV — headroom for the evening and the night — buying only what PV won't deliver
-/// by then, in the cheapest quarters under the price limit (EnergySimulator.DailyTargetChargeSoc,
-/// SimulationInput.DailyTargetDeadline).
+/// The battery top-up in the greedy simulation (switch.pv_control_force_charge_at_cheapest_period, one-shot): reach the
+/// target SoC by its deadline — the ready-by time after arming, else the next start of PV — buying only what PV won't
+/// deliver by then, in the cheapest quarters under the price limit (EnergySimulator.DailyTargetChargeSoc,
+/// SimulationInput.TopUpDeadline, TopUp.Deadline).
 /// </summary>
 public class DailyTargetChargeTests : TestBase
 {
@@ -18,7 +18,9 @@ public class DailyTargetChargeTests : TestBase
 
   /// <param name="pvWhSlot">PV per slot 09:00–15:00 on both days.</param>
   /// <param name="cheapFromHour">Start of the two cheap hours (0.25 €/kWh), else 0.40.</param>
-  static SimulationInput Input(DateTime start, int soc, int pvWhSlot, int cheapFromHour, float maxPrice = 0.34f)
+  /// <param name="readyBy">The top-up's ready-by time (default 15:00, the end of the PV); armed at <paramref name="start"/>.</param>
+  static SimulationInput Input(DateTime start, int soc, int pvWhSlot, int cheapFromHour, float maxPrice = 0.34f, TimeOnly? readyBy = null,
+    bool noReadyBy = false, DateTime? armedAt = null)
   {
     var load = new Dictionary<DateTime, int>();
     var pv = new Dictionary<DateTime, int>();
@@ -37,6 +39,7 @@ public class DailyTargetChargeTests : TestBase
       ImportPrices = prices, ExportPrices = new PriceList(prices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.08f))),
       LoadPredictionWh = load, PVPredictionWh = pv,
       EnableCheapForceCharge = true, OpportunisticDischarge = false,
+      TopUpArmedAt = armedAt ?? start, TopUpReadyBy = noReadyBy ? null : readyBy ?? new TimeOnly(15, 0),
       ForceChargeMaxPrice = maxPrice, ForceChargeTargetSocPercent = 95,
       CurrentMode = new InverterState(InverterModes.normal),
     };
@@ -87,12 +90,43 @@ public class DailyTargetChargeTests : TestBase
   }
 
   [Fact]
-  public void Deadline_EndOfTheDaysPv_ElseMidnight_ThenTomorrow()
+  public void Deadline_TheReadyByAfterArming()
   {
     var input = Input(Day.AddHours(6), 40, pvWhSlot: 200, cheapFromHour: 11);
-    Assert.Equal(Day.AddHours(15), input.DailyTargetDeadline(Day.AddHours(6)));            // the last PV slot 14:45 ends 15:00
-    Assert.Equal(Day.AddDays(1).AddHours(15), input.DailyTargetDeadline(Day.AddHours(16))); // past it: tomorrow's
-    var noPv = Input(Day.AddHours(6), 40, pvWhSlot: 0, cheapFromHour: 11);
-    Assert.Equal(Day.AddDays(1), noPv.DailyTargetDeadline(Day.AddHours(6)));                // a day without PV: its end
+    Assert.Equal(Day.AddHours(15), input.TopUpDeadline);                                     // armed 06:00, 15:00: today
+    Assert.Equal(Day.AddHours(15), input.DailyTargetDeadline(Day.AddHours(6)));
+    Assert.Null(input.DailyTargetDeadline(Day.AddHours(15)));                                // passed: nothing more to buy
+    var evening = Input(Day.AddHours(16), 40, pvWhSlot: 200, cheapFromHour: 11, readyBy: new TimeOnly(7, 0));
+    Assert.Equal(Day.AddDays(1).AddHours(7), evening.TopUpDeadline);                         // armed 16:00, 07:00: tomorrow
+    var odd = Input(Day.AddHours(6), 40, pvWhSlot: 200, cheapFromHour: 11, readyBy: new TimeOnly(7, 10));
+    Assert.Equal(Day.AddHours(7), odd.TopUpDeadline);                                        // on the quarter grid
+  }
+
+  [Fact]
+  public void Deadline_NoReadyBy_TheNextStartOfPv()
+  {
+    // PV 09:00–15:00 both days: armed at 03:00 that morning's, armed at 13:00 (in the PV) tomorrow's.
+    Assert.Equal(Day.AddHours(9), Input(Day.AddHours(3), 40, 200, 11, noReadyBy: true).TopUpDeadline);
+    Assert.Equal(Day.AddDays(1).AddHours(9), Input(Day.AddHours(13), 40, 200, 11, noReadyBy: true).TopUpDeadline);
+    // Armed last evening, the forecast starting today: today's.
+    Assert.Equal(Day.AddHours(9), Input(Day.AddHours(5), 40, 200, 11, noReadyBy: true, armedAt: Day.AddHours(-3)).TopUpDeadline);
+  }
+
+  [Fact]
+  public void NotArmed_NoDeadline_OneShotExpires()
+  {
+    var input = Input(Day.AddHours(6), 40, 200, 11);
+    var off = new SimulationInput
+    {
+      StartTime = input.StartTime, StartSocPercent = 40, BatteryCapacityWh = 11_520, AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 15,
+      EnforcePreferredSoc = false, MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = input.ImportPrices,
+      ExportPrices = input.ExportPrices, LoadPredictionWh = input.LoadPredictionWh, PVPredictionWh = input.PVPredictionWh,
+      EnableCheapForceCharge = false, OpportunisticDischarge = false, ForceChargeMaxPrice = 0.34f, ForceChargeTargetSocPercent = 95,
+      CurrentMode = new InverterState(InverterModes.normal), TopUpArmedAt = Day.AddHours(6), TopUpReadyBy = new TimeOnly(15, 0),
+    };
+    Assert.Null(off.TopUpDeadline);
+    Assert.False(TopUp.Expired(input.TopUpDeadline, Day.AddHours(14).AddMinutes(59)));
+    Assert.True(TopUp.Expired(input.TopUpDeadline, Day.AddHours(15)));
+    Assert.False(TopUp.Expired(null, Day.AddHours(15)));
   }
 }
