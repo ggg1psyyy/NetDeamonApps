@@ -18,15 +18,11 @@ public static class TopUp
   /// <returns>The deadline, on the quarter grid.</returns>
   public static DateTime Deadline(DateTime armedAt, TimeOnly? readyBy, Func<DateTime, DateTime?> nextPvStart)
   {
-    DateTime deadline;
-    if (readyBy is { } t)
-    {
-      deadline = armedAt.Date + t.ToTimeSpan();
-      if (deadline <= armedAt) deadline = deadline.AddDays(1);
-    }
-    else
-      deadline = nextPvStart(armedAt) ?? armedAt.Date.AddDays(2);
-    return deadline.Floor(TimeRange.SlotMinutes);
+    if (readyBy is not { } t)
+      return (nextPvStart(armedAt) ?? armedAt.Date.AddDays(2)).Floor(TimeRange.SlotMinutes);
+    // On the quarter grid first, then the next one after arming: 07:10 armed at 07:03 is 07:00 — passed, so tomorrow's.
+    var deadline = (armedAt.Date + t.ToTimeSpan()).Floor(TimeRange.SlotMinutes);
+    return deadline <= armedAt ? deadline.AddDays(1) : deadline;
   }
 
   /// <summary>Whether the one-shot switch turns itself off now: armed and its deadline reached.</summary>

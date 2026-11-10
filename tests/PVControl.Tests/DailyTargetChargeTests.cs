@@ -100,6 +100,8 @@ public class DailyTargetChargeTests : TestBase
     Assert.Equal(Day.AddDays(1).AddHours(7), evening.TopUpDeadline);                         // armed 16:00, 07:00: tomorrow
     var odd = Input(Day.AddHours(6), 40, pvWhSlot: 200, cheapFromHour: 11, readyBy: new TimeOnly(7, 10));
     Assert.Equal(Day.AddHours(7), odd.TopUpDeadline);                                        // on the quarter grid
+    // Armed at 07:03 for 07:10: its quarter 07:00 has passed — tomorrow's, not an instant expiry.
+    Assert.Equal(Day.AddDays(1).AddHours(7), TopUp.Deadline(Day.AddHours(7).AddMinutes(3), new TimeOnly(7, 10), _ => null));
   }
 
   [Fact]
