@@ -17,7 +17,7 @@ public class TopUpDpTests : TestBase
   static readonly DateTime Day = new(2026, 11, 10);
   static readonly DateTime Deadline = Day.AddDays(1).AddHours(7);
 
-  static SimulationInput Input(bool armed, int target = 90, float limit = 0.25f, int cheapQuarters = 8, int soc = 60)
+  static SimulationInput Input(bool armed, int target = 90, float limit = 0.25f, int cheapQuarters = 8, int soc = 60, TimeOnly? readyBy = null)
   {
     var load = new Dictionary<DateTime, int>();
     var pv = new Dictionary<DateTime, int>();
@@ -39,7 +39,7 @@ public class TopUpDpTests : TestBase
       LoadPredictionWh = load, PVPredictionWh = pv,
       EnableCheapForceCharge = armed, OpportunisticDischarge = false,
       ForceChargeMaxPrice = limit, ForceChargeTargetSocPercent = target,
-      TopUpArmedAt = Day.AddHours(19), TopUpReadyBy = new TimeOnly(7, 0),
+      TopUpArmedAt = Day.AddHours(19), TopUpReadyBy = readyBy ?? new TimeOnly(7, 0),
       CurrentMode = new InverterState(InverterModes.normal),
     };
   }
@@ -114,5 +114,30 @@ public class TopUpDpTests : TestBase
     var goal = PlanEvaluation.TopUpGoalOf(armed, o)!.Value;
     double missing = Soc.FromWhExact(goal.TargetWh, armed.BatteryCapacityWh) - SocAt(unarmedPlan, armed);
     Assert.Equal(missing * o.FloorPenaltyPerPctQuarter, cost.TopUpShortfall, 3);
+  }
+
+  [Fact]
+  public void Reason_ABlockRunningPastTheDeadline_CountsOnlyItsChargeBeforeIt()
+  {
+    // A charge 02:00–04:00 from 30 %, the deadline 03:00, the target 25 %: the SoC at 03:00 without the charge before it
+    // is 30 % — the target holds anyway, the charge isn't the top-up's (the whole block's charge taken off read "TopUp").
+    var input = Input(armed: true, target: 25, readyBy: new TimeOnly(3, 0)).WithBatteryLosses();
+    var start = Day.AddDays(1);
+    int capacity = input.BatteryCapacityWh, stored = 920, chargeAc = (int)Math.Ceiling(stored / 0.95);
+    var slots = new List<DpSlot>();
+    int energy = input.SocToWh(30);
+    for (var t = start; t < start.AddHours(6); t = t.AddMinutes(15))
+    {
+      bool charging = t >= start.AddHours(2) && t < start.AddHours(4);
+      slots.Add(new DpSlot(t, input.WhToSoc(energy), charging ? InverterModes.force_charge : InverterModes.grid_only, false, charging ? 100 : 0,
+        charging ? chargeAc + 75 : 75, 0, charging ? chargeAc : 0, 0, 0, energy));
+      if (charging) energy += input.StoredWh(chargeAc);
+    }
+    var plan = new DpPlan(slots, new PlanCost(0, 0, 0, 0), input.WhToSoc(energy));
+    int first = slots.FindIndex(x => x.Mode == InverterModes.force_charge);
+    Assert.NotEqual(ForceChargeReasons.TopUp, DpSteering.ReasonOf(plan, first, input, new Dictionary<DateTime, SimulationSlot>()));
+    // The same block for a 60 % target: 30 % + its ~32 % before 03:00 — that part is the top-up's.
+    var high = Input(armed: true, target: 60, readyBy: new TimeOnly(3, 0)).WithBatteryLosses();
+    Assert.Equal(ForceChargeReasons.TopUp, DpSteering.ReasonOf(plan, first, high, new Dictionary<DateTime, SimulationSlot>()));
   }
 }

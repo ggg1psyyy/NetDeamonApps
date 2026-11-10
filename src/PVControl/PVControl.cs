@@ -663,6 +663,8 @@ namespace NetDeamon.apps.PVControl
     private Entity? _pvForecastEntity;
     private DateTime _pvForecastStarted = DateTime.MinValue;
     private int _pvForecastRunning;
+    /// <summary>The raw PV forecast for the run, copied on the cycle thread (the cycle updates the prediction while the run reads it).</summary>
+    private IReadOnlyDictionary<DateTime, int> _pvForecastInput = new Dictionary<DateTime, int>();
     /// <summary>Minutes between two runs (each source fetches on its own interval).</summary>
     private const int PvForecastEveryMinutes = 5;
 
@@ -676,7 +678,7 @@ namespace NetDeamon.apps.PVControl
         if (PVCC_HaContext.GetState("zone.home")?.AttributesJson is { } z && z.TryGetProperty("latitude", out var lat) && z.TryGetProperty("longitude", out var lon))
           home = (lat.GetDouble(), lon.GetDouble());
         var sources = config.Sources.Where(s => s.Enabled)
-          .Select(s => PvForecast.PvForecastSources.Create(s, () => _house.Prediction_PV.TodayAndTomorrow, home))
+          .Select(s => PvForecast.PvForecastSources.Create(s, () => _pvForecastInput, home))
           .OfType<PvForecast.IPvForecastSource>().ToList();
         if (sources.Count == 0) return;
         var log = new PvForecast.PvForecastLog(AppFiles.PathOf(config.DBLocation, typeof(PVConfig).Assembly));
@@ -699,6 +701,7 @@ namespace NetDeamon.apps.PVControl
           || Interlocked.CompareExchange(ref _pvForecastRunning, 1, 0) != 0)
         return;
       _pvForecastStarted = now;
+      _pvForecastInput = new Dictionary<DateTime, int>(_house.Prediction_PV.TodayAndTomorrow);
       _ = Task.Run(async () =>
       {
         try
@@ -955,12 +958,6 @@ namespace NetDeamon.apps.PVControl
         _importCap = _importCap with { PauseExtraLoads = true, Reason = "paused before the restart" };
     }
 
-    /// <summary>
-    /// After a start: the running quarter's import from the counters' readings at its start (HA history,
-    /// <see cref="ImportCap.QuarterImport.Seed"/>) — the import cap guard then knows what the quarter has imported instead
-    /// of estimating it from the power now.
-    /// </summary>
-    /// <param name="ct">Cancels the history requests.</param>
     /// <summary>When the states are re-read a second time after the start.</summary>
     internal static readonly TimeSpan SettleAgainAfter = TimeSpan.FromMinutes(2);
 
@@ -989,6 +986,12 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>
+    /// After a start: the running quarter's import from the counters' readings at its start (HA history,
+    /// <see cref="ImportCap.QuarterImport.Seed"/>) — the import cap guard then knows what the quarter has imported instead
+    /// of estimating it from the power now.
+    /// </summary>
+    /// <param name="ct">Cancels the history requests.</param>
     private async Task SeedQuarterImportAsync(CancellationToken ct)
     {
       var now = DateTime.Now;
@@ -2187,7 +2190,7 @@ namespace NetDeamon.apps.PVControl
           reRegister: reset);
         // Seeded from HA like the loads' totals; numericalGetBaseValue:false — stored raw in €.
         if (meter.TotalCostEurEntity.TryGetStateValue(out float savedEur, numericalGetBaseValue: false) && savedEur is >= 0f and <= 1_000_000f)
-          meter.TotalCostEur = savedEur;
+          meter.Restore(savedEur);
         else
           PVCC_Logger.LogWarning("TotalCost for {Name} reset to 0 (persisted value {Val} out of range)", meter.Config.Name, savedEur);
       }

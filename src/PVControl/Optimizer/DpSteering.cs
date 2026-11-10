@@ -121,10 +121,14 @@ public static class DpSteering
     // refilled it — the top-up made that one unnecessary, it isn't a floor charge).
     if (s.Mode == InverterModes.force_charge && input.TopUpDeadline is { } deadline && s.Time < deadline)
     {
-      double added = Soc.FromWhExact(addedWh, input.BatteryCapacityWh);
-      int at = slots.ToList().FindIndex(x => x.Time == deadline);
+      int at = -1;
+      for (int j = i; j < slots.Count && at < 0; j++) if (slots[j].Time == deadline) at = j;
+      // Only the block's charge before the deadline counts towards it (a block may run on past it).
+      int beforeWh = 0;
+      for (int j = i; j < Math.Min(end, at >= 0 ? at : slots.Count); j++) beforeWh += input.StoredWh(slots[j].BatteryChargeWh);
+      double added = Soc.FromWhExact(beforeWh, input.BatteryCapacityWh);
       double atDeadline = at >= 0 ? Soc.FromWhExact(slots[at].EnergyWh, input.BatteryCapacityWh) : dp.EndSocPct;
-      int lowBefore = slots.Skip(end).Take((at >= 0 ? at : slots.Count) - end).Select(x => x.SocPct).DefaultIfEmpty((int)atDeadline).Min();
+      int lowBefore = slots.Skip(end).Take(Math.Max(0, (at >= 0 ? at : slots.Count) - end)).Select(x => x.SocPct).DefaultIfEmpty((int)atDeadline).Min();
       if (atDeadline - added < input.ForceChargeTargetSocPercent && lowBefore - added >= input.GetPreferredMinSoC())
         return ForceChargeReasons.TopUp;
     }

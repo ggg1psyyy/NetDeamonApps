@@ -44,6 +44,20 @@ namespace NetDeamon.apps.PVControl.Managers
     /// <summary>The running total in €, kept in memory (seeded from HA on start, never read back).</summary>
     public float TotalCostEur { get; set; }
 
+    private bool _restored;
+
+    /// <summary>
+    /// Seeds the total from HA after a start, once: what was booked before (the counter subscribes in the constructor, a
+    /// step during the start books before the restore) stays on top of it instead of being overwritten.
+    /// </summary>
+    /// <param name="savedEur">The total HA held.</param>
+    public void Restore(float savedEur)
+    {
+      if (_restored) return;
+      TotalCostEur += savedEur;
+      _restored = true;
+    }
+
     private float _lastKwh = float.NaN;   // none yet: the first reading after a start books nothing
 
     /// <summary>The largest plausible counter step of a consumer: 2 h at its highest power, kWh.</summary>

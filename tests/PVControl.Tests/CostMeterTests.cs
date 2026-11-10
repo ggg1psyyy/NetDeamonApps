@@ -68,4 +68,17 @@ public class CostMeterTests
     Assert.Equal(grid, s.Grid, 3);
     Assert.Equal(battery, s.Battery, 3);
   }
+
+  [Fact]
+  public void Restore_KeepsWhatWasBookedDuringTheStart_Once()
+  {
+    // The counter subscribes in the constructor: a step during the start books before HA's total is restored.
+    var m = Meter();
+    m.Book(10_000, 0.30f);       // the base
+    m.Book(11_000, 0.30f);       // 1 kWh during the start: 0.30 €
+    m.Restore(12.5f);
+    Assert.Equal(12.8f, m.TotalCostEur, 3);
+    m.Restore(12.5f);            // a re-registration doesn't add it again
+    Assert.Equal(12.8f, m.TotalCostEur, 3);
+  }
 }

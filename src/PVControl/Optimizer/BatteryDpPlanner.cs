@@ -236,10 +236,11 @@ public static class PlanEvaluation
     (float)Math.Max(0, Soc.FromWhExact(goal.TargetWh, input.BatteryCapacityWh) - Soc.FromWhExact(energyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
 
   /// <summary>
-  /// The top-up's goal (null when not armed, its deadline passed, or nothing to add): the target SoC at the deadline
+  /// The top-up's goal (null when not armed, its deadline passed, or the cap leaves no energy): the target SoC at the deadline
   /// (capped at the horizon's end), at most what the battery reaches charging at full power in every quarter at or under
   /// the price limit before it and running normally in the others — the same flows as the plan (PV, loads, the import cap),
-  /// one DP state below it so a plan following it with exact energies doesn't miss it by a fraction.
+  /// one DP state below it so a plan following it with exact energies doesn't miss it by a fraction. Also when the battery
+  /// already holds the target: it must still hold it at the deadline (a load running it down meanwhile costs the shortfall).
   /// </summary>
   /// <param name="input">Simulation input (with the DP's losses).</param>
   /// <param name="o">Options (the state grid).</param>
