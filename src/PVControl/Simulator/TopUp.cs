@@ -25,6 +25,18 @@ public static class TopUp
     return deadline <= armedAt ? deadline.AddDays(1) : deadline;
   }
 
+  /// <summary>
+  /// When an armed top-up was armed, read back after a restart: the switch's <c>armed_at</c> attribute (PVControl writes
+  /// it when the switch goes on); without it the switch's last change — which an HA restart moves (2026-11-10 09:12:
+  /// off → unknown → off), so a top-up down across its deadline would have counted from the restart and run a day longer.
+  /// </summary>
+  /// <param name="armedAtAttribute">The attribute's text (ISO 8601); null or unreadable: none.</param>
+  /// <param name="lastChanged">The switch's last change (local).</param>
+  /// <param name="now">Current time (neither known).</param>
+  public static DateTime ArmedAt(string? armedAtAttribute, DateTime? lastChanged, DateTime now) =>
+    DateTimeOffset.TryParse(armedAtAttribute, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var a)
+      ? a.LocalDateTime : lastChanged ?? now;
+
   /// <summary>Whether the one-shot switch turns itself off now: armed and its deadline reached.</summary>
   /// <param name="deadline">The top-up's deadline; null when not armed.</param>
   /// <param name="now">Current time.</param>

@@ -131,4 +131,15 @@ public class DailyTargetChargeTests : TestBase
     Assert.True(TopUp.Expired(input.TopUpDeadline, Day.AddHours(15)));
     Assert.False(TopUp.Expired(null, Day.AddHours(15)));
   }
+
+  [Fact]
+  public void ArmedAt_TheAttributeOverTheLastChange()
+  {
+    // An HA restart moved the switch's last change to 09:12; the attribute keeps when it was armed.
+    var restart = Day.AddHours(9).AddMinutes(12);
+    Assert.Equal(Day.AddHours(6).AddMinutes(30), TopUp.ArmedAt(Day.AddHours(6).AddMinutes(30).ToISO8601(), restart, Day.AddHours(10)));
+    Assert.Equal(restart, TopUp.ArmedAt(null, restart, Day.AddHours(10)));          // an older switch without it
+    Assert.Equal(restart, TopUp.ArmedAt("garbage", restart, Day.AddHours(10)));
+    Assert.Equal(Day.AddHours(10), TopUp.ArmedAt(null, null, Day.AddHours(10)));
+  }
 }

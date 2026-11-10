@@ -95,7 +95,9 @@ the switch went on, else the next start of PV). Why one-shot with a time (the us
 switch began as "always reach 100 % for unforeseen loads", but the DP keeps that reserve itself
 (preferred minimum, end value); what's left is a deliberate top-up before known extra loads or a
 day the PV forecast overrates — set for one occasion, it must not keep buying afterwards, and the
-deadline counts from the arming time so it passes once. It
+deadline counts from the arming time so it passes once. The arming time is the switch's `armed_at`
+attribute, not its last change: an HA restart moves that (2026-11-10 09:12: off → unknown → off), and
+a top-up down across its deadline would have counted from the restart and run a day longer. It
 buys only what the no-charging look-ahead doesn't reach at the deadline, at most the room a PV
 peak before it leaves (`PvRoomBeforeLow`), and only when that's more than `MinPvRoomPct`; the
 quarters are the N cheapest under the price limit before the deadline, on the same machinery as

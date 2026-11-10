@@ -48,7 +48,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 |---|---|
 | `select.pv_control_mode_override` | Manually override the current mode |
 | `switch.pv_control_enforce_preferred_soc` | The preferred minimum becomes the hard floor: never drained below, not even by an unforeseen load (reserve for power outages) |
-| `switch.pv_control_force_charge_at_cheapest_period` | Battery top-up (one-shot): reach `number.pv_control_forcecharge_target_soc` by `time.pv_control_topup_ready_by` — the first time it comes round after the switch went on; never set, the next start of PV — buying only what PV won't deliver by then, only in quarters at or under `number.pv_control_max_price_for_forcecharge` (a shortfall is accepted). Turns itself off once the deadline has passed |
+| `switch.pv_control_force_charge_at_cheapest_period` | Battery top-up (one-shot): reach `number.pv_control_forcecharge_target_soc` by `time.pv_control_topup_ready_by` — the first time it comes round after the switch went on; never set, the next start of PV — buying only what PV won't deliver by then, only in quarters at or under `number.pv_control_max_price_for_forcecharge` (a shortfall is accepted). Turns itself off once the deadline has passed; attribute `armed_at` (when it was armed, read back after a restart) |
 | `time.pv_control_topup_ready_by` | Ready-by time of the battery top-up (once set, HA keeps a time; unset means the next start of PV) |
 | `switch.pv_control_enable_opportunistic_export` | Enable opportunistic discharge to grid during high-price periods |
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%): what planning keeps (see below) |

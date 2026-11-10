@@ -171,7 +171,9 @@ namespace NetDeamon.apps.PVControl
       {
         _house.EnableCheapForceCharge = forceCharge;
         // Armed before the restart: its deadline counts from when it was armed.
-        _house.TopUpArmedAt = forceCharge ? _forceChargeEntity.EntityState?.LastChanged?.ToLocalTime() ?? DateTime.Now : null;
+        _house.TopUpArmedAt = forceCharge ? Simulator.TopUp.ArmedAt(
+          _forceChargeEntity.TryGetJsonAttribute("armed_at", out var at) && at.ValueKind == System.Text.Json.JsonValueKind.String ? at.GetString() : null,
+          _forceChargeEntity.EntityState?.LastChanged?.ToLocalTime(), DateTime.Now) : null;
       }
       if (Managers.SchedulableLoadRuntime.TryParseReadyBy(_topUpReadyByEntity.State, out var topUpReadyBy))
         _house.TopUpReadyBy = topUpReadyBy;
@@ -363,6 +365,7 @@ namespace NetDeamon.apps.PVControl
           _house.TopUpArmedAt = armed ? DateTime.Now : null;
         _house.EnableCheapForceCharge = armed;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, armed ? "ON" : "OFF");
+        await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, new { armed_at = _house.TopUpArmedAt?.ToISO8601() });   // read back after a restart
       }
       if (entity.EntityId == _topUpReadyByEntity.EntityId && Managers.SchedulableLoadRuntime.TryParseReadyBy(newState, out var readyBy))
       {
@@ -651,6 +654,7 @@ namespace NetDeamon.apps.PVControl
       _house.TopUpArmedAt = null;
       PVCC_Logger.LogInformation("Battery top-up done: deadline {Deadline:HH:mm} passed at {Soc} %", deadline, _house.Battery.BatterySoc);
       await PVCC_EntityManager.SetStateAsync(_forceChargeEntity.EntityId, "OFF");
+      await PVCC_EntityManager.SetAttributesAsync(_forceChargeEntity.EntityId, new { armed_at = (string?)null });
     }
     #endregion
 
