@@ -16,8 +16,9 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// wins (normal, feedin_priority, grid_only, then each charge target VPP before bulk) — VPP where it charges as
 /// cheaply, bulk only where it saves something; 0.01 ct covers the interpolation's noise.</param>
 /// <param name="KeepModeEur">In the current quarter the mode running now (normal, feedin_priority or grid_only) stays
-/// while the best action is cheaper by no more than this, € — no switching every minute between options worth less than
-/// 0.1 ct (2026-11-03: flat 0.50 prices, 9 switches in 1.5 h).</param>
+/// while the best action is cheaper by no more than this, € — no switching every minute between near-tied options
+/// (2026-11-03: flat 0.50 prices, 9 switches in 1.5 h at 0.1 ct apart; 2026-11-10 21:13–21:25: hold vs normal ±0.8 ct
+/// for the whole night as an extra charge quarter came and went — 4 switches at 0.1 ct, none at 1 ct).</param>
 /// <param name="ChargeNowEur">A grid charge the plan has later in the current price block starts (or keeps running) now
 /// while that costs no more than this, € — within one price block the start is a tie, and the minute's replans moved it
 /// (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).</param>
@@ -39,7 +40,7 @@ public sealed record DpOptions(
   int StatesPerPercent = 4,
   int ChargeStepPct = 2,
   float TieEur = 0.0001f,
-  float KeepModeEur = 0.001f,
+  float KeepModeEur = 0.01f,
   float ChargeNowEur = 0.01f,
   float ChargeStartEur = 0.01f,
   float DeviationEurPerKwh = 0.01f,

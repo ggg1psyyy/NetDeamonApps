@@ -1333,11 +1333,19 @@ a cent, so every minute's replan moved them: 9 normal/grid_only switches in 1.5 
 against a 700-W load (with the margin; 600 W without) there was none — while really PV (570 W) covered the house
 (515 W) and every dip was bought at 0.50. Two changes: the 1 % rule applies in every quarter with PV forecast
 (`HoldAllowed`), and in the current quarter the running mode (normal, feedin_priority, grid_only) stays while the best
-action is cheaper by no more than 0.1 ct (`DpOptions.KeepModeEur`, `FirstAction`) — a hysteresis on that quarter
+action is cheaper by no more than a set amount (`DpOptions.KeepModeEur`, then 0.1 ct, `FirstAction`) — a hysteresis on that quarter
 only, the rest of the plan stays free. Two consequences: a force_charge that stores under 1 % is a hold under
 another name (the battery doesn't discharge) — with holds ruled out the DP had used 1–34-Wh "charges" in their place,
 so the same rule applies to them; and a charge block's VPP check counts the free quarters at the block's price next to
 it (the user's rule is "bulk only if VPP can't get it into the price slot"; the next replan charges there).
+
+The hysteresis is 1 ct since 2026-11-10: 21:13–21:25 the DP switched grid_only ↔ normal four times at 0.1 ct. Holding
+at 0.457 or running normal was worth under 0.8 ct for the whole night, and the sign changed with the start minute and
+1 % of SoC: the 23:00 hour charged at the import cap, so whether the plan also bought the 22:45 quarter (0.416, plus
+the charge start) flipped between replans — a whole quarter on or off is a step in the cost, not a slope, and an armed
+top-up whose goal binds (78–82 % by 07:00 under the 0.45 limit) made the steps larger (±0.6 ct; ±0.2 ct without).
+Replayed from the stored snapshots the running mode stayed in every minute at 1 ct. It costs at most 1 ct per quarter
+where the other mode really is a little better — the same scale as the charge start and the deviation cost.
 
 Both 1 % rules are per quarter, and the running quarter is judged whole. The DP replans every minute on the running
 quarter's rest (`SlotFraction`), and the rules were first applied to that rest: 2026-11-08 07:15–08:45 and

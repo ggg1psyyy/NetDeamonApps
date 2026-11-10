@@ -64,7 +64,7 @@ public class DpDeviationTests
   public void WithoutTheRule_TheHalfCentHoldIsTaken()
   {
     var plan = BatteryDpPlanner.Plan(Input(), new DpOptions(DeviationEurPerKwh: 0));
-    // 21:00 itself stays normal by the running mode's 0.1-ct hysteresis (KeepModeEur); the rest of the hour holds
+    // 21:00 itself stays normal by the running mode's hysteresis (KeepModeEur); the rest of the hour holds
     Assert.True(Hour(plan, 21).Skip(1).All(m => m == InverterModes.grid_only), Show(plan));
   }
 
@@ -100,5 +100,43 @@ public class DpPruneEqualChargesTests
     Assert.Equal(full.Cost, pruned.Cost);
     Assert.Equal(full.EndSocPct, pruned.EndSocPct);
     Assert.Equal(full.Slots, pruned.Slots);
+  }
+}
+
+/// <summary>
+/// <see cref="DpOptions.KeepModeEur"/>: live 2026-11-10 21:13–21:25 the DP switched grid_only ↔ normal four times. Hold vs
+/// normal was worth under 0.8 ct for the whole night, and its sign changed with the minute and 1 % of SoC as an extra
+/// 22:45 charge quarter came and went (the 23:00 hour at the import cap, the armed top-up's goal binding). Replayed from
+/// the stored snapshots: at 1 ct the running mode stays in every minute; at 0.1 ct it didn't.
+/// </summary>
+public class DpKeepModeTests
+{
+  static ForecastSnapshot Snap(string name) => ForecastSnapshot.FromBytes(System.IO.File.ReadAllBytes(
+    System.IO.Path.Combine(AppContext.BaseDirectory, "Data", name)));
+
+  [Theory]
+  [InlineData("forecast_snapshot_2026-11-10_2100.json.gz", 46)]
+  [InlineData("forecast_snapshot_2026-11-10_2100.json.gz", 47)]
+  [InlineData("forecast_snapshot_2026-11-10_2130.json.gz", 42)]
+  [InlineData("forecast_snapshot_2026-11-10_2130.json.gz", 43)]
+  public void NearTiedHold_TheRunningModeStaysEveryMinute(string snapshot, int soc)
+  {
+    var snap = Snap(snapshot);
+    foreach (int minute in new[] { 0, 3, 5, 8, 9, 10, 12, 14 })
+      foreach (var running in new[] { InverterModes.normal, InverterModes.grid_only })
+      {
+        var input = (snap with { StartTime = snap.StartTime.AddMinutes(minute), StartSocPercent = soc, CurrentMode = running }).ToInput();
+        Assert.True(BatteryDpPlanner.Plan(input, new DpOptions()).Slots[0].Mode == running, $"+{minute} min, {soc} %, running {running}");
+      }
+  }
+
+  [Fact]
+  public void AtATenthOfACent_ItSwitched()
+  {
+    // 21:05 at 46 %: the hold 0.2 ct cheaper for the night — normal running, grid_only chosen.
+    var snap = Snap("forecast_snapshot_2026-11-10_2100.json.gz");
+    var input = (snap with { StartTime = snap.StartTime.AddMinutes(5), StartSocPercent = 46, CurrentMode = InverterModes.normal }).ToInput();
+    Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input, new DpOptions(KeepModeEur: 0.001f)).Slots[0].Mode);
+    Assert.Equal(InverterModes.normal, BatteryDpPlanner.Plan(input, new DpOptions()).Slots[0].Mode);
   }
 }

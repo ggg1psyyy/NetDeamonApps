@@ -372,7 +372,7 @@ charge only pays if the later price beats the round trip, at a fixed price never
 The DP plans normal, feedin_priority, grid_only and grid charges (in a quarter with any PV it only holds the battery with grid_only
 where the house's deficit under PV would take at least 1 % SoC in the quarter — otherwise feedin_priority; the running quarter
 is judged whole, not its rest; in the current quarter the
-running mode stays while switching is worth under 0.1 ct; a charge the plan has later in the current price block starts
+running mode stays while switching is worth under 1 ct; a charge the plan has later in the current price block starts
 or keeps running now): while it steers there is no grid charge at a negative import
 price, no feed-in before a negative export price, no opportunistic discharge. The battery top-up is a goal of the DP: missing its target at the deadline costs like the hard floor (practically a rule), on a target capped at what charging in every quarter at or under the price limit could reach (reason `TopUp`). No kWh is charged above the limit for it; to get there the DP may hold the battery in a quarter slightly above the limit when that is cheaper than letting it run down and recharging under the limit (the round trip's loss).
 
