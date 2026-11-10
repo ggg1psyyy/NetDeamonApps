@@ -116,7 +116,14 @@ costs like the hard floor (1 €/%, practically a rule) and the target is capped
 in every quarter at or under the limit (the faster path, the same flows: PV, loads, import cap)
 and running normally in the others reaches, one DP state below it; aimed half a state higher in
 the table like the end rule. So the plan reaches the target where the cheap quarters allow and
-accepts the shortfall otherwise — without buying a quarter above the limit for it. Its charges
+accepts the shortfall otherwise — without charging a kWh above the limit for it. What the limit caps
+is the target; the way there is the DP's cheapest, and that may hold the battery in quarters above the
+limit (the user, 2026-11-10, kept it so). First live top-up, 2026-11-10 for 08:00 at 95 %: at 40 ct only
+23:00–00:00 (38.9 ct) qualified — the DP's own night charge already used it, ~80 % at 08:00, the
+top-up cost nothing. At 45 ct the cap rose and the DP held the battery 00:00–05:30 instead of letting
+it run 02:00–03:30 and 05:00–05:30: 87 % at 08:00, ~0.9 kWh of house load bought at 45.7–46.8 ct
+(~0.43 €) — above the 45 ct, because running down and recharging at 04:00 for 44 ct costs ~44/0.9 ≈ 49 ct
+per kWh delivered. Over the plan +~3 ct: the kept energy replaces grid at 54–63 ct from 08:00. Its charges
 show `TopUp` (`DpSteering.ReasonOf`, before the floor reasons when the battery stays above the
 preferred minimum until the deadline without them: after the deadline a later charge would have
 refilled it, which the top-up made unnecessary). The greedy fallback keeps its rule and its

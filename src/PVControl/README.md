@@ -48,7 +48,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 |---|---|
 | `select.pv_control_mode_override` | Manually override the current mode |
 | `switch.pv_control_enforce_preferred_soc` | The preferred minimum becomes the hard floor: never drained below, not even by an unforeseen load (reserve for power outages) |
-| `switch.pv_control_force_charge_at_cheapest_period` | Battery top-up (one-shot): reach `number.pv_control_forcecharge_target_soc` by `time.pv_control_topup_ready_by` — the first time it comes round after the switch went on; never set, the next start of PV — buying only what PV won't deliver by then, only in quarters at or under `number.pv_control_max_price_for_forcecharge` (a shortfall is accepted). Turns itself off once the deadline has passed; attribute `armed_at` (when it was armed, read back after a restart) |
+| `switch.pv_control_force_charge_at_cheapest_period` | Battery top-up (one-shot): reach `number.pv_control_forcecharge_target_soc` by `time.pv_control_topup_ready_by` — the first time it comes round after the switch went on; never set, the next start of PV — buying only what PV won't deliver by then, charged only in quarters at or under `number.pv_control_max_price_for_forcecharge`, which also caps how high the target can go (a shortfall is accepted; holding the battery on the way may cost a little more, see the DP section). Turns itself off once the deadline has passed; attribute `armed_at` (when it was armed, read back after a restart) |
 | `time.pv_control_topup_ready_by` | Ready-by time of the battery top-up (once set, HA keeps a time; unset means the next start of PV) |
 | `switch.pv_control_enable_opportunistic_export` | Enable opportunistic discharge to grid during high-price periods |
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%): what planning keeps (see below) |
@@ -374,7 +374,7 @@ where the house's deficit under PV would take at least 1 % SoC in the quarter �
 is judged whole, not its rest; in the current quarter the
 running mode stays while switching is worth under 0.1 ct; a charge the plan has later in the current price block starts
 or keeps running now): while it steers there is no grid charge at a negative import
-price, no feed-in before a negative export price, no opportunistic discharge. The battery top-up is a goal of the DP: missing its target at the deadline costs like the hard floor (practically a rule), on a target capped at what charging in every quarter at or under the price limit could reach — the limit stays hard (reason `TopUp`).
+price, no feed-in before a negative export price, no opportunistic discharge. The battery top-up is a goal of the DP: missing its target at the deadline costs like the hard floor (practically a rule), on a target capped at what charging in every quarter at or under the price limit could reach (reason `TopUp`). No kWh is charged above the limit for it; to get there the DP may hold the battery in a quarter slightly above the limit when that is cheaper than letting it run down and recharging under the limit (the round trip's loss).
 
 YAML (`DpShadow:`): `Enabled`, `IntervalMinutes`, `BandPenaltyPerPctQuarter` (€ per % below the preferred minimum per
 quarter in which the battery delivers — not while it is held or charged; 0.0005 ≈ 1.7 ct per kWh of reserve and hour — the reserve bridges an expensive time to a clearly cheaper
