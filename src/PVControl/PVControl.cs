@@ -118,6 +118,11 @@ namespace NetDeamon.apps.PVControl
       // the constructor — NetDaemon loads apps one at a time and awaits each one's
       // InitializeAsync before starting the next, so waiting here (instead of blocking a raw
       // thread with Thread.Sleep in the constructor) at least logs progress and stays cancellable.
+      // NetDaemon's cache can hold a value older than HA's after a (re)connect (SettledHaContext): re-read before
+      // anything is restored or decided, and once more when HA's start has settled.
+      await SettleStatesAsync("start", cancellationToken);
+      PVCC_Scheduler.Schedule(SettleAgainAfter, () => _ = SettleStatesAsync("settled", CancellationToken.None));
+
       int waitSeconds = 0;
       while (!PVCC_Config.BatterySoCEntity.TryGetStateValue<int>(out _))
       {
@@ -820,6 +825,34 @@ namespace NetDeamon.apps.PVControl
     /// of estimating it from the power now.
     /// </summary>
     /// <param name="ct">Cancels the history requests.</param>
+    /// <summary>When the states are re-read a second time after the start.</summary>
+    internal static readonly TimeSpan SettleAgainAfter = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Re-reads all states from HA (GET /api/states) and corrects the ones NetDaemon's cache holds older
+    /// (<see cref="SettledHaContext.Settle"/>); a failed read changes nothing.
+    /// </summary>
+    /// <param name="when">For the log.</param>
+    /// <param name="ct">Cancellation.</param>
+    private static async Task SettleStatesAsync(string when, CancellationToken ct)
+    {
+      try
+      {
+        var states = await PVCC_ApiManager.GetApiCallAsync<List<NetDaemon.HassModel.Entities.EntityState>>("states", ct);
+        if (states is null) { PVCC_Logger.LogWarning("States re-read ({when}): no answer from HA", when); return; }
+        var corrected = PVCC_States.Settle(states);
+        if (corrected.Count == 0)
+          PVCC_Logger.LogInformation("States re-read ({when}): {count} entities, the cache was current", when, states.Count);
+        else
+          PVCC_Logger.LogWarning("States re-read ({when}): {count} entities older in NetDaemon's cache than in HA, corrected: {list}", when,
+            corrected.Count, string.Join(", ", corrected.Take(20).Select(c => $"{c.EntityId} {c.Cached ?? "none"} → {c.Fresh}")));
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        PVCC_Logger.LogWarning(ex, "States re-read ({when}) failed", when);
+      }
+    }
+
     private async Task SeedQuarterImportAsync(CancellationToken ct)
     {
       var now = DateTime.Now;

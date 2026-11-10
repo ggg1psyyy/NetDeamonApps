@@ -61,6 +61,8 @@ namespace NetDeamon.apps.PVControl
     private static readonly PVControlCommon _instance = new();
     public static PVControlCommon PVCCInstance => _instance;
     public static IHaContext PVCC_HaContext { get; private set; } = null!;
+    /// <summary>The settled context behind <see cref="PVCC_HaContext"/> (its <see cref="SettledHaContext.Settle"/>).</summary>
+    public static SettledHaContext PVCC_States { get; private set; } = null!;
     public static IMqttEntityManager PVCC_EntityManager { get; private set; } = null!;
     public static ILogger<PVControl> PVCC_Logger { get; private set; } = null!;
     public static PVConfig PVCC_Config { get; private set; } = null!;
@@ -76,16 +78,21 @@ namespace NetDeamon.apps.PVControl
     /// <param name="apiManager">HA REST API.</param>
     public void Initialize(IHaContext haContext, IMqttEntityManager mqttEntityManager, ILogger<PVControl> logger, IAppConfig<PVConfig> pVConfig, DisposableScheduler scheduler, IHomeAssistantApiManager apiManager)
     {
-      PVCC_HaContext = haContext;
+      // Every read through the settled context: NetDaemon's cache, corrected where a re-read from HA is newer
+      // (SettledHaContext). The configuration's entities are bound to NetDaemon's own context — pointed at it here.
+      PVCC_States = new SettledHaContext(haContext);
+      PVCC_HaContext = PVCC_States;
       PVCC_EntityManager = mqttEntityManager;
       PVCC_Logger = logger;
       PVCC_Config = pVConfig.Value;
+      EntityRebinder.Rebind(PVCC_Config, PVCC_States);
       PVCC_Scheduler = scheduler;
       PVCC_ApiManager = apiManager;
     }
     ~PVControlCommon()
     {
       PVCC_HaContext = null!;
+      PVCC_States = null!;
       PVCC_EntityManager = null!;
       PVCC_Logger = null!;
       PVCC_Config = null!;

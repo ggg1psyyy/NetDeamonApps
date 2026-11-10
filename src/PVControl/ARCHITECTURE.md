@@ -1435,6 +1435,26 @@ power now, too low after a high start, and the quarter was missing from the mont
 charge's minimum run. Left as they are, minor: counters re-seeded (the downtime's few Wh unbooked), the tank model
 refitted (seconds), the DP plan recomputed (the first cycle waits for it), running averages and learning warm-ups.
 
+### States re-read after every start
+
+NetDaemon disposes the apps on a disconnect and on the next connect fills its state cache anew: it subscribes to
+HA's events, reads all states once and writes each one into the cache — over whatever an event had written in the
+meantime. A change between HA's snapshot and that write is lost: the entity keeps its older value until its next
+change. Live 2026-11-09: HA restarted at 07:33 (all entities `unknown` for a second), the in-sync template went off at
+07:33:47 and on at 07:34:00; PVControl read "off" from 07:34 until the next in-sync change at 09:13 — health
+"Inverter not in the commanded mode" for 1.5 h, and the VPP curve learned nothing during that morning's charge (it
+waits for "in sync"); control itself doesn't read it. 2026-11-10 the same HA restart passed: NetDaemon reconnected 16 s
+after HA was running and the template had settled. Rarely changing entities are the ones at risk — the in-sync flag,
+selects, switches, the published command PVControl restores from —; meters and power sensors heal within seconds.
+
+So PVControl reads all states once more itself (GET /api/states) — first in its start, before anything is restored,
+then 2 min later when HA's own start has settled — and takes a state from it wherever it is newer than the cache's
+(`last_updated`) and differs (state or attributes). The correction is held in `SettledHaContext`, the context every
+PVControl entity reads through (the YAML's entities, bound by NetDaemon to its own context, are pointed at it:
+`EntityRebinder`), and ends by itself once the cache has the entity newer. "unknown"/"unavailable" from HA is taken as
+no information — an entity during HA's start. Only PVControl gets it; the real fix is in NetDaemon (the snapshot
+shouldn't overwrite a newer event).
+
 ### The end rule aimed half a state higher
 
 The DP plans on a 0.25-% grid and follows the plan with exact energies from the nearest state's policy, which drifts by

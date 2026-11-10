@@ -100,6 +100,8 @@ The house load forecast is the hour-of-day average of the last days (recent days
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
 
+**States after a start:** NetDaemon reloads the apps on every connect to HA (a deploy, an HA restart). PVControl then reads all states from HA once more — before it restores anything, and again 2 min later — and reads an entity from that copy wherever NetDaemon's cache holds it older, until the cache has a newer value (`SettledHaContext`; the log names each corrected entity).
+
 ## Import cap
 
 The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
@@ -407,6 +409,7 @@ dotnet test tests/PVControl.Tests
 | `RunningSlotTests` | No jumps at quarter boundaries: the running slot counts only its rest, the PV energy counter made continuous |
 | `DpDeviationTests`, `DpPruneEqualChargesTests` | A hold or feed-in first saves at least 1 ct per kWh it moves; charge targets the quarter's limit caps skipped — the same plan |
 | `DpLoadPricerTests` | EV and warm water priced by the DP while it steers: tonight's 23:00 start beats 23:15 by its own energy, a battery load costs the DP's value (more per kWh the more it takes), a load from the grid holds the battery for the house too |
+| `SettledHaContextTests` | After a start, an entity NetDaemon's cache holds older than HA is read from HA's newer state until the cache catches up; "unknown" from HA is no information; the configuration's entities read through it |
 | `RestartStateTests` | After a restart the planners continue from the published state: a running bulk charge stays bulk; a user override or the bug-fix kick isn't taken |
 | `CostMeterTests` | The cost meters' € totals: the first reading is the base, each increase at the price of its moment, a counter blip to 0 and back isn't booked, a daily reset is; every consumer gets the house's source mix |
 | `SourceSharesTests` | What a kWh costs by source (battery average cost, loads' cost totals) and the shared price lookup |
