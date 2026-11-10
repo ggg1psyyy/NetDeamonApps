@@ -127,8 +127,8 @@ public class PvForecastTests : TestBase
   [Fact]
   public void GeoSphere_DayAsUtcRange()
   {
-    Assert.Equal(("2026-11-09T23:00", "2026-11-10T22:50"), GeoSphereSource.UtcRange(new DateTime(2026, 11, 10)));
-    Assert.Equal(("2026-06-30T22:00", "2026-07-01T21:50"), GeoSphereSource.UtcRange(new DateTime(2026, 7, 1)));
+    Assert.Equal(("2026-11-09T23:10", "2026-11-10T23:00"), GeoSphereSource.UtcRange(new DateTime(2026, 11, 10)));   // 00:10 … 24:00 local
+    Assert.Equal(("2026-06-30T22:10", "2026-07-01T22:00"), GeoSphereSource.UtcRange(new DateTime(2026, 7, 1)));
   }
 
   [Fact]

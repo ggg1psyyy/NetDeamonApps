@@ -293,6 +293,8 @@ GeoSphere's `KwhPerKwhM2` is only a first scale the learned factor corrects.
 **DataLogger's PV before 2026-04:** the last hour of each day held the inverter counter's midnight reset (down to
 −43.8 kWh), so `daily.pvyield` summed to ~0 for months; the hourly values are right. `PvActual.OfDay` counts a negative
 hour as 0 (it lies at night), so the shadow scores those days correctly either way.
+A day is scored from DataLogger's whole hourly table (~19k rows, read like the load model's history) once per
+15 min while it is unscored — cheap enough now; filter in SQL if the table grows much larger.
 
 ## RunSimulation() step by step
 

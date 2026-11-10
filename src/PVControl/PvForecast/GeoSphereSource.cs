@@ -115,12 +115,16 @@ namespace NetDeamon.apps.PVControl.PvForecast
       return doc.RootElement.Clone();
     }
 
-    /// <summary>A local day as the API's UTC start and end (<c>yyyy-MM-ddTHH:mm</c>).</summary>
+    /// <summary>
+    /// A local day as the API's UTC start and end (<c>yyyy-MM-ddTHH:mm</c>, both inclusive). A value is the mean of the
+    /// interval ending at its timestamp, so the day's values are stamped 00:10 (10-min) or 01:00 (hourly) through 24:00:
+    /// the one stamped 00:00 belongs to the day before.
+    /// </summary>
     /// <param name="day">The day.</param>
     public static (string From, string To) UtcRange(DateTime day)
     {
       static string Utc(DateTime local) => DateTime.SpecifyKind(local, DateTimeKind.Local).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm", CultureInfo.InvariantCulture);
-      return (Utc(day.Date), Utc(day.Date.AddDays(1).AddMinutes(-10)));
+      return (Utc(day.Date.AddMinutes(10)), Utc(day.Date.AddDays(1)));
     }
 
     /// <summary>
