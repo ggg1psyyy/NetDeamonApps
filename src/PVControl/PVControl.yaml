@@ -130,8 +130,10 @@ NetDeamon.apps.PVControl.PVConfig:
     - sensor.esp_wmbus_0x290340_stromzahler_bezug   # utility meter via wM-Bus (billing meter, 5 s, 10 Wh)
     - sensor.solax_grid_import_total                # inverter (0.1 kWh)
   TotalExportEnergyEntity: sensor.solax_grid_export_total
-  # Import cap: highest mean grid import of any 15-min block (W). The network power price
-  # (SNE-G-V, from 2027) counts the month's highest quarter-hour; above 10 kW it costs extra.
+  # Import cap: the mean grid import (W) the guard steers each 15-min block to. This is a target, not a
+  # hard limit: the guard uses the budget up to it, so a quarter can end a few W over. Keep it a little
+  # under the line that really counts (the network's 10 kW) so that small overshoots stay below that.
+  # The network power price (SNE-G-V, from 2027) counts the month's highest quarter-hour; above 10 kW it costs extra.
   # 0 = off. Battery grid charging is throttled first, then the EV paused, then warm-water heatings held.
   MaxGridImportW: 9800
   # A quarter above this (W) is a warning and degrades health; the cap above is the guard's aim with a margin
