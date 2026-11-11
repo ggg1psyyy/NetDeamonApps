@@ -134,15 +134,7 @@ namespace NetDeamon.apps.PVControl
         waitSeconds++;
       }
 
-      // Entities of earlier versions (the EV's own mode/target/charge_now, heavy loads, the inverter command
-      // sensor — now part of sensor.pv_control_mode) are removed; once they're gone from HA this is a no-op.
-      foreach (var id in new[] {
-        "select.pv_control_ev_charging_mode",
-        "number.pv_control_ev_target_soc",
-        "binary_sensor.pv_control_ev_charge_now",
-        "sensor.pv_control_run_heavyloads_now",
-        "sensor.pv_control_inverter_command",
-      })
+      foreach (var id in RetiredEntities)
       {
         if (new Entity(PVCC_HaContext, id).State != null)
           await PVCC_EntityManager.RemoveAsync(id);
@@ -780,6 +772,18 @@ namespace NetDeamon.apps.PVControl
     private DateTime _vppCurvePublished;
     private DateTime? _inverterOutOfSyncSince;
     private DateTime _importSensorsPublished;
+    /// <summary>Entities of earlier versions, removed at start (once they're gone from HA a no-op): the EV's own
+    /// mode/target/charge_now, heavy loads, the inverter command sensor and the import cap's charge current
+    /// limit — both now attributes of sensor.pv_control_mode (battery_current_a, cap_kw).</summary>
+    public static readonly string[] RetiredEntities =
+    [
+      "select.pv_control_ev_charging_mode",
+      "number.pv_control_ev_target_soc",
+      "binary_sensor.pv_control_ev_charge_now",
+      "sensor.pv_control_run_heavyloads_now",
+      "sensor.pv_control_inverter_command",
+      "sensor.pv_control_battery_charge_current_limit",
+    ];
     private ImportCap.QuarterResult? _lastOverCap;
     private double?[]? _costImportSince;
     /// <summary>Mode published last (and since when): a started grid charge runs at least

@@ -427,3 +427,30 @@ public class ImportCapTests
   }
 
 }
+
+/// <summary>Entities PVControl removes at start: none of them may still be used by its HA files or its config
+/// (removing one that something still reads would break that silently). The removal itself (RemoveAsync over
+/// MQTT) needs HA and isn't unit tested.</summary>
+public class RetiredEntitiesTests
+{
+  [Fact]
+  public void NoRetiredEntity_IsUsedInTheHaFilesOrTheConfig()
+  {
+    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA")))
+      dir = dir.Parent;
+    Assert.NotNull(dir);
+    string src = System.IO.Path.Combine(dir.FullName, "src", "PVControl");
+    var files = System.IO.Directory.GetFiles(System.IO.Path.Combine(src, "HA"), "*.yaml").Append(System.IO.Path.Combine(src, "PVControl.yaml"));
+    foreach (var file in files)
+    {
+      string text = System.IO.File.ReadAllText(file);
+      foreach (var id in NetDeamon.apps.PVControl.PVControl.RetiredEntities)
+        Assert.False(text.Contains(id), $"{id} is retired but used in {System.IO.Path.GetFileName(file)}");
+    }
+  }
+
+  [Fact]
+  public void TheOldChargeCurrentLimitSensor_IsRetired() =>
+    Assert.Contains("sensor.pv_control_battery_charge_current_limit", NetDeamon.apps.PVControl.PVControl.RetiredEntities);
+}
