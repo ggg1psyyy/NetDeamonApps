@@ -123,7 +123,7 @@ computes, logs and publishes it; the planners keep planning with the raw Open-Me
 | DataLogger | newest hourly row older than 2 h | — |
 | Weather forecast (load model) | none yet or older than 3 h | — |
 | Load forecast (`Mode: Model`) | fell back to the average | — |
-| Import cap | first import counter failed (fallback in use) / a quarter over `ImportCapWarnW` (9.9 kW) in the last hour | no import counter works, or none configured |
+| Import cap | first import counter failed (fallback in use) / a quarter over `ImportCapWarnW` (9.95 kW) in the last hour | no import counter works, or none configured |
 | Inverter sync | inverter not in the commanded mode for 2 min | HA reconciler stopped retrying |
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
@@ -132,7 +132,7 @@ Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `mes
 
 ## Import cap
 
-The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.8 kW):
+The network power price (from 2027) counts the month's highest 15-min mean grid import; above 10 kW it costs extra. PVControl keeps every 15-min block (clock quarters, as the meter bills them) under `MaxGridImportW` (9.9 kW):
 
 1. **Battery grid charging is throttled first:** the charge current of a grid charge in `sensor.pv_control_mode` (`battery_current_a`, `battery_power_w` = current × battery voltage) is what the battery may charge so the quarter's mean stays under the cap, in whole amps. It is lowered at once as far as needed and raised only with twice the headroom (from L to R only while the room covers R + (R − L)) — except once per quarter, when a raise goes straight to the whole amps of the room less 0.5 A (a room right at a whole amp doesn't raise and cut again). A charge the plan runs starts at the lowest room over its remaining quarters, planned EV sessions and warm water included, so it doesn't have to be lowered when the EV comes on. A bulk charge stays bulk: it follows the limit with its charge current.
 2. **Then the extra loads are paused** (`charge_now` off, reason "Import cap: paused"), until there is room for them again with a margin. Their plan stays. [`HA/CarCharger.yaml`](HA/CarCharger.yaml) switches the EV on `charge_now`.
@@ -140,7 +140,7 @@ The network power price (from 2027) counts the month's highest 15-min mean grid 
 
 Nothing reacts instantly (automation delays such as the EV's 1 min, inverter and car ramps), so the guard assumes the current power keeps flowing for `ImportCapReactionSeconds` (90 s) after any change. A change late in a quarter only takes effect in the next one. The plan respects the cap too: grid charging only gets what the load leaves under it, so NeedToCharge takes more cheap quarters at lower power, and PriorityPlus never plans a load over the cap.
 
-A finished quarter over `ImportCapWarnW` (9.9 kW) is logged as a warning and degrades health for an hour; one slightly over the 9.8 kW cap isn't.
+A finished quarter over `ImportCapWarnW` (9.95 kW) is logged as a warning and degrades health for an hour; one slightly over the 9.9 kW cap isn't.
 
 The import is counted from `TotalImportEnergyEntities` in list order. The first counter (the utility meter via wM-Bus) is used while it works. The next one (the inverter) takes over only while the first is unavailable, or frozen while the next keeps counting. A counter that doesn't change is no failure: no import. The quarters are tracked as UTC instants, so the clock changes in March and October lose none. An extra load (EV) counts against the budget whether PVControl switched it on or not — a charger started by hand draws import all the same.
 

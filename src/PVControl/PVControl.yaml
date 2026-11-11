@@ -135,10 +135,10 @@ NetDeamon.apps.PVControl.PVConfig:
   # under the line that really counts (the network's 10 kW) so that small overshoots stay below that.
   # The network power price (SNE-G-V, from 2027) counts the month's highest quarter-hour; above 10 kW it costs extra.
   # 0 = off. Battery grid charging is throttled first, then the EV paused, then warm-water heatings held.
-  MaxGridImportW: 9800
+  MaxGridImportW: 9900
   # A quarter above this (W) is a warning and degrades health; the cap above is the guard's aim with a margin
   # to the network's 10 kW, so a few W over it (one 10-Wh meter step = 40 W) aren't a problem.
-  ImportCapWarnW: 9900
+  ImportCapWarnW: 9950
   # How long a requested change takes to show at the meter (automation delays, ramps), s
   ImportCapReactionSeconds: 90
   # Remote-controlled (VPP) grid charging is limited by the inverter, falling with the SoC (SolaX G4:

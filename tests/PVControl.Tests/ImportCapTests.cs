@@ -410,4 +410,20 @@ public class ImportCapTests
     Assert.Equal(HealthLevel.degraded, issue.Level);
     Assert.Contains("over 9.9 kW", issue.Message);
   }
+  /// <summary>The shipped config: the cap under the warning line, both under the network's 10 kW (the cap is
+  /// the guard's target, the warning the line that matters — 9.9 / 9.95 kW since 2026-11-11).</summary>
+  [Fact]
+  public void Config_CapUnderWarningUnderTenKw()
+  {
+    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml")))
+      dir = dir.Parent;
+    Assert.NotNull(dir);
+    string yaml = System.IO.File.ReadAllText(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml"));
+    int Value(string key) => int.Parse(System.Text.RegularExpressions.Regex.Match(yaml, $@"^\s*{key}:\s*(\d+)", System.Text.RegularExpressions.RegexOptions.Multiline).Groups[1].Value);
+    int cap = Value("MaxGridImportW"), warn = Value("ImportCapWarnW");
+    Assert.InRange(cap, 1, warn - 1);
+    Assert.InRange(warn, cap + 1, 9999);
+  }
+
 }
