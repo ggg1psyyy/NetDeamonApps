@@ -388,13 +388,26 @@ public class ImportCapTests
   public void Health_FallbackCounterDegraded_NoneError_RecentOverCapDegraded()
   {
     string[] ids = ["sensor.wmbus", "sensor.solax"];
-    Assert.Empty(HealthChecks.ImportCap(9800, 0, ids, null, T0));
-    Assert.Equal(HealthLevel.degraded, Assert.Single(HealthChecks.ImportCap(9800, 1, ids, null, T0)).Level);
-    Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.ImportCap(9800, -1, ids, null, T0)).Level);
-    Assert.Single(HealthChecks.ImportCap(9800, 0, ids, new QuarterResult(T0, 10.1), T0.AddMinutes(30)));
-    Assert.Empty(HealthChecks.ImportCap(9800, 0, ids, new QuarterResult(T0, 10.1), T0.AddHours(2)));
-    Assert.Empty(HealthChecks.ImportCap(0, -1, ids, null, T0));
+    Assert.Empty(HealthChecks.ImportCap(9800, 9900, 0, ids, null, T0));
+    Assert.Equal(HealthLevel.degraded, Assert.Single(HealthChecks.ImportCap(9800, 9900, 1, ids, null, T0)).Level);
+    Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.ImportCap(9800, 9900, -1, ids, null, T0)).Level);
+    Assert.Single(HealthChecks.ImportCap(9800, 9900, 0, ids, new QuarterResult(T0, 10.1), T0.AddMinutes(30)));
+    Assert.Empty(HealthChecks.ImportCap(9800, 9900, 0, ids, new QuarterResult(T0, 10.1), T0.AddHours(2)));
+    Assert.Empty(HealthChecks.ImportCap(0, 9900, -1, ids, null, T0));
     // The cap configured without a counter: the guard is blind — an error, not silence.
-    Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.ImportCap(9800, -1, [], null, T0)).Level);
+    Assert.Equal(HealthLevel.error, Assert.Single(HealthChecks.ImportCap(9800, 9900, -1, [], null, T0)).Level);
+  }
+
+  /// <summary>Live 2026-11-10 23:30: 9.81 kW, one meter step over the 9.8-kW cap — the cap is the guard's aim with
+  /// a margin to the network's 10 kW, so only a quarter over the 9.9-kW line degrades health.</summary>
+  [Fact]
+  public void Health_OverTheCapButUnderTheWarningLine_NoIssue()
+  {
+    string[] ids = ["sensor.wmbus", "sensor.solax"];
+    Assert.Empty(HealthChecks.ImportCap(9800, 9900, 0, ids, new QuarterResult(T0, 9.81), T0.AddMinutes(30)));
+    Assert.Empty(HealthChecks.ImportCap(9800, 9900, 0, ids, new QuarterResult(T0, 9.9), T0.AddMinutes(30)));
+    var issue = Assert.Single(HealthChecks.ImportCap(9800, 9900, 0, ids, new QuarterResult(T0, 9.91), T0.AddMinutes(30)));
+    Assert.Equal(HealthLevel.degraded, issue.Level);
+    Assert.Contains("over 9.9 kW", issue.Message);
   }
 }

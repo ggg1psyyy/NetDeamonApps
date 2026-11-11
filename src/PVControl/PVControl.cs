@@ -1080,11 +1080,12 @@ namespace NetDeamon.apps.PVControl
       }
       if (_quarterImport.Update(now, ReadImportCounters()) is { } finished)
       {
-        int capW = PVCC_Config.MaxGridImportW;
-        if (capW > 0 && finished.AvgKw * 1000 > capW)
+        int warnW = PVCC_Config.ImportCapWarnW;
+        if (PVCC_Config.MaxGridImportW > 0 && finished.AvgKw * 1000 > warnW)
         {
           _lastOverCap = finished;
-          PVCC_Logger.LogWarning("Import cap: quarter {Start:HH:mm} imported {Kw:F2} kW (cap {Cap:F1} kW)", finished.Start, finished.AvgKw, capW / 1000.0);
+          PVCC_Logger.LogWarning("Import cap: quarter {Start:HH:mm} imported {Kw:F2} kW (over {Warn:F1} kW; cap {Cap:F1} kW)",
+            finished.Start, finished.AvgKw, warnW / 1000.0, PVCC_Config.MaxGridImportW / 1000.0);
         }
         if (_monthPeak.Observe(finished))
           PVCC_Logger.LogInformation("Import peak this month: {Kw:F2} kW ({Start:dd.MM HH:mm})", finished.AvgKw, finished.Start);
@@ -1185,7 +1186,7 @@ namespace NetDeamon.apps.PVControl
       _inverterOutOfSyncSince = InverterInSync ? null : _inverterOutOfSyncSince ?? now;
       bool blocked = sync is not null && sync.TryGetJsonAttribute("blocked", out System.Text.Json.JsonElement b) && b.ValueKind == System.Text.Json.JsonValueKind.True;
       issues.AddRange(HealthChecks.InverterSync(sync is not null, _inverterOutOfSyncSince, blocked, now));
-      issues.AddRange(HealthChecks.ImportCap(PVCC_Config.MaxGridImportW, _quarterImport.Counter.ActiveIndex,
+      issues.AddRange(HealthChecks.ImportCap(PVCC_Config.MaxGridImportW, PVCC_Config.ImportCapWarnW, _quarterImport.Counter.ActiveIndex,
         PVCC_Config.TotalImportEnergyEntities.Select(e => e.EntityId).ToList(), _lastOverCap, now));
       issues.AddRange(HealthChecks.WarmWater(_house.WarmWater is not null, _house.WarmWater?.HeatPumpAvailable ?? true));
       issues.AddRange(HealthChecks.WeatherForecast(_house.Weather is not null, _house.Weather?.LastUpdate, now, LoadModel.WeatherForecast.MaxAge));

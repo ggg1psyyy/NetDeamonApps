@@ -105,14 +105,15 @@ public static class HealthChecks
   /// <summary>How long a quarter over the import cap stays reported.</summary>
   public static readonly TimeSpan OverCapReportedFor = TimeSpan.FromHours(1);
 
-  /// <summary>Import cap: no import counter configured or working = error (the guard is blind), only a fallback counter = degraded, a recent quarter over the cap = degraded.</summary>
+  /// <summary>Import cap: no import counter configured or working = error (the guard is blind), only a fallback counter = degraded, a recent quarter over the warning line = degraded.</summary>
   /// <param name="capW">The cap, W; 0 = off (no issues).</param>
+  /// <param name="warnW">The warning line, W (above the cap: the cap is the guard's aim).</param>
   /// <param name="activeSource">Index of the counter in use; -1 = none works.</param>
   /// <param name="sources">Counter entity ids in priority order.</param>
-  /// <param name="lastOverCap">Last finished quarter over the cap; null = none.</param>
+  /// <param name="lastOverCap">Last finished quarter over the warning line; null = none.</param>
   /// <param name="now">Current time.</param>
   /// <returns>The issues.</returns>
-  public static IEnumerable<HealthIssue> ImportCap(int capW, int activeSource, IReadOnlyList<string> sources, ImportCap.QuarterResult? lastOverCap, DateTime now)
+  public static IEnumerable<HealthIssue> ImportCap(int capW, int warnW, int activeSource, IReadOnlyList<string> sources, ImportCap.QuarterResult? lastOverCap, DateTime now)
   {
     if (capW <= 0) yield break;
     if (sources.Count == 0)
@@ -121,8 +122,8 @@ public static class HealthChecks
       yield return new HealthIssue("import_cap", HealthLevel.error, "No grid import counter works — import cap can't be kept");
     else if (activeSource > 0)
       yield return new HealthIssue("import_counter", HealthLevel.degraded, $"Import counter {sources[0]} failed — using {sources[activeSource]}");
-    if (lastOverCap is { } q && now - q.Start < OverCapReportedFor + TimeSpan.FromMinutes(TimeRange.SlotMinutes))
-      yield return new HealthIssue("import_over_cap", HealthLevel.degraded, $"Quarter {q.Start:HH:mm} imported {q.AvgKw:F2} kW, over the {capW / 1000.0:F1} kW cap");
+    if (lastOverCap is { } q && q.AvgKw * 1000 > warnW && now - q.Start < OverCapReportedFor + TimeSpan.FromMinutes(TimeRange.SlotMinutes))
+      yield return new HealthIssue("import_over_cap", HealthLevel.degraded, $"Quarter {q.Start:HH:mm} imported {q.AvgKw:F2} kW, over {warnW / 1000.0:F1} kW (cap {capW / 1000.0:F1} kW)");
   }
 
   /// <summary>Warm-water control configured but the heat pump unavailable = degraded.</summary>

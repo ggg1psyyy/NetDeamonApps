@@ -1028,6 +1028,11 @@ A finished quarter is scaled to exactly 15 min (`QuarterImport`): it is counted 
 cycle before its start to the first after its end, 0–30 s more, so up to 3 % high (9.72 instead of
 9.56 kW) — and after a restart that overestimate won against the DataLogger's exact value. The live
 guard keeps the unscaled count: a safe margin. (Review 2026-10-28/29.)
+The warning and the health issue have their own line, `ImportCapWarnW` (9.9 kW), above the cap: 9.8 kW is
+already the guard's soft aim, kept clear of the 10 kW that the law counts. 2026-11-10 23:30 came out at 9.81 kW,
+a quarter of one 10-Wh meter step over the cap during a full-power top-up charge. That degraded health for
+an hour although nothing near 10 kW had happened. A warning should mean the margin to 10 kW is nearly gone,
+not that the guard spent its budget to the last Wh.
 A wM-Bus receiver that loses reception stays online and keeps its last value (2026-10-28: antenna
 broken, telegrams down from every 5 s to every 10–20 s, gaps up to 200 s — still counting). Live, the
 inverter's counter takes over once it counted 0.2 kWh more (`PriorityCounter.Failed`, health

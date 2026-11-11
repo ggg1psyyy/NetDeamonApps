@@ -123,7 +123,7 @@ computes, logs and publishes it; the planners keep planning with the raw Open-Me
 | DataLogger | newest hourly row older than 2 h | — |
 | Weather forecast (load model) | none yet or older than 3 h | — |
 | Load forecast (`Mode: Model`) | fell back to the average | — |
-| Import cap | first import counter failed (fallback in use) / a quarter over the cap in the last hour | no import counter works, or none configured |
+| Import cap | first import counter failed (fallback in use) / a quarter over `ImportCapWarnW` (9.9 kW) in the last hour | no import counter works, or none configured |
 | Inverter sync | inverter not in the commanded mode for 2 min | HA reconciler stopped retrying |
 
 Attributes: `summary` (the problems in one line), `issues` (`key`, `level`, `message`, `since`), `last_cycle`, `version`. If NetDaemon itself stops, the sensor keeps its last state — `last_cycle` then gets old. The automation [`HA/Health.yaml`](HA/Health.yaml) notifies on every level change (PVControl publishes the attributes before the level, so the message carries the matching summary; after a restart the issues that counted are restored, so a lasting problem doesn't read "ok" first), when PVControl stopped running (`last_cycle` older than 2 min) and when it runs again (ntfy to `notify.ha_warnings`; replace it with your notify action).
@@ -139,6 +139,8 @@ The network power price (from 2027) counts the month's highest 15-min mean grid 
 3. **Then warm-water heatings wait** until there is room for the heat pump.
 
 Nothing reacts instantly (automation delays such as the EV's 1 min, inverter and car ramps), so the guard assumes the current power keeps flowing for `ImportCapReactionSeconds` (90 s) after any change. A change late in a quarter only takes effect in the next one. The plan respects the cap too: grid charging only gets what the load leaves under it, so NeedToCharge takes more cheap quarters at lower power, and PriorityPlus never plans a load over the cap.
+
+A finished quarter over `ImportCapWarnW` (9.9 kW) is logged as a warning and degrades health for an hour; one slightly over the 9.8 kW cap isn't.
 
 The import is counted from `TotalImportEnergyEntities` in list order. The first counter (the utility meter via wM-Bus) is used while it works. The next one (the inverter) takes over only while the first is unavailable, or frozen while the next keeps counting. A counter that doesn't change is no failure: no import. The quarters are tracked as UTC instants, so the clock changes in March and October lose none. An extra load (EV) counts against the budget whether PVControl switched it on or not — a charger started by hand draws import all the same.
 

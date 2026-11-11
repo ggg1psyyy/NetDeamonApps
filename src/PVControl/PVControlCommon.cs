@@ -261,6 +261,9 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Highest mean grid import of any 15-min block, W (the network power price counts the month's
     /// highest quarter-hour); 0 = no limit.</summary>
     public int MaxGridImportW { get; set; }
+    /// <summary>A finished quarter above this mean grid import, W, is logged as a warning and degrades health;
+    /// the cap is the guard's aim, this the line that matters (the network's 10 kW).</summary>
+    public int ImportCapWarnW { get; set; } = 9900;
     /// <summary>How long a requested change takes to show at the meter, s (automation delays, ramps);
     /// the import cap guard assumes the current power continues that long.</summary>
     public int ImportCapReactionSeconds { get; set; } = 90;
