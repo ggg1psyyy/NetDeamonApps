@@ -37,6 +37,8 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Common\Common.csproj" />
+        <!-- The planner shared by the plugins (PVControl, TariffAdvisor): loaded once, from here. -->
+        <ProjectReference Include="..\Planning\Planning.csproj" />
     </ItemGroup>
 
     <ItemGroup>

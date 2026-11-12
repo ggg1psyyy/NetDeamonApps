@@ -13,6 +13,7 @@ of app plugins, one plugin per app — each its own project, buildable and testa
 |---|---|
 | [`src/Host`](src/Host/README.md) | The host: starts NetDaemon and loads the app plugins (`NetDeamonApps.dll`, what the add-on starts) |
 | [`src/Common`](src/Common/README.md) | Shared code: calculations, HA helpers, SQLite schema helper, app files and version |
+| [`src/Planning`](src/Planning/README.md) | The battery planner shared by the plugins: simulator, DP planner, price list (pure, no HA) |
 | [`src/PVControl`](src/PVControl/README.md) | Solar/battery optimisation with dynamic EPEX Spot prices, load and PV forecasts, extra loads (EV) and warm water |
 | [`src/DataLogger`](src/DataLogger/README.md) | Logs energy sensor history hourly/daily to SQLite (PVControl's load forecast reads it) |
 | [`src/HeatingTest`](src/HeatingTest/README.md) | Automated step test of the heat pump's heating curve, with its own SQLite log |
@@ -69,7 +70,7 @@ second time next to the add-on — PVControl would then command the inverter twi
 5. Add it as `<AppPlugin Include="..\<Name>\<Name>.csproj" />` in `src/Host/Host.csproj` (published into
    `apps/plugins/<Name>/`), its tests as `tests/<Name>.Tests` on `../Tests.props`, both to `NetDeamon.sln`.
 
-The host provides NetDaemon, Common and SQLite — a plugin references them for compiling only, so its folder holds
+The host provides NetDaemon, Common, Planning and SQLite — a plugin references them for compiling only, so its folder holds
 just the plugin and its own dependencies; a plugin built against another NetDaemon major.minor is skipped (logged). Details: [`src/Host/README.md`](src/Host/README.md).
 
 ## Development notes

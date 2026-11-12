@@ -723,10 +723,10 @@ tank model update, at the latest every `ReplanIntervalMinutes` (15).
 | `PVControl.cs` | NetDaemon app entry point; registers HA entities; 15-second cron |
 | `PVControlCommon.cs` | Static singleton holding shared dependencies (IHaContext, EntityManager, Config, Logger) |
 | `HouseEnergy.cs` | Core model: predictions, simulation, scheduling decisions, prices |
-| `Simulator/EnergySimulator.cs` | Pure simulation engine |
-| `Simulator/SimulationInput.cs` | All inputs to the simulation (snapshot in time) + PV-window helpers |
-| `Simulator/SimulationResult.cs` | All outputs: slot timeline + pre-computed PV windows, SoC peaks, force-charge slots |
-| `Simulator/ExtraLoad.cs` | A load injected into a simulation (name, power, time window) |
+| `../Planning/Simulator/EnergySimulator.cs` | Pure simulation engine |
+| `../Planning/Simulator/SimulationInput.cs` | All inputs to the simulation (snapshot in time) + PV-window helpers |
+| `../Planning/Simulator/SimulationResult.cs` | All outputs: slot timeline + pre-computed PV windows, SoC peaks, force-charge slots |
+| `../Planning/Simulator/ExtraLoad.cs` | A load injected into a simulation (name, power, time window) |
 | `Managers/SchedulableLoadConfig.cs` | YAML config + `PVConfig` partial |
 | `Managers/SchedulableLoadRuntime.cs` | Live runtime state per load |
 | `Predictions/NetEnergyPrediction.cs` | PV − load + `WithRunningAvgCorrection` (day-scale + near-term ramp) |
@@ -736,7 +736,7 @@ tank model update, at the latest every `ReplanIntervalMinutes` (15).
 | `WarmWater/WarmWaterControl.cs` | Pure control decision (start a run, boost) and the daily comfort windows |
 | `WarmWater/WarmWaterController.cs` | HA side: history fit, entities, replanning, service calls |
 | `WarmWater/WarmWaterConfig.cs` | YAML config + `PVConfig.WarmWater` |
-| `Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic. `Decide()` is used only via unit tests (main flow uses the simulation oracle); `PrioritySoCGateOk()` is wired into `HouseEnergy.FindLoadWindow`'s live Priority/PriorityPlus SoC gate |
+| `../Planning/Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic. `Decide()` is used only via unit tests (main flow uses the simulation oracle); `PrioritySoCGateOk()` is wired into `HouseEnergy.FindLoadWindow`'s live Priority/PriorityPlus SoC gate |
 
 ---
 
@@ -1117,6 +1117,20 @@ in `PVControl.yaml` (values or HA entities), one place per price.
   switch keeps its tariff, also in the catch-up row after a restart across midnight.
 - **A choice without its price setting is refused.** The select is one click in HA; `Fixed`
   without a fixed price (or export `Market` without its sources) would plan with 0 €/kWh.
+
+### The cost log's base price changed its unit (2026-03-21)
+
+`costs.baseprice` (and the other price columns) were stored in ct/kWh until 2026-03-21 21:15 and in €/kWh from then
+on (found 2026-11-12 in a Fair vs Spot backtest: a 100× jump between consecutive rows). The old rows stay as they are;
+whatever reads prices from before that time converts them (÷ 100).
+
+### The planner became its own library (2026-11)
+
+A tariff advisor (Fair vs Spot for tomorrow) has to plan "what if" with the same DP — as its own plugin, without a
+second copy of the planner. The simulator and the DP never used PVControl's statics (only their `SimulationInput`),
+so they moved to `src/Planning` unchanged (namespaces too) with the few types they plan with; `DpShadow` stays (config,
+DB). The host ships the library like Common, so all plugins share one loaded copy; the other plugin gets PVControl's
+current situation from the `ForecastSnapshot` it already saves each quarter — no call into PVControl at run time.
 
 ---
 

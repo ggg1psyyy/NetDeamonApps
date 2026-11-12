@@ -12,6 +12,12 @@
     <None Update="Data\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The planner tests' helpers and live snapshots (one copy, used by both test projects). -->
+  <ItemGroup>
+    <Compile Include="..\Planning.Tests\TestBase.cs" Link="TestBase.Planning.cs" />
+    <None Include="..\Planning.Tests\Data\forecast_snapshot_*.json.gz" Link="Data\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>

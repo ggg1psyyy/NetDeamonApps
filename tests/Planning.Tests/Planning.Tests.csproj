@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The shared planner (src/Planning): simulator and DP scenarios that need nothing of PVControl. -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Planning\Planning.csproj" />
+  </ItemGroup>
+
+  <!-- Live planning situations (ForecastSnapshot, gzip JSON); PVControl.Tests links them too. -->
+  <ItemGroup>
+    <None Update="Data\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

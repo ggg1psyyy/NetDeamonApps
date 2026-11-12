@@ -10,6 +10,11 @@
     <None Update="HA\**" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
+  <!-- The planner (simulator, DP) is shared with other plugins: the host ships it, like Common (../AppPlugin.props). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Planning\Planning.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="linq2db" />
     <PackageReference Include="Microsoft.Data.Sqlite" ExcludeAssets="runtime;native" />

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The battery planner shared by the app plugins: the energy simulator (Simulator/), the DP planner (Optimizer/),
+       the price list and the types they plan with. Pure: no Home Assistant, no PVControl state — a plan is a function of
+       its SimulationInput (a ForecastSnapshot rebuilds one). Like Common, the host ships it (its own reference) and the
+       plugins compile against it only, so one copy is loaded for all of them. -->
+  <PropertyGroup>
+    <AssemblyName>NetDeamonApps.Planning</AssemblyName>
+    <RootNamespace>NetDeamon</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Common\Common.csproj" />
+  </ItemGroup>
+
+  <!-- Moved out of PVControl with internals PVControl (and its tests) still use; the other plugins see the public API only. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PVControl" />
+    <InternalsVisibleTo Include="PVControl.Tests" />
+  </ItemGroup>
+
+</Project>

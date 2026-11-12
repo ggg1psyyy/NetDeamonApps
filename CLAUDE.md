@@ -10,7 +10,7 @@ NetDaemon 6 home automation apps written in C# (.NET 10.0) for Home Assistant: a
 - **HeatingTest** — Automated step test of the heat pump's heating-curve level (test/reference nights) with its own SQLite log; independent of PVControl, `Enabled: false` in its YAML switches it off completely
 - **MidiControl** — BCF2000 MIDI controller integration (side project, low priority)
 
-Shared code: `src/Common` (each basic calculation once — use it instead of writing a formula again).
+Shared code: `src/Common` (each basic calculation once — use it instead of writing a formula again) and `src/Planning` (the battery planner — simulator, DP, price list — pure, shared by the plugins that plan). Both are shipped by the host; a plugin references them for compiling only (`Private="false" ExcludeAssets="runtime"`).
 
 ## Build & Run
 

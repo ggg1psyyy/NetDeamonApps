@@ -14,45 +14,6 @@ using NetDaemon.Client;
 
 namespace NetDeamon.apps.PVControl
 {
-  /// <summary>Whether the battery needs a grid charge (<see cref="Simulator.EnergySimulator"/>).</summary>
-  public struct NeedToChargeResult
-  {
-    /// <summary>A grid charge is needed.</summary>
-    public bool NeedToCharge;
-    /// <summary>Latest time to start charging.</summary>
-    public DateTime LatestChargeTime;
-    /// <summary>SoC at the critical point (or the lowest point without a need), %.</summary>
-    public int EstimatedSoc;
-
-    /// <summary>Creates the result.</summary>
-    /// <param name="estimatedSoc">SoC at the critical point, %.</param>
-    /// <param name="latestChargeTime">Latest time to start charging.</param>
-    /// <param name="needToCharge">A grid charge is needed.</param>
-    public NeedToChargeResult(int estimatedSoc, DateTime latestChargeTime, bool needToCharge)
-    {
-      EstimatedSoc = estimatedSoc;
-      LatestChargeTime = latestChargeTime;
-      NeedToCharge = needToCharge;
-    }
-  }
-
-  /// <summary>A snapshot of the house.</summary>
-  /// <summary>An inverter command: mode, reason and the two modifiers.</summary>
-  /// <param name="mode">Inverter mode.</param>
-  /// <param name="modeReason">Why this mode.</param>
-  /// <param name="batteryChargeEnable">PV surplus may charge the battery.</param>
-  /// <param name="exportAllowed">PV surplus may be exported.</param>
-  public struct InverterState(InverterModes mode = InverterModes.normal, ForceChargeReasons modeReason = ForceChargeReasons.None, bool batteryChargeEnable = true, bool exportAllowed = true)
-  {
-    public InverterModes Mode = mode;
-    public ForceChargeReasons ModeReason = modeReason;
-    public bool BatteryChargeEnable = batteryChargeEnable;
-    /// <summary>PV surplus may be exported; false at a negative export price, independent of <see cref="Mode"/>.</summary>
-    public bool ExportAllowed = exportAllowed;
-    /// <summary>A grid charge at full power (SolaX: Manual Force Charge), not the slower remote-controlled
-    /// (VPP) path; decided when the charge starts (<see cref="Simulator.EnergySimulator.ChargesBulk"/>).</summary>
-    public bool Bulk;
-  }
   /// <summary>Shared dependencies of PVControl (HA context, MQTT, logger, config, scheduler, API), set once by the app.</summary>
   public class PVControlCommon
   {

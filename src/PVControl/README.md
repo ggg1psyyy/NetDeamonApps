@@ -275,10 +275,10 @@ Attributes of `charge_now`: `charge_status_reason`, `mode`, `target_level`, `cur
 Extra loads (the EV charger) are scheduled by simulating them as an extra load in the house simulation and checking the result. Warm water has its own planner (see below).
 
 **What a load costs** — a start, battery vs grid supply, a split, warm water's price per slot — comes from the plan that
-steers (`Simulator/LoadPricing.cs`). While the DP steers (`select.pv_control_planner` = dp, plan fresh): a DP plan of the
+steers (`../Planning/Simulator/LoadPricing.cs`). While the DP steers (`select.pv_control_planner` = dp, plan fresh): a DP plan of the
 house without the load (planned when the load replans), the load's quarters replayed with that plan's modes held (a load
 from the grid holds the battery with the house, as live; one the battery covers draws it; the import cap trims a charge),
-and the battery's energy difference after them at the DP's own cost of the rest (`Optimizer/DpLoadPricer.cs`). While the
+and the battery's energy difference after them at the DP's own cost of the rest (`../Planning/Optimizer/DpLoadPricer.cs`). While the
 greedy plan steers, or the DP plan is stale: the greedy simulation with the load against without. The yes/no rules (no new
 grid, the overnight minimum, the price limit, the import cap) and the follow-up preview stay on the greedy simulation.
 
