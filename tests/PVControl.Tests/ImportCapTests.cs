@@ -454,3 +454,29 @@ public class RetiredEntitiesTests
   public void TheOldChargeCurrentLimitSensor_IsRetired() =>
     Assert.Contains("sensor.pv_control_battery_charge_current_limit", NetDeamon.apps.PVControl.PVControl.RetiredEntities);
 }
+
+/// <summary>HA's automation and script editors rewrite automations.yaml / scripts.yaml on every save and drop all
+/// YAML comments, so the automations and the script (the HA files with a top-level alias) keep their notes in
+/// <c>description:</c>. The package and the dashboard card aren't edited there and may keep comments.</summary>
+public class HaFilesTests
+{
+  [Fact]
+  public void AutomationsAndScripts_HaveNoYamlComments()
+  {
+    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA")))
+      dir = dir.Parent;
+    Assert.NotNull(dir);
+    var edited = System.IO.Directory.GetFiles(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA"), "*.yaml")
+      .Select(f => (File: System.IO.Path.GetFileName(f), Lines: System.IO.File.ReadAllLines(f)))
+      .Where(f => f.Lines.Any(l => l.StartsWith("alias:")))
+      .ToList();
+    Assert.Contains(edited, f => f.File == "InverterSync.yaml");
+    Assert.Contains(edited, f => f.File == "ApplyMode.yaml");
+    foreach (var (file, lines) in edited)
+    {
+      int i = Array.FindIndex(lines, l => l.TrimStart().StartsWith('#'));
+      Assert.True(i < 0, $"{file}:{i + 1} has a YAML comment; HA drops it on the next GUI save, use description:");
+    }
+  }
+}

@@ -1,7 +1,10 @@
 alias: PV Control - Health
-description: >-
-  Notifies when sensor.pv_control_health changes (ok / degraded / error), when PVControl stopped
-  running (last_cycle older than 2 min) and when it runs again (ntfy, notify.ha_warnings).
+description: |-
+  Notifies when sensor.pv_control_health changes (ok / degraded / error), when PVControl stopped running (last_cycle older than 2 min) and when it runs again (ntfy, notify.ha_warnings).
+
+  - PVControl publishes the summary before the level (two MQTT messages); the 2-s wait only makes sure both are in.
+  - Every level change notifies: no `for:` on the trigger (a hiccup shorter than it sent only the "ok" back, without the problem before).
+  - The message reads the sensor, not trigger.to_state: a manual run has no trigger data (then it sends the current status).
 mode: queued
 triggers:
   - trigger: state
@@ -26,17 +29,12 @@ triggers:
     id: RUNNING
 conditions: []
 actions:
-  # PVControl publishes the summary before the level (two MQTT messages); the short wait only makes sure
-  # both are in. Every level change notifies — no `for:` on the trigger (a hiccup shorter than it sent
-  # only the "ok" back, without the problem before).
   - delay:
       seconds: 2
   - action: ntfy.publish
     target:
       entity_id: notify.ha_warnings
     data:
-      # Reads the sensor, not trigger.to_state: a manual run has no trigger data (then it sends
-      # the current status).
       title: >-
         {% set id = trigger.id | default('') %}
         {% if id == 'STOPPED' %}PV Control not running

@@ -21,6 +21,9 @@ actions:
       title: PV Mode changed
       message: |-
         New mode: {{ states("sensor.pv_control_mode") }}
+        Reason: {{ state_attr("sensor.pv_control_mode", "charge_Reason") or "-" }}
+        {% if states("sensor.pv_control_mode") in ["force_charge", "force_charge_grid_only"] %}Limit: {{ state_attr("sensor.pv_control_mode", "import_cap_reason") or "-" }}
+        {% endif %}Price: {{ states("sensor.pv_control_current_import_price_brutto") | float(0) | round(3) }} €/kWh
         Battery: {{ states("sensor.solax_battery_capacity") }}
         Current Load: {{ states("sensor.solax_house_load") }}
     target:
