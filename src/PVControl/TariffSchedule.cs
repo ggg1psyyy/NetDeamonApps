@@ -26,6 +26,11 @@ namespace NetDeamon.apps.PVControl
     public T Chosen { get; private set; }
     /// <summary>When <see cref="Chosen"/> takes over; null when nothing is pending.</summary>
     public DateTime? EffectiveFrom { get; private set; }
+    /// <summary>The tariff before the last switch: quarters before <see cref="Since"/> keep it (the cost log books a
+    /// quarter just after it ends — after the roll).</summary>
+    public T? Previous { get; private set; }
+    /// <summary>When <see cref="Active"/> took over; null if it never switched.</summary>
+    public DateTime? Since { get; private set; }
 
     /// <summary>A tariff with nothing pending.</summary>
     /// <param name="active">The tariff in force.</param>
@@ -33,8 +38,12 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>The tariff in force at a time.</summary>
     /// <param name="t">The time (a quarter's start).</param>
-    /// <returns><see cref="Chosen"/> from <see cref="EffectiveFrom"/> on, else <see cref="Active"/>.</returns>
-    public T At(DateTime t) => EffectiveFrom is { } from && t >= from ? Chosen : Active;
+    /// <returns><see cref="Chosen"/> from <see cref="EffectiveFrom"/> on, <see cref="Previous"/> before <see cref="Since"/>,
+    /// else <see cref="Active"/>.</returns>
+    public T At(DateTime t) =>
+      EffectiveFrom is { } from && t >= from ? Chosen
+      : Since is { } since && t < since && Previous is { } previous ? previous
+      : Active;
 
     /// <summary>The user chose a tariff: it applies from the next switch time; choosing the active one again drops a
     /// pending change.</summary>
@@ -56,6 +65,8 @@ namespace NetDeamon.apps.PVControl
     public bool Roll(DateTime now)
     {
       if (EffectiveFrom is not { } from || now < from) return false;
+      Previous = Active;
+      Since = from;
       Active = Chosen;
       EffectiveFrom = null;
       return true;
@@ -78,11 +89,19 @@ namespace NetDeamon.apps.PVControl
     /// <param name="effectiveFrom">Attribute "effective_from" (ISO 8601).</param>
     /// <param name="now">Current time.</param>
     /// <param name="switchTime">Time of day a change takes effect.</param>
+    /// <param name="previous">Attribute "previous" (the tariff before the last switch).</param>
+    /// <param name="since">Attribute "since" (ISO 8601: the last switch).</param>
     /// <returns>The schedule, rolled over if its switch time passed while PVControl was down.</returns>
-    public static TariffSchedule<T> Restore(T start, string? chosen, string? active, string? effectiveFrom, DateTime now, TimeSpan switchTime)
+    public static TariffSchedule<T> Restore(T start, string? chosen, string? active, string? effectiveFrom, DateTime now, TimeSpan switchTime,
+      string? previous = null, string? since = null)
     {
       T c = Parse(chosen) ?? start;
       var schedule = new TariffSchedule<T>(Parse(active) ?? c);
+      if (Parse(previous) is { } p && DateTime.TryParse(since, out var s))
+      {
+        schedule.Previous = p;
+        schedule.Since = s;
+      }
       if (!EqualityComparer<T>.Default.Equals(c, schedule.Active))
       {
         schedule.Chosen = c;
@@ -102,11 +121,22 @@ namespace NetDeamon.apps.PVControl
     /// <summary>A price list for the schedule: each quarter from the list of the tariff in force then. Each list is
     /// complete for its tariff (including its estimated quarters), so an estimate never mixes two tariffs.</summary>
     /// <param name="listFor">The prices as if a tariff applied everywhere.</param>
-    /// <returns><paramref name="listFor"/>(<see cref="Active"/>) when nothing is pending, else both spliced at
-    /// <see cref="EffectiveFrom"/>.</returns>
-    public PriceList Prices(Func<T, PriceList> listFor) =>
-      EffectiveFrom is not { } from ? listFor(Active)
-      : new PriceList(listFor(Active).Where(p => p.StartTime < from).Concat(listFor(Chosen).Where(p => p.StartTime >= from)).ToList());
+    /// <returns>Each quarter from the list of <see cref="At"/>(its start); <paramref name="listFor"/>(<see cref="Active"/>)
+    /// itself when no quarter differs.</returns>
+    public PriceList Prices(Func<T, PriceList> listFor)
+    {
+      var active = listFor(Active);
+      bool pending = EffectiveFrom is not null, past = Since is not null && Previous is not null;
+      if (!pending && !past) return active;
+      var lists = new Dictionary<T, PriceList> { [Active] = active };
+      PriceList For(T t) => lists.TryGetValue(t, out var l) ? l : lists[t] = listFor(t);
+      var starts = active.Select(p => p.StartTime).ToHashSet();
+      // Each tariff's list may cover other quarters (e.g. a fixed price only where the market has slots): take every
+      // quarter from the list of its own tariff.
+      var all = new[] { Active, Chosen }.Concat(Previous is { } pr ? [pr] : Array.Empty<T>()).Distinct()
+        .SelectMany(t => For(t).Where(p => EqualityComparer<T>.Default.Equals(At(p.StartTime), t)));
+      return new PriceList(all.OrderBy(p => p.StartTime).ToList());
+    }
   }
   /// <summary>Whether a tariff can be priced with the configured sources (a choice in HA must not turn a missing
   /// setting into a price of 0).</summary>

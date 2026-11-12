@@ -1774,13 +1774,17 @@ namespace NetDeamon.apps.PVControl
     }
 
     /// <summary>A tariff select's schedule after a restart: the select's state is the chosen tariff, its attributes the
-    /// active one and when the choice takes effect.</summary>
+    /// active one, when the choice takes effect, and the tariff before the last switch.</summary>
     /// <param name="entity">The select.</param>
     /// <param name="start">The YAML's tariff (first start).</param>
     private static TariffSchedule<T> RestoreTariff<T>(Entity entity, T start) where T : struct, Enum
     {
       string? Attr(string name) => entity.TryGetJsonAttribute(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
-      return TariffSchedule<T>.Restore(start, entity.State, Attr("active"), Attr("effective_from"), DateTime.Now, PVCC_Config.TariffSwitchTimeOfDay);
+      var schedule = TariffSchedule<T>.Restore(start, entity.State, Attr("active"), Attr("effective_from"), DateTime.Now,
+        PVCC_Config.TariffSwitchTimeOfDay, Attr("previous"), Attr("since"));
+      PVCC_Logger.LogInformation("{Entity}: {Active} (chosen {Chosen}, from {From})", entity.EntityId, schedule.Active, schedule.Chosen,
+        schedule.EffectiveFrom?.ToString("yyyy-MM-dd HH:mm") ?? "-");
+      return schedule;
     }
 
     /// <summary>Publishes a tariff select: attributes (active, effective_from) before the state (the chosen tariff).</summary>
@@ -1788,7 +1792,13 @@ namespace NetDeamon.apps.PVControl
     /// <param name="schedule">Its schedule.</param>
     private static async Task PublishTariffAsync<T>(Entity entity, TariffSchedule<T> schedule) where T : struct, Enum
     {
-      await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, new { active = schedule.Active.ToString(), effective_from = schedule.EffectiveFrom?.ToISO8601() });
+      await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, new
+      {
+        active = schedule.Active.ToString(),
+        effective_from = schedule.EffectiveFrom?.ToISO8601(),
+        previous = schedule.Previous?.ToString(),   // the quarters before "since" keep it (the cost log books them late)
+        since = schedule.Since?.ToISO8601(),
+      });
       await PVCC_EntityManager.SetStateAsync(entity.EntityId, schedule.Chosen.ToString());
     }
 

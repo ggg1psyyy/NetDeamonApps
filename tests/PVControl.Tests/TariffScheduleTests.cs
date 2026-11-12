@@ -56,6 +56,32 @@ public class TariffScheduleTests
   }
 
   [Fact]
+  public void AfterTheRoll_TheQuartersBeforeTheSwitchKeepTheirTariff()
+  {
+    // The cost log books the 23:45 quarter just after midnight — after the roll.
+    var s = new TariffSchedule<ImportTariff>(ImportTariff.Market);
+    s.Choose(ImportTariff.Fixed, Day.AddHours(20), Midnight);
+    s.Roll(Day.AddDays(1).AddSeconds(5));
+    Assert.Equal(ImportTariff.Market, s.At(Day.AddHours(23.75)));
+    Assert.Equal(ImportTariff.Fixed, s.At(Day.AddDays(1)));
+  }
+
+  [Fact]
+  public void Restore_AfterARollWhileDown_TheQuarterBeforeKeepsItsTariff()
+  {
+    string tomorrow = Day.AddDays(1).ToISO8601();
+    var s = TariffSchedule<ImportTariff>.Restore(ImportTariff.Market, "Fixed", "Market", tomorrow, Day.AddDays(1).AddMinutes(10), Midnight);
+    Assert.Equal(ImportTariff.Fixed, s.Active);
+    Assert.Equal(ImportTariff.Market, s.At(Day.AddHours(23.75)));   // the catch-up row of the last quarter
+
+    // ... and after a later restart, from the published attributes (previous, since).
+    var again = TariffSchedule<ImportTariff>.Restore(ImportTariff.Market, "Fixed", "Fixed", null, Day.AddDays(1).AddHours(1), Midnight,
+      previous: s.Previous?.ToString(), since: s.Since?.ToISO8601());
+    Assert.Equal(ImportTariff.Market, again.At(Day.AddHours(23.75)));
+    Assert.Equal(ImportTariff.Fixed, again.At(Day.AddDays(1)));
+  }
+
+  [Fact]
   public void Restore_FirstStart_TheYamlValue()
   {
     var s = TariffSchedule<ImportTariff>.Restore(ImportTariff.Market, null, null, null, Day.AddHours(20), Midnight);
@@ -68,7 +94,7 @@ public class TariffScheduleTests
   [Fact]
   public void Restore_APendingChoice_KeepsItsTime_OrRollsIfItPassedWhileDown()
   {
-    string tomorrow = Day.AddDays(1).ToString("o");
+    string tomorrow = Day.AddDays(1).ToISO8601();
     // The state is parsed ignoring case (the command path lowercases it).
     var pending = TariffSchedule<ImportTariff>.Restore(ImportTariff.Market, "market", "Fixed", tomorrow, Day.AddHours(21), Midnight);
     Assert.Equal(ImportTariff.Fixed, pending.Active);

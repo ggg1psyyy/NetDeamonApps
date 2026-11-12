@@ -1112,11 +1112,11 @@ in `PVControl.yaml` (values or HA entities), one place per price.
   (`PriceManager.ImportPricesForPlanning`). With nothing pending the result is the old list,
   quarter for quarter.
 - **The cost log prices the booked quarter, not "now".** It books a quarter just after it ends —
-  at 00:00:xx the 23:45 quarter, after the switch already.
+  at 00:00:xx the 23:45 quarter, after the roll already. So the schedule keeps the tariff before the
+  last switch and its time (`Previous`, `Since`, attributes `previous`/`since`): a quarter before the
+  switch keeps its tariff, also in the catch-up row after a restart across midnight.
 - **A choice without its price setting is refused.** The select is one click in HA; `Fixed`
   without a fixed price (or export `Market` without its sources) would plan with 0 €/kWh.
-- With a switch time other than midnight the quarters already past today show the new tariff
-  after the roll (display only; the cost log booked them already).
 
 ---
 

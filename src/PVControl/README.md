@@ -54,8 +54,8 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 | `number.pv_control_preferredbatterycharge` | Preferred minimum SoC (%): what planning keeps (see below) |
 | `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge; also the "cheap grid" threshold for PriorityPlus loads |
 | `number.pv_control_forcecharge_target_soc` | Target SoC (%) of the battery top-up |
-| `select.pv_control_import_tariff` | Import tariff: `Market` or `Fixed` (see [Tariffs](#tariffs)); attributes `active`, `effective_from` |
-| `select.pv_control_export_tariff` | Export tariff: `SameAsImport`, `Fixed` or `Market` (see [Tariffs](#tariffs)); attributes `active`, `effective_from` |
+| `select.pv_control_import_tariff` | Import tariff: `Market` or `Fixed` (see [Tariffs](#tariffs)); attributes `active`, `effective_from`, `previous`, `since` |
+| `select.pv_control_export_tariff` | Export tariff: `SameAsImport`, `Fixed` or `Market` (see [Tariffs](#tariffs)); attributes `active`, `effective_from`, `previous`, `since` |
 
 ## Status entities
 

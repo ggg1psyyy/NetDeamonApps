@@ -116,9 +116,12 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Netto import prices of one tariff, everywhere: the market price after <see cref="PVConfig.ImportPriceResolution"/>,
     /// or the fixed energy price in the market list's slots (so it reconciles with the shown brutto price).</summary>
     /// <param name="tariff">The tariff.</param>
-    private PriceList NettoImportFor(ImportTariff tariff) => tariff == ImportTariff.Fixed
-      ? new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, FixedImportNetto)))
-      : PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
+    private PriceList NettoImportFor(ImportTariff tariff)
+    {
+      if (tariff != ImportTariff.Fixed) return PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
+      float price = FixedImportNetto;   // read once per list
+      return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)));
+    }
 
     /// <summary>Brutto import prices of one tariff, everywhere.</summary>
     /// <param name="tariff">The tariff.</param>
@@ -140,9 +143,13 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Brutto export prices of one tariff, everywhere: the fixed price in the market list's slots, else the
     /// scaled netto price.</summary>
     /// <param name="tariff">The tariff.</param>
-    private PriceList ExportFor(ExportTariff tariff) => tariff == ExportTariff.Fixed
-      ? new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, FixedExportPrice)))
-      : new(NettoExportFor(tariff).Select(p => new PriceTableEntry(p.StartTime, p.EndTime, ExportPrice(p.Price, null, true))));
+    private PriceList ExportFor(ExportTariff tariff)
+    {
+      if (tariff != ExportTariff.Fixed)
+        return new(NettoExportFor(tariff).Select(p => new PriceTableEntry(p.StartTime, p.EndTime, ExportPrice(p.Price, null, true))));
+      float price = FixedExportPrice;   // read once per list
+      return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)));
+    }
 
     /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/>, each quarter by its tariff.</summary>
     public PriceList PriceListNettoImport => ImportTariffs.Prices(NettoImportFor);
