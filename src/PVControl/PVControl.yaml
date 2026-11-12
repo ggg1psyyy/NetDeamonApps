@@ -41,10 +41,15 @@ NetDeamon.apps.PVControl.PVConfig:
       EndYear: 2099
       Price: 0.06882
   ImportPriceTax: 0.2
-  # Fixed-price supply contract: the energy price below (netto: without tax and network fee, €/kWh) instead of the
-  # market price × ImportPriceMultiplier + ImportPriceAddition; the network fee (incl. its periods) and the tax stay.
-  # The market price entities still give the time slots (and the export price with ExportPriceSameAsImport).
-  ImportPriceFixed: false
+  # Import tariff (start value; afterwards select.pv_control_import_tariff in HA keeps the choice):
+  #   Market = the market price × ImportPriceMultiplier + ImportPriceAddition
+  #   Fixed  = the fixed energy price below (netto: without tax and network fee, €/kWh); the network fee (incl. its
+  #            periods) and the tax stay. The market price entities still give the time slots (and the export price
+  #            with ExportTariff SameAsImport).
+  ImportTariff: Market
+  # Time of day a tariff chosen in HA takes effect (import and export): until then the plan prices the quarters
+  # before it with the tariff in force, those from it with the chosen one.
+  TariffSwitchTime: "00:00"
   # ImportPriceFixedEntity: input_number.fixed_energy_price
   # ImportPriceFixedValue: 0.12
   # How the raw price data is interpreted:
@@ -61,12 +66,11 @@ NetDeamon.apps.PVControl.PVConfig:
   # error over the scored nights (sensor.pv_control_load_forecast, 0–30 %) — a reserve for a load above the forecast.
   # This value (%) until 7 nights are scored.
   LoadMarginPct: 15
-  # How to determine the export (feed-in) price, checked in order:
-  #   1. ExportPriceSameAsImport: true  -> reuse the resolved import netto price (scaled below)
-  #   2. ExportPriceFixed: true         -> use a fixed feed-in tariff (entity takes priority over value)
-  #   3. otherwise                      -> use CurrentExportPriceEntities (own fallback list, like import)
-  ExportPriceSameAsImport: true
-  ExportPriceFixed: false
+  # Export (feed-in) tariff (start value; afterwards select.pv_control_export_tariff in HA keeps the choice):
+  #   SameAsImport = the import market price, scaled with the export settings below
+  #   Fixed        = a fixed feed-in price as paid (ExportPriceFixedEntity takes priority over ExportPriceFixedValue)
+  #   Market       = its own market price, CurrentExportPriceEntities (fallback list, like import), scaled below
+  ExportTariff: SameAsImport
   # ExportPriceFixedEntity: sensor.some_fixed_feedin_tariff
   # ExportPriceFixedValue: 0.05
   # CurrentExportPriceEntities:
@@ -75,9 +79,8 @@ NetDeamon.apps.PVControl.PVConfig:
   ExportPriceAddition: 0.0
   ExportPriceNetwork: 0.0
   ExportPriceTax: 0.0
-  # Same as ImportPriceResolution, but for the export price. Only applies when the export price
-  # is variable (ExportPriceSameAsImport or the independent-entities fallback) — a fixed feed-in
-  # tariff (ExportPriceFixed: true) has no resolution concept.
+  # Same as ImportPriceResolution, but for the export price (ExportTariff SameAsImport or Market) — a fixed
+  # feed-in price has no resolution.
   ExportPriceResolution: Hourly
   # Inverter status/run mode (health: inverter data available)
   InverterStatusEntity: sensor.solax_run_mode

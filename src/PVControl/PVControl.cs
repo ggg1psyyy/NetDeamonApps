@@ -67,6 +67,8 @@ namespace NetDeamon.apps.PVControl
     private Entity _info_PredictedDischargeEntity = null!;
     private Entity _overrideModeEntity = null!;
     private Entity _plannerEntity = null!;
+    private Entity _importTariffEntity = null!;
+    private Entity _exportTariffEntity = null!;
     // select.pv_control_planner: the selected planner, the one in effect this cycle, and whether the DP couldn't steer.
     private Optimizer.Planner _planner = Optimizer.Planner.greedy;
     private Optimizer.Planner _effectivePlanner = Optimizer.Planner.greedy;
@@ -173,6 +175,10 @@ namespace NetDeamon.apps.PVControl
         _house.OverrideMode = mode;
       if (_plannerEntity.TryGetStateValue(out Optimizer.Planner planner))
         _planner = planner;
+      _house.Prices.ImportTariffs = RestoreTariff(_importTariffEntity, PVCC_Config.ImportTariff);
+      _house.Prices.ExportTariffs = RestoreTariff(_exportTariffEntity, PVCC_Config.ExportTariff);
+      await PublishTariffAsync(_importTariffEntity, _house.Prices.ImportTariffs);
+      await PublishTariffAsync(_exportTariffEntity, _house.Prices.ExportTariffs);
       if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
         _house.Battery.PreferredMinBatterySoC = prefSoC;
       if (_enforcePreferredSocEntity.TryGetStateValue(out bool enforcePrefSoC))
@@ -225,6 +231,8 @@ namespace NetDeamon.apps.PVControl
       await SubscribeCommandAsync(_topUpReadyByEntity);
       await SubscribeCommandAsync(_overrideModeEntity);
       await SubscribeCommandAsync(_plannerEntity);
+      await SubscribeCommandAsync(_importTariffEntity);
+      await SubscribeCommandAsync(_exportTariffEntity);
       await SubscribeCommandAsync(_enableOpportunisticExport);
 
       PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
@@ -331,6 +339,12 @@ namespace NetDeamon.apps.PVControl
         _planner = Enum.TryParse(newState, out Optimizer.Planner selected) ? selected : Optimizer.Planner.greedy;
         await PVCC_EntityManager.SetStateAsync(entity.EntityId, _planner.ToString());
       }
+      if (entity.EntityId == _importTariffEntity.EntityId)
+        await ChooseTariffAsync(entity, _house.Prices.ImportTariffs, newState, t => TariffSources.ImportMissing(t,
+          PVCC_Config.ImportPriceFixedEntity is not null, PVCC_Config.ImportPriceFixedValue));
+      if (entity.EntityId == _exportTariffEntity.EntityId)
+        await ChooseTariffAsync(entity, _house.Prices.ExportTariffs, newState, t => TariffSources.ExportMissing(t,
+          PVCC_Config.ExportPriceFixedEntity is not null, PVCC_Config.ExportPriceFixedValue, PVCC_Config.CurrentExportPriceEntities?.Count ?? 0));
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
         if (Enum.TryParse(newState, out InverterModes modeselect))
@@ -1331,6 +1345,7 @@ namespace NetDeamon.apps.PVControl
       await PublishBatteryAsync(now);
       await PublishNeedToChargeAsync(charge, now);
       await PublishPredictionsAsync(now);
+      await RollTariffsAsync(now);
       await PublishPricesAsync(now);
       await LogCostsAsync(now);
       _ = RunDpShadowIfDue(now);
@@ -1758,6 +1773,57 @@ namespace NetDeamon.apps.PVControl
         done && _dpShadow?.LastPlan is not null ? "ready" : "not ready, greedy steers meanwhile", sw.ElapsedMilliseconds);
     }
 
+    /// <summary>A tariff select's schedule after a restart: the select's state is the chosen tariff, its attributes the
+    /// active one and when the choice takes effect.</summary>
+    /// <param name="entity">The select.</param>
+    /// <param name="start">The YAML's tariff (first start).</param>
+    private static TariffSchedule<T> RestoreTariff<T>(Entity entity, T start) where T : struct, Enum
+    {
+      string? Attr(string name) => entity.TryGetJsonAttribute(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+      return TariffSchedule<T>.Restore(start, entity.State, Attr("active"), Attr("effective_from"), DateTime.Now, PVCC_Config.TariffSwitchTimeOfDay);
+    }
+
+    /// <summary>Publishes a tariff select: attributes (active, effective_from) before the state (the chosen tariff).</summary>
+    /// <param name="entity">The select.</param>
+    /// <param name="schedule">Its schedule.</param>
+    private static async Task PublishTariffAsync<T>(Entity entity, TariffSchedule<T> schedule) where T : struct, Enum
+    {
+      await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, new { active = schedule.Active.ToString(), effective_from = schedule.EffectiveFrom?.ToISO8601() });
+      await PVCC_EntityManager.SetStateAsync(entity.EntityId, schedule.Chosen.ToString());
+    }
+
+    /// <summary>The user chose a tariff: from the next switch time, unless its price source isn't configured (then the
+    /// choice is refused and the select shows the previous one).</summary>
+    /// <param name="entity">The select.</param>
+    /// <param name="schedule">Its schedule.</param>
+    /// <param name="newState">The chosen tariff's name.</param>
+    /// <param name="missing">What a tariff lacks in PVControl.yaml; null if it can be priced.</param>
+    private static async Task ChooseTariffAsync<T>(Entity entity, TariffSchedule<T> schedule, string newState, Func<T, string?> missing) where T : struct, Enum
+    {
+      if (TariffSchedule<T>.Parse(newState) is { } tariff)
+      {
+        if (missing(tariff) is { } what)
+          PVCC_Logger.LogWarning("{Entity}: {Tariff} needs {What} in PVControl.yaml; kept {Chosen}", entity.EntityId, tariff, what, schedule.Chosen);
+        else if (schedule.Choose(tariff, DateTime.Now, PVCC_Config.TariffSwitchTimeOfDay))
+          PVCC_Logger.LogInformation("{Entity}: {Tariff} chosen, in force from {From} (now {Active})", entity.EntityId, tariff,
+            schedule.EffectiveFrom?.ToString("yyyy-MM-dd HH:mm") ?? "now", schedule.Active);
+      }
+      await PublishTariffAsync(entity, schedule);
+    }
+
+    /// <summary>At the switch time a chosen tariff takes over: published, and a new plan.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task RollTariffsAsync(DateTime now)
+    {
+      bool import = _house.Prices.ImportTariffs.Roll(now), export = _house.Prices.ExportTariffs.Roll(now);
+      if (import) await PublishTariffAsync(_importTariffEntity, _house.Prices.ImportTariffs);
+      if (export) await PublishTariffAsync(_exportTariffEntity, _house.Prices.ExportTariffs);
+      if (!import && !export) return;
+      PVCC_Logger.LogInformation("Tariffs now: import {Import}, export {Export}", _house.Prices.ImportTariffs.Active, _house.Prices.ExportTariffs.Active);
+      _house.RequestReplan("tariff switch");
+      _dpShadow?.RequestRun();
+    }
+
     /// <summary>The cost log: one row per quarter (import/export totals and increases, the prices) in the energy costs DB.</summary>
     /// <param name="now">Current time.</param>
     private async Task LogCostsAsync(DateTime now)
@@ -1786,10 +1852,11 @@ namespace NetDeamon.apps.PVControl
             GridImport = gridImport,
             GridExport = gridExport,
             BasePrice = basePrice,
-            ImportPriceProvider = _house.Prices.CalculateBruttoPriceImport(basePrice, false),
-            ImportPriceTotal = _house.Prices.CalculateBruttoPriceImport(basePrice, true),
-            ExportPriceProvider = _house.Prices.CalculateBruttoPriceExport(basePrice, false),
-            ExportPriceTotal = _house.Prices.CalculateBruttoPriceExport(basePrice, true),
+            // Priced by the tariff of the booked quarter (booked just after it ends — after a switch already).
+            ImportPriceProvider = _house.Prices.CalculateBruttoPriceImport(basePrice, false, basePriceEntry.StartTime),
+            ImportPriceTotal = _house.Prices.CalculateBruttoPriceImport(basePrice, true, basePriceEntry.StartTime),
+            ExportPriceProvider = _house.Prices.CalculateBruttoPriceExport(basePrice, false, basePriceEntry.StartTime),
+            ExportPriceTotal = _house.Prices.CalculateBruttoPriceExport(basePrice, true, basePriceEntry.StartTime),
           };
           await db.InsertAsync(currentCost);
           _lastCostsEntry = currentCost;
@@ -1887,6 +1954,16 @@ namespace NetDeamon.apps.PVControl
       _plannerEntity = await RegisterSensor("select.pv_control_planner", "Planner", "select", "mdi:chart-timeline-variant-shimmer",
         addConfig: new { options = Enum.GetNames<Optimizer.Planner>() },
         defaultValue: Optimizer.Planner.greedy.ToString(),
+        reRegister: reset);
+
+      // The supply contracts' tariffs (prices: PVControl.yaml); a choice takes effect at TariffSwitchTime.
+      _importTariffEntity = await RegisterSensor("select.pv_control_import_tariff", "Import tariff", "select", "mdi:cash-clock",
+        addConfig: new { options = Enum.GetNames<ImportTariff>() },
+        defaultValue: PVCC_Config.ImportTariff.ToString(),
+        reRegister: reset);
+      _exportTariffEntity = await RegisterSensor("select.pv_control_export_tariff", "Export tariff", "select", "mdi:cash-plus",
+        addConfig: new { options = Enum.GetNames<ExportTariff>() },
+        defaultValue: PVCC_Config.ExportTariff.ToString(),
         reRegister: reset);
 
       _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Battery top-up", "switch", "mdi:transmission-tower",

@@ -1091,6 +1091,33 @@ side used to ignore a failed read, so a dropout at a quarter boundary stored tot
 negative export, and the next row booked the whole counter as export (review 2026-10-28; the
 import side already fell back via `PriorityCounter`).
 
+### Tariffs switch per quarter, from a switch time (2026-11)
+
+From 2026-11-17 the supplier lets the contract change between a fixed price and the quarter-hourly
+spot price (and the feed-in is paid at a monthly market value, published the month after). The
+tariff therefore became an HA select instead of a YAML flag, but only the *choice* — the prices stay
+in `PVControl.yaml` (values or HA entities), one place per price.
+
+- **Each quarter by the tariff in force then, not one tariff for the whole list.** The plan always
+  reaches past midnight (after ~13:00 to the end of tomorrow). A single "current tariff" would price
+  tomorrow with today's contract until midnight, or — switched in the evening — today's remaining
+  quarters with tomorrow's. `TariffSchedule` keeps the active and the chosen tariff and the switch;
+  every price list is spliced at it (`TariffSchedule.Prices`).
+- **The switch time is a setting (`TariffSwitchTime`, 00:00).** When the supplier's change takes
+  effect wasn't known when this was built; one value covers another rule.
+- **Estimate first, then splice.** Tomorrow's unpublished quarters are estimated from the day before
+  (`PriceList.WithEstimatedPrices`). Spliced first, a market tomorrow would be "estimated" from
+  today's fixed price (flat), a fixed tomorrow from today's market (with a premium a known price
+  doesn't need). So each tariff's full list is estimated on its own, then spliced
+  (`PriceManager.ImportPricesForPlanning`). With nothing pending the result is the old list,
+  quarter for quarter.
+- **The cost log prices the booked quarter, not "now".** It books a quarter just after it ends —
+  at 00:00:xx the 23:45 quarter, after the switch already.
+- **A choice without its price setting is refused.** The select is one click in HA; `Fixed`
+  without a fixed price (or export `Market` without its sources) would plan with 0 €/kWh.
+- With a switch time other than midnight the quarters already past today show the new tariff
+  after the roll (display only; the cost log booked them already).
+
 ---
 
 ## HA entity auto-creation

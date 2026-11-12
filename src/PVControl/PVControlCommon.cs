@@ -180,9 +180,15 @@ namespace NetDeamon.apps.PVControl
     public List<NetworkPricePeriod>? ImportPriceNetworkPeriods { get; set; }
     public float ImportPriceTax { get; set; } = default;
     public PriceResolution ImportPriceResolution { get; set; } = PriceResolution.Hourly;
-    /// <summary>A fixed-price supply contract: the energy price is <see cref="ImportPriceFixedEntity"/> (else
+    /// <summary>The import tariff's start value (<c>select.pv_control_import_tariff</c> keeps the user's choice after
+    /// that): <see cref="ImportTariff.Fixed"/> = the energy price is <see cref="ImportPriceFixedEntity"/> (else
     /// <see cref="ImportPriceFixedValue"/>) instead of the market price × multiplier + addition; network fee and tax stay.</summary>
-    public bool ImportPriceFixed { get; set; } = default;
+    public ImportTariff ImportTariff { get; set; } = ImportTariff.Market;
+    /// <summary>Time of day ("HH:mm") a tariff chosen in HA takes effect (the supplier switches the contract then).</summary>
+    public string TariffSwitchTime { get; set; } = "00:00";
+    /// <summary><see cref="TariffSwitchTime"/> parsed; midnight if it can't be read.</summary>
+    public TimeSpan TariffSwitchTimeOfDay => TimeSpan.TryParse(TariffSwitchTime, System.Globalization.CultureInfo.InvariantCulture, out var t)
+      && t >= TimeSpan.Zero && t < TimeSpan.FromDays(1) ? t : TimeSpan.Zero;
     /// <summary>Entity with the fixed energy price, netto (without tax and network fee), €/kWh; takes priority over the value.</summary>
     public Entity? ImportPriceFixedEntity { get; set; }
     /// <summary>Fixed energy price, netto (without tax and network fee), €/kWh.</summary>
@@ -193,8 +199,8 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Load margin of the planning (greedy and DP) while the night forecast has too few scored nights
     /// (<see cref="LoadModel.NightForecastTracker.MinNightsForMargin"/>), %.</summary>
     public double LoadMarginPct { get; set; } = 15;
-    public bool ExportPriceSameAsImport { get; set; } = true;
-    public bool ExportPriceFixed { get; set; } = default;
+    /// <summary>The export tariff's start value (<c>select.pv_control_export_tariff</c> keeps the user's choice after that).</summary>
+    public ExportTariff ExportTariff { get; set; } = ExportTariff.SameAsImport;
     public Entity? ExportPriceFixedEntity { get; set; }
     public float ExportPriceFixedValue { get; set; } = default;
     public List<Entity>? CurrentExportPriceEntities { get; set; }
@@ -227,8 +233,7 @@ namespace NetDeamon.apps.PVControl
     /// <see cref="PriceManager.FurthestSource"/>).</summary>
     public Entity CurrentImportPriceEntity => FurthestPriceEntity(CurrentImportPriceEntities)!;
     /// <summary>Same as <see cref="CurrentImportPriceEntity"/> for <see cref="CurrentExportPriceEntities"/>.
-    /// Only used for the independent-variable export price case (neither
-    /// <see cref="ExportPriceSameAsImport"/> nor <see cref="ExportPriceFixed"/>).</summary>
+    /// Only used for the export tariff <see cref="ExportTariff.Market"/>.</summary>
     public Entity? CurrentExportPriceEntity => FurthestPriceEntity(CurrentExportPriceEntities);
 
     static Entity? FurthestPriceEntity(List<Entity>? entities) =>
