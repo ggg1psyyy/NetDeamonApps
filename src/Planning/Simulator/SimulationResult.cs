@@ -175,11 +175,12 @@ public class SimulationResult : IReadOnlyList<SimulationSlot>
   /// <returns>True if any slot imports more than in the baseline.</returns>
   public bool HasNewGridVs(SimulationResult baseline) => NewGridSlotsVs(baseline).Any();
 
-  /// <summary>Whether all extra grid import is at or below <see cref="SimulationInput.ForceChargeMaxPrice"/>.</summary>
+  /// <summary>Whether all extra grid import is at or below <see cref="SimulationInput.ForceChargeMaxPrice"/> — at the price
+  /// paid (<see cref="SimulationInput.TryGetPaidPrice"/>: the fixed one while the loads are placed on the market's).</summary>
   /// <param name="baseline">Same input without the load in question.</param>
   /// <returns>True also if there is no extra import; false for a slot without price.</returns>
   public bool IsGridCheapVs(SimulationResult baseline)
-    => NewGridSlotsVs(baseline).All(t => _input.ImportPrices.TryGetPrice(t, out float p) && p <= _input.ForceChargeMaxPrice);
+    => NewGridSlotsVs(baseline).All(t => _input.TryGetPaidPrice(t, out float p) && p <= _input.ForceChargeMaxPrice);
 
   /// <summary>
   /// Extra grid cost vs the baseline: import cost − export earnings over the horizon (lost export

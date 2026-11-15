@@ -1133,9 +1133,12 @@ supply, the advisor's snapshot) and the floor's protection would be gone. Instea
 and two rules where the fixed tariff is in force — no hold, the preferred minimum = the absolute one unless enforced —
 and with those the price alone leaves nothing to buy. Probing first showed why rules were needed at all: at a flat
 import with the old market feed-in (up to 0.33 € > 0.2654) the DP bought to sell (correct, but gone with Sonne), and the
-preferred reserve and the floor (below) drove holds and charges. The loads plan on the market's prices: their timing
-is free at a fixed price, so the snapshot holds the placement a switch wants — the advisor's market run is fair without
-re-running PVControl's load search. Scenario runs (5 live snapshots × PV 0/1/3×, Fair vs Spot, a spot day 15 and 25 ct
+preferred reserve and the floor (below) drove holds and charges. The EV plans on the market's prices: its timing is free at a
+fixed price, so the snapshot holds the placement a switch wants — the advisor's market run is fair without re-running
+PVControl's load search. The price limit is checked against the price paid (`SimulationInput.PaidImportPrices`: on the
+market's 45-ct evening the EV was held back by the 40-ct limit while Fair costs 26.5). The warm water stays on the prices
+paid: its planner trades the tank's standby loss against price differences, and heating early for a "cheap" market
+quarter would cost real kWh at the fixed price (its placement under the market run is therefore Fair's). Scenario runs (5 live snapshots × PV 0/1/3×, Fair vs Spot, a spot day 15 and 25 ct
 cheaper): Fair always normal only; Fair won every recorded November day; at −25 ct (40–44 of 96 quarters under Fair) the
 advisor chose the market, the DP charging in the cheapest quarters (Ø 0.17–0.18 €).
 
@@ -1149,8 +1152,11 @@ the plans, taken for ties). Three fixes, one cause each: the floor and band pena
 for the Wh rounding), the DP's steps rounded up like the floor (a step's value never blends the one under it — that
 one carries every later quarter's penalty: 0.35 ct per quarter at 1382.4 → 1382), and a discharge to the floor ends at
 it, not 1 Wh under from the loss's rounding (`NextEnergyWh`; a real deficit in a replay still goes under). After it the
-fixed-price plan costs exactly what it costs without any floor penalty; under the market the plans run normal down to
-the floor instead of holding just above it. Rounding `WhToSoc` half up was considered and rejected: every SoC shown and
+fixed-price plan costs exactly what it costs without any floor penalty. Under the market the effect is small (16 live
+snapshots before/after: the same first-quarter mode in all, mode counts ±0–2 in most, grid cost ±1 ct in 14; the
+holds there are price-driven, not the phantom): the evening runs to the floor and holds there until the cheap night
+charge instead of a top-up to the preferred minimum first (DpDeviationTests' evening: no 21:00 charge to 20 % any more
+— a hold doesn't cost the band, the user's 2026-10-31 rule: a stretch to a cheaper charge may use the reserve). Rounding `WhToSoc` half up was considered and rejected: every SoC shown and
 simulated would shift by up to 0.5 %, and the cliff only moves to x.5 %.
 
 ### The planner became its own library (2026-11)
@@ -1175,8 +1181,8 @@ relative to today's tariff, not one already chosen for tomorrow: the supplier al
 2026-11). It judges 13:00–20:00 only and then keeps its result: the user decides in the evening and wants one
 answer for tomorrow, not one that drifts with the night's forecast; a failure late in the window must not replace it. Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
 472 € (43 switches); with a 0.30-€ threshold 474.5 € in 7 switches — hence `MinSavingEur` 0.30.
-The extra loads are where PVControl planned them — by the market's prices under either tariff (see "Under the fixed
-tariff" above), so neither run needs PVControl's load search again.
+The extra loads are where PVControl planned them — the EV by the market's prices under either tariff, the warm water by
+the price paid (see "Under the fixed tariff" above), so neither run needs PVControl's load search again.
 
 ---
 

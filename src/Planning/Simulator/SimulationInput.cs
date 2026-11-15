@@ -51,6 +51,25 @@ public class SimulationInput
   /// </summary>
   public IReadOnlyList<FixedImportPeriod> FixedImportPeriods { get; init; } = [];
 
+  /// <summary>The import prices of the tariff in force where they differ from <see cref="ImportPrices"/> (the loads planned
+  /// on the market's prices under the fixed tariff, <see cref="ForLoadPlanning"/>): the price limit
+  /// (<see cref="ForceChargeMaxPrice"/>) is checked against what is paid. Null: <see cref="ImportPrices"/>.</summary>
+  public PriceList? PaidImportPrices { get; init; }
+
+  /// <summary>The price paid in a quarter (<see cref="PaidImportPrices"/>, else <see cref="ImportPrices"/>).</summary>
+  /// <param name="t">The quarter's start.</param>
+  /// <param name="price">The price, €/kWh.</param>
+  /// <returns>Whether there is one.</returns>
+  public bool TryGetPaidPrice(DateTime t, out float price) => (PaidImportPrices ?? ImportPrices).TryGetPrice(t, out price);
+
+  /// <summary>The input the loads are placed on under the fixed tariff: the market's import prices (their timing costs
+  /// nothing at a fixed price, so they sit where the market is cheap — where a switch wants them), without the fixed
+  /// tariff's rules; the price limit still checked against the fixed price paid (<see cref="PaidImportPrices"/>).</summary>
+  /// <param name="marketImport">The market's planning prices.</param>
+  /// <returns>The copy.</returns>
+  public SimulationInput ForLoadPlanning(PriceList marketImport) =>
+    Copy(ExtraLoads, marketImport, ExportPrices, PublishedPricesUntil, fixedPeriods: [], paid: PaidImportPrices ?? ImportPrices);
+
   /// <summary>Whether a fixed import tariff is in force in a quarter (<see cref="FixedImportPeriods"/>).</summary>
   /// <param name="t">The quarter's start.</param>
   public bool FixedImportAt(DateTime t)
@@ -437,10 +456,13 @@ public class SimulationInput
   /// <param name="load">Replaces <see cref="LoadPredictionWh"/>; null keeps it.</param>
   /// <param name="mode">Replaces <see cref="CurrentMode"/>; null keeps it.</param>
   /// <param name="fixedPeriods">Replaces <see cref="FixedImportPeriods"/>; null keeps it.</param>
+  /// <param name="paid">Replaces <see cref="PaidImportPrices"/>; null keeps it.</param>
   private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null,
-    Dictionary<DateTime, int>? load = null, InverterState? mode = null, IReadOnlyList<FixedImportPeriod>? fixedPeriods = null) => new()
+    Dictionary<DateTime, int>? load = null, InverterState? mode = null, IReadOnlyList<FixedImportPeriod>? fixedPeriods = null,
+    PriceList? paid = null) => new()
   {
     FixedImportPeriods = fixedPeriods ?? FixedImportPeriods,
+    PaidImportPrices = paid ?? PaidImportPrices,
     BatteryLosses = losses ?? BatteryLosses,
     StartTime = StartTime,
     StartSocPercent = StartSocPercent,

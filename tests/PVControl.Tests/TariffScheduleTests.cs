@@ -236,6 +236,7 @@ public class TariffScheduleTests
     var forLoads = HouseEnergy.LoadPlanningInput(input, market);
     Assert.Empty(forLoads.FixedImportPeriods);
     Assert.Equal(market.Select(p => p.Price), forLoads.ImportPrices.Select(p => p.Price));
+    Assert.Equal(fixedPrices.Select(p => p.Price), forLoads.PaidImportPrices!.Select(p => p.Price));   // the limit at the price paid
     Assert.Same(input, HouseEnergy.LoadPlanningInput(input, null));   // the market already: the plan's own
   }
 }

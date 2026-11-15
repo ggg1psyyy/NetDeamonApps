@@ -476,10 +476,11 @@ namespace NetDeamon.apps.PVControl
       // are used by every FindLoadWindow call to compare against test simulations.
       var baseResult = EnergySimulator.Simulate(baseInput);
 
-      // The loads are placed by the market prices also under the fixed tariff: there every grid quarter costs the
-      // same, so their timing costs nothing, and in the market's cheap quarters they are where a switch to the market
-      // wants them (the tariff advisor compares that). The battery plans with the tariff in force (baseInput). Without
-      // the fixed tariff both are the same — no second simulation.
+      // The schedulable loads (EV) are placed by the market prices also under the fixed tariff: there every grid quarter
+      // costs the same, so their timing costs nothing, and in the market's cheap quarters they are where a switch to the
+      // market wants them (the tariff advisor compares that); the price limit stays at the price paid. The battery and
+      // the warm water plan with the tariff in force (baseInput). Without the fixed tariff both are the same — no
+      // second simulation.
       var marketImport = baseInput.FixedImportPeriods.Count > 0
         ? Prices.ImportPricesForPlanning(ImportTariff.Market, now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium) : null;
       SimulationInput ForLoads(SimulationInput i) => LoadPlanningInput(i, marketImport);
@@ -502,7 +503,7 @@ namespace NetDeamon.apps.PVControl
       if (WarmWater is not null)
       {
         if (WarmWater.ReplanReason(now) is { } wwReason)
-          WarmWater.Replan(loadInput, loadResult, now, wwReason, PricerFor(loadInput, loadResult).Value);
+          WarmWater.Replan(baseInput, baseResult, now, wwReason, PricerFor(baseInput, baseResult).Value);
         var wwLoads = WarmWater.ExtraLoads(now);
         if (wwLoads.Count > 0)
           AddLoads(wwLoads);
@@ -550,13 +551,15 @@ namespace NetDeamon.apps.PVControl
       Prediction_BatterySoC.UpdateData(fullSoC, now);
     }
 
-    /// <summary>The input the loads (EV, warm water) are planned on: the plan's own, or under the fixed tariff the same
-    /// with the market's import prices and no fixed-tariff rules — placed where the market is cheap (their timing costs
-    /// nothing at a fixed price), the battery in those simulations as under the market.</summary>
+    /// <summary>The input the schedulable loads (EV) are planned on: the plan's own, or under the fixed tariff the same
+    /// with the market's import prices and no fixed-tariff rules (<see cref="SimulationInput.ForLoadPlanning"/>) — placed
+    /// where the market is cheap (their timing costs nothing at a fixed price), the price limit at the fixed price paid,
+    /// the battery in those simulations as under the market. Not the warm water: its planner trades the tank's standby
+    /// loss against price differences — heating early for a "cheap" market quarter would cost real kWh at the fixed price.</summary>
     /// <param name="input">The plan's input.</param>
     /// <param name="marketImport">The market's planning prices while the fixed tariff is in force; null: the market already.</param>
     public static SimulationInput LoadPlanningInput(SimulationInput input, PriceList? marketImport) =>
-      marketImport is null ? input : input.WithImportTariff(marketImport, []);
+      marketImport is null ? input : input.ForLoadPlanning(marketImport);
 
     // ── Schedulable load window finding ──────────────────────────────────────────────────────
     // The simulation is the oracle: we run it with candidate ExtraLoad windows and check

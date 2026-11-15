@@ -61,8 +61,9 @@ public class DpLoadPricerTests
   [Fact]
   public void BatteryLoad_InANormalQuarter_CostsTheBatteryNotTheGrid_MoreTheMoreItTakes()
   {
-    // DpDeviationTests' evening: filled to 99 % at night (0.415/0.461), the day at 0.65 runs on the battery, a charge at
-    // 21:00 (0.45) after it.
+    // DpDeviationTests' evening: filled to 99 % at night (0.415/0.461), the day at 0.65 runs on the battery down to the
+    // floor at 21:15, held there for the night (until 2026-11-15 a charge at 21:00 to the preferred 20 % — the floor
+    // cost a phantom euro, see FixedTariffRulesTests).
     var input = DpDeviationTests.Input();
     var pricer = new DpLoadPricer(input, new DpOptions());
     var at = new DateTime(2026, 11, 10, 17, 0, 0);

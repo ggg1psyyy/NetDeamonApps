@@ -39,13 +39,16 @@ public class FixedTariffRulesTests
   [InlineData("2026-11-02_0600")]   // sunny day ahead, battery 90 %
   [InlineData("2026-11-04_1200")]   // midday, 62 %
   [InlineData("2026-11-03_1230")]   // dull day
+  [InlineData("2026-11-07_2300")]   // night at 23 %, an EV from the grid 01:15–04:00
   public void Fixed_NoHoldNoCharge_TheReserveNotKept_MostlyNormal(string name)
   {
     var live = Live(name);
     var plan = BatteryDpPlanner.Plan(AtFair(live));
-    Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.grid_only);
+    // A hold only while a grid-fed load draws (the load's supply: the battery isn't drained by the EV — costless here).
+    Assert.All(plan.Slots.Where(s => s.Mode == InverterModes.grid_only),
+      s => Assert.Contains(live.ExtraLoads, e => e.FromGrid && s.Time >= e.StartTime.AddMinutes(-15) && s.Time < e.EndTime));
     Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.force_charge);
-    Assert.True(plan.Slots.Count(s => s.Mode == InverterModes.normal) >= plan.Slots.Count * 0.9);
+    Assert.True(plan.Slots.Count(s => s.Mode is InverterModes.normal or InverterModes.grid_only) >= plan.Slots.Count * 0.95);
     Assert.All(plan.Slots, s => Assert.True(s.SocPct >= live.AbsoluteMinSocPercent));
   }
 
@@ -140,5 +143,23 @@ public class FixedTariffRulesTests
     int toFloor = input.DischargeAcForWh(floor + 28 - floor);   // what the flows deliver from 28 Wh above the floor
     Assert.Equal(floor, input.NextEnergyWh(floor + 28, 0, toFloor));
     Assert.True(input.NextEnergyWh(floor + 28, 0, 200) < floor - 100);   // more than it has (a replay): under, as the battery
+  }
+
+  [Fact]
+  public void ForLoadPlanning_TheMarketsPrices_TheLimitAtThePricePaid()
+  {
+    // Under Fair the EV is placed on the market's prices, but the 40-ct limit is checked against the 26.54 ct paid: a
+    // 45-ct market evening doesn't hold the EV back (it did before: the gate read the market's prices).
+    var live = (Snap("2026-11-04_1200") with { ForceChargeMaxPrice = 0.40f }).ToInput();
+    var fair = AtFair(live);
+    var market = new PriceList(live.ImportPrices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, 0.45f)).ToList());
+    var forLoads = fair.ForLoadPlanning(market);
+    Assert.Empty(forLoads.FixedImportPeriods);
+    Assert.All(forLoads.ImportPrices, p => Assert.Equal(0.45f, p.Price));
+    var at = live.StartTime.Date.AddHours(19);
+    var ev = new ExtraLoad { Name = "EV", StartTime = at, EndTime = at.AddHours(2), PowerW = 7000, FromGrid = true };
+    Assert.True(EnergySimulator.Simulate(forLoads.WithExtraLoads([ev])).IsGridCheapVs(EnergySimulator.Simulate(forLoads)));
+    var unpaid = fair.WithImportTariff(market, []);   // the market's prices as if paid: over the limit
+    Assert.False(EnergySimulator.Simulate(unpaid.WithExtraLoads([ev])).IsGridCheapVs(EnergySimulator.Simulate(unpaid)));
   }
 }
