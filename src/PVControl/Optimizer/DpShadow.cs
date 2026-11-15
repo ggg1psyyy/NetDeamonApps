@@ -192,6 +192,17 @@ namespace NetDeamon.apps.PVControl.Optimizer
         .ToList();
     }
 
+    /// <summary>The DP plan's mode in the running quarter (the sensor's state): read again every cycle, so it changes at
+    /// the quarter boundary together with the mode the plan steers, not only with the next run (its first quarter).</summary>
+    /// <param name="dp">The DP plan.</param>
+    /// <param name="now">Current time.</param>
+    /// <returns>The mode; null if the plan doesn't cover the running quarter.</returns>
+    public static InverterModes? ModeAt(DpPlan dp, DateTime now)
+    {
+      var quarter = now.RoundToNearestQuarterHour();
+      return dp.Slots.FirstOrDefault(s => s.Time == quarter)?.Mode;
+    }
+
     /// <summary>The attributes of sensor.pv_control_dp_shadow_predicted_soc (sensor.pv_control_info_predicted_soc's format).</summary>
     /// <param name="entries">The predicted SoC (<see cref="PredictedSoc"/>).</param>
     /// <param name="now">Current time.</param>

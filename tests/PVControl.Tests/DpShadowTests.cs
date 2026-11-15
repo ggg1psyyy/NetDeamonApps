@@ -48,6 +48,19 @@ public class DpShadowTests : TestBase, IDisposable
   }
 
   [Fact]
+  public void ModeAt_TheRunningQuarterOfThePlan_NotItsFirst()
+  {
+    static DpSlot Slot(DateTime t, InverterModes m) => new(t, 50, m, false, 0, 0, 0, 0, 0);
+    var t0 = Day.AddHours(16).AddMinutes(45);
+    var plan = new DpPlan([Slot(t0, InverterModes.normal), Slot(t0.AddMinutes(15), InverterModes.grid_only)], new PlanCost(0, 0, 0, 0), 50);
+    Assert.Equal(InverterModes.normal, DpShadow.ModeAt(plan, t0.AddMinutes(14).AddSeconds(59)));
+    // 17:00:00 — the plan computed at 16:59 already says grid_only for the new quarter (live 2026-11-15: the sensor
+    // showed normal until the next run at 17:01 while the mode had switched)
+    Assert.Equal(InverterModes.grid_only, DpShadow.ModeAt(plan, t0.AddMinutes(15)));
+    Assert.Null(DpShadow.ModeAt(plan, t0.AddMinutes(30)));   // beyond the plan: nothing to show
+  }
+
+  [Fact]
   public void Charges_ConsecutiveQuartersAreOneBlock_WithEnergyAndMeanPrice()
   {
     var input = Input(Day.AddHours(22), 30);

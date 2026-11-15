@@ -36,6 +36,8 @@ namespace NetDeamon.apps.PVControl
     /// the DP plans from — its own while it steers, not the greedy plan's.</summary>
     private InverterState? _steeredState;
     private Entity? _dpShadowEntity;
+    // The DP shadow sensor's last state (PublishDpModeAsync): written only when it changes.
+    private volatile string? _shownDpMode;
     private Entity? _dpShadowSocEntity;
     // nullforgiving "!" used to supress CS8618 for now
     private HouseEnergy _house = null!;
@@ -1377,6 +1379,21 @@ namespace NetDeamon.apps.PVControl
       await LearnVppCurveAsync(now);
       await PVCC_EntityManager.SetStateAsync(_battChargeEnabledEntity.EntityId, inverterState.BatteryChargeEnable ? "ON" : "OFF");
       await PVCC_EntityManager.SetStateAsync(_exportAllowedEntity.EntityId, inverterState.ExportAllowed ? "ON" : "OFF");
+      await PublishDpModeAsync(now);
+    }
+
+    /// <summary>The DP shadow sensor's state: the last DP plan's mode in the running quarter (<see cref="Optimizer.DpShadow.ModeAt"/>),
+    /// so it flips at the quarter boundary with sensor.pv_control_mode instead of up to a minute later with the next run.</summary>
+    /// <param name="now">Current time.</param>
+    /// <param name="force">Write even if unchanged (a new run: its attributes were just written).</param>
+    private async Task PublishDpModeAsync(DateTime now, bool force = false)
+    {
+      if (_dpShadowEntity is not { } entity || _dpShadow?.LastPlan is not { } plan || Optimizer.DpShadow.ModeAt(plan, now) is not { } mode)
+        return;
+      var state = mode.ToString();
+      if (!force && state == _shownDpMode) return;
+      _shownDpMode = state;
+      await PVCC_EntityManager.SetStateAsync(entity.EntityId, state);
     }
 
     /// <summary>The schedulable loads' charge_now switches and their plan attributes.</summary>
@@ -1735,8 +1752,8 @@ namespace NetDeamon.apps.PVControl
         {
           if (await shadow.RunAsync(sim, now, running, tariffs) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
           {
-            await PVCC_EntityManager.SetStateAsync(entity.EntityId, report.DpModeNow.ToString());
             await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, Optimizer.DpShadow.Attributes(report));
+            await PublishDpModeAsync(DateTime.Now, force: true);
             var soc = Optimizer.DpShadow.PredictedSoc(plan, todayAndTomorrow, sim);
             await PVCC_EntityManager.SetStateAsync(socEntity.EntityId, plan.Slots[0].SocPct.ToString(CultureInfo.InvariantCulture));
             await PVCC_EntityManager.SetAttributesAsync(socEntity.EntityId, Optimizer.DpShadow.PredictedSocAttributes(soc, now, report.ComputedAt));
