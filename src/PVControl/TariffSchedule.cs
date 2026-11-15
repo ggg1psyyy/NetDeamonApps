@@ -20,30 +20,43 @@ namespace NetDeamon.apps.PVControl
   /// <typeparam name="T">The tariff enum.</typeparam>
   public sealed class TariffSchedule<T> where T : struct, Enum
   {
+    /// <summary>The schedule's state, one immutable value: the select (another thread) changes it by swapping in a new one,
+    /// so a reader that takes it once never sees a choice half written (prices and fixed quarters of one cycle from one state).</summary>
+    private sealed record State(T Active, T Chosen, DateTime? EffectiveFrom, T? Previous, DateTime? Since);
+    private volatile State _s;
+    private readonly object _write = new();
+
     /// <summary>The tariff in force now.</summary>
-    public T Active { get; private set; }
+    public T Active => _s.Active;
     /// <summary>The tariff the user chose (the select's state); equals <see cref="Active"/> when nothing is pending.</summary>
-    public T Chosen { get; private set; }
+    public T Chosen => _s.Chosen;
     /// <summary>When <see cref="Chosen"/> takes over; null when nothing is pending.</summary>
-    public DateTime? EffectiveFrom { get; private set; }
+    public DateTime? EffectiveFrom => _s.EffectiveFrom;
     /// <summary>The tariff before the last switch: quarters before <see cref="Since"/> keep it (the cost log books a
     /// quarter just after it ends — after the roll).</summary>
-    public T? Previous { get; private set; }
+    public T? Previous => _s.Previous;
     /// <summary>When <see cref="Active"/> took over; null if it never switched.</summary>
-    public DateTime? Since { get; private set; }
+    public DateTime? Since => _s.Since;
 
     /// <summary>A tariff with nothing pending.</summary>
     /// <param name="active">The tariff in force.</param>
-    public TariffSchedule(T active) { Active = active; Chosen = active; }
+    public TariffSchedule(T active) => _s = new(active, active, null, null, null);
+
+    private TariffSchedule(State s) => _s = s;
+
+    /// <summary>The schedule as it is now, unaffected by later choices (several reads that must belong together).</summary>
+    public TariffSchedule<T> Copy() => new(_s);
 
     /// <summary>The tariff in force at a time.</summary>
     /// <param name="t">The time (a quarter's start).</param>
     /// <returns><see cref="Chosen"/> from <see cref="EffectiveFrom"/> on, <see cref="Previous"/> before <see cref="Since"/>,
     /// else <see cref="Active"/>.</returns>
-    public T At(DateTime t) =>
-      EffectiveFrom is { } from && t >= from ? Chosen
-      : Since is { } since && t < since && Previous is { } previous ? previous
-      : Active;
+    public T At(DateTime t) => At(_s, t);
+
+    private static T At(State s, DateTime t) =>
+      s.EffectiveFrom is { } from && t >= from ? s.Chosen
+      : s.Since is { } since && t < since && s.Previous is { } previous ? previous
+      : s.Active;
 
     /// <summary>The user chose a tariff: it applies from the next switch time; choosing the active one again drops a
     /// pending change.</summary>
@@ -53,10 +66,13 @@ namespace NetDeamon.apps.PVControl
     /// <returns>True if the schedule changed.</returns>
     public bool Choose(T tariff, DateTime now, TimeSpan switchTime)
     {
-      if (EqualityComparer<T>.Default.Equals(tariff, Chosen)) return false;
-      Chosen = tariff;
-      EffectiveFrom = EqualityComparer<T>.Default.Equals(tariff, Active) ? null : NextSwitch(now, switchTime);
-      return true;
+      lock (_write)
+      {
+        var s = _s;
+        if (EqualityComparer<T>.Default.Equals(tariff, s.Chosen)) return false;
+        _s = s with { Chosen = tariff, EffectiveFrom = EqualityComparer<T>.Default.Equals(tariff, s.Active) ? null : NextSwitch(now, switchTime) };
+        return true;
+      }
     }
 
     /// <summary>The switch time passed: the chosen tariff becomes the active one.</summary>
@@ -64,12 +80,13 @@ namespace NetDeamon.apps.PVControl
     /// <returns>True if it rolled over.</returns>
     public bool Roll(DateTime now)
     {
-      if (EffectiveFrom is not { } from || now < from) return false;
-      Previous = Active;
-      Since = from;
-      Active = Chosen;
-      EffectiveFrom = null;
-      return true;
+      lock (_write)
+      {
+        var s = _s;
+        if (s.EffectiveFrom is not { } from || now < from) return false;
+        _s = new State(s.Chosen, s.Chosen, null, s.Active, from);
+        return true;
+      }
     }
 
     /// <summary>The next switch time after a time.</summary>
@@ -96,19 +113,15 @@ namespace NetDeamon.apps.PVControl
       string? previous = null, string? since = null)
     {
       T c = Parse(chosen) ?? start;
-      var schedule = new TariffSchedule<T>(Parse(active) ?? c);
+      T a = Parse(active) ?? c;
+      var state = new State(a, a, null, null, null);
       if (Parse(previous) is { } p && DateTime.TryParse(since, out var s))
-      {
-        schedule.Previous = p;
-        schedule.Since = s;
-      }
-      if (!EqualityComparer<T>.Default.Equals(c, schedule.Active))
-      {
-        schedule.Chosen = c;
+        state = state with { Previous = p, Since = s };
+      if (!EqualityComparer<T>.Default.Equals(c, a))
         // A pending change without its time (lost attribute): from the next switch, as if chosen now.
-        schedule.EffectiveFrom = DateTime.TryParse(effectiveFrom, out var from) ? from : NextSwitch(now, switchTime);
-        schedule.Roll(now);
-      }
+        state = state with { Chosen = c, EffectiveFrom = DateTime.TryParse(effectiveFrom, out var from) ? from : NextSwitch(now, switchTime) };
+      var schedule = new TariffSchedule<T>(state);
+      schedule.Roll(now);
       return schedule;
     }
 
@@ -125,12 +138,13 @@ namespace NetDeamon.apps.PVControl
     /// <returns>The periods [start, end), in order.</returns>
     public List<(DateTime Start, DateTime End)> PeriodsOf(T tariff, DateTime from, DateTime until)
     {
+      var s = _s;   // one state for every quarter
       var periods = new List<(DateTime, DateTime)>();
       DateTime? open = null;
       var t = TimeRange.Floor(from, TimeRange.SlotMinutes);
       for (; t < until; t = t.AddMinutes(TimeRange.SlotMinutes))
       {
-        bool inForce = EqualityComparer<T>.Default.Equals(At(t), tariff);
+        bool inForce = EqualityComparer<T>.Default.Equals(At(s, t), tariff);
         if (inForce && open is null) open = t;
         else if (!inForce && open is { } o) { periods.Add((o, t)); open = null; }
       }
@@ -145,16 +159,16 @@ namespace NetDeamon.apps.PVControl
     /// itself when no quarter differs.</returns>
     public PriceList Prices(Func<T, PriceList> listFor)
     {
-      var active = listFor(Active);
-      bool pending = EffectiveFrom is not null, past = Since is not null && Previous is not null;
+      var s = _s;   // one state for every quarter
+      var active = listFor(s.Active);
+      bool pending = s.EffectiveFrom is not null, past = s.Since is not null && s.Previous is not null;
       if (!pending && !past) return active;
-      var lists = new Dictionary<T, PriceList> { [Active] = active };
+      var lists = new Dictionary<T, PriceList> { [s.Active] = active };
       PriceList For(T t) => lists.TryGetValue(t, out var l) ? l : lists[t] = listFor(t);
-      var starts = active.Select(p => p.StartTime).ToHashSet();
       // Each tariff's list may cover other quarters (e.g. a fixed price only where the market has slots): take every
       // quarter from the list of its own tariff.
-      var all = new[] { Active, Chosen }.Concat(Previous is { } pr ? [pr] : Array.Empty<T>()).Distinct()
-        .SelectMany(t => For(t).Where(p => EqualityComparer<T>.Default.Equals(At(p.StartTime), t)));
+      var all = new[] { s.Active, s.Chosen }.Concat(s.Previous is { } pr ? [pr] : Array.Empty<T>()).Distinct()
+        .SelectMany(t => For(t).Where(p => EqualityComparer<T>.Default.Equals(At(s, p.StartTime), t)));
       return new PriceList(all.OrderBy(p => p.StartTime).ToList());
     }
   }

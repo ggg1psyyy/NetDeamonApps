@@ -183,11 +183,11 @@ public static class PlanEvaluation
   /// <param name="o">Options (the floor's rate).</param>
   public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o)
   {
-    var last = BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes);
-    // Nothing to keep above the absolute floor under the fixed tariff (not enforced): normal stops there by itself, and
-    // the DP's aim half a step above it would cost a battery that ends exactly at the floor ~13 ct.
-    if (!input.EnforcePreferredSoc && input.FixedImportAt(last)) return 0;
-    int preferred = input.PreferredMinSocAt(last);
+    int preferred = input.PreferredMinSocAt(BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes));
+    // Nothing to keep above the absolute floor (the fixed tariff, or a preferred minimum at the floor; not enforced):
+    // normal stops there by itself, and the DP's aim half a step above it would cost a battery that ends exactly at
+    // the floor ~13 ct.
+    if (!input.EnforcePreferredSoc && preferred <= input.AbsoluteMinSocPercent) return 0;
     return (float)Math.Max(0, preferred - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
   }
 
@@ -396,7 +396,7 @@ public static class BatteryDpPlanner
       for (int s = 0; s < states; s++)
       {
         int wh = WhOf(s);
-        int pct = input.WhToSoc(wh);   // the whole % the simulation and the evaluation use
+        int pct = input.WhToSoc(wh);   // whole %: only to skip charge targets at or below it (penalties: the exact SoC)
         var (band, floor) = PlanEvaluation.Penalty(input, Soc.FromWhExact(wh, input.BatteryCapacityWh), o, InverterModes.normal, times[i]);
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
@@ -610,16 +610,18 @@ public static class BatteryDpPlanner
   /// <see cref="HoldAllowed(SimulationInput, int, int)"/> of a whole quarter, the running one too: the rule is per quarter.
   /// On the running quarter's rest it fell under 1 % a few minutes in and the minute's replan dropped the hold for the
   /// rest of the quarter (live 2026-11-08 07:15–08:45, 14:15–14:45: grid_only at :00, normal 3–7 minutes later, every quarter).
-  /// Never under a fixed import tariff (<see cref="SimulationInput.FixedImportAt"/>) unless the preferred minimum is enforced:
-  /// the grid costs the same later, so keeping the battery for then only loses — normal, the battery stops at its floor by itself.
+  /// Never where the fixed import tariff is in force to the horizon's end (<see cref="SimulationInput.FixedImportUntilEnd"/>)
+  /// unless the preferred minimum is enforced: the grid costs the same later, so keeping the battery for then only loses —
+  /// normal, the battery stops at its floor by itself. Before a switch to the market a hold may pay (a dearer morning).
   /// </summary>
   /// <param name="input">Simulation input (forecasts, capacity, losses, the fixed tariff's quarters).</param>
   /// <param name="slot">Start of the quarter.</param>
   public static bool HoldAllowed(SimulationInput input, DateTime slot)
   {
-    // The same price later: holding the battery can't pay — unless the preferred minimum is enforced: normal runs down to
-    // the absolute minimum, the hold is what keeps the enforced reserve.
-    if (input.FixedImportAt(slot) && !input.EnforcePreferredSoc) return false;
+    // The same price later: holding the battery can't pay — unless the preferred minimum is enforced (normal runs down to
+    // the absolute minimum, the hold is what keeps the enforced reserve), or the market follows within the horizon (a
+    // switch: its quarters may be dearer than the fixed price now).
+    if (!input.EnforcePreferredSoc && input.FixedImportUntilEnd(slot, HorizonEnd(input))) return false;
     var (pv, load, extra) = input.QuarterEnergyWh(slot);
     return HoldAllowed(input, pv, load + extra);
   }

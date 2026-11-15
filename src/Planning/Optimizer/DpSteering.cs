@@ -129,25 +129,27 @@ public static class DpSteering
       double added = Soc.FromWhExact(beforeWh, input.BatteryCapacityWh);
       double atDeadline = at >= 0 ? Soc.FromWhExact(slots[at].EnergyWh, input.BatteryCapacityWh) : dp.EndSocPct;
       int lowBefore = slots.Skip(end).Take(Math.Max(0, (at >= 0 ? at : slots.Count) - end)).Select(x => x.SocPct).DefaultIfEmpty((int)atDeadline).Min();
-      if (atDeadline - added < input.ForceChargeTargetSocPercent && lowBefore - added >= input.GetPreferredMinSoC())
+      if (atDeadline - added < input.ForceChargeTargetSocPercent && lowBefore - added >= input.PreferredMinSocAt(s.Time))
         return ForceChargeReasons.TopUp;
     }
+    // The low until a refill, and when: the preferred minimum is the one in force then (none kept under the fixed tariff).
     int low = dp.EndSocPct;   // the horizon's end, if nothing fills the battery before
+    DateTime lowAt = BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes);
     for (int j = end; j < slots.Count; j++)
     {
       bool refilled = slots[j].Mode == InverterModes.force_charge
         || j > end && slots[j].SocPct > slots[j - 1].SocPct && slots[j - 1].Mode != InverterModes.force_charge;
       if (refilled)
       {
-        low = slots[j].SocPct;
-        for (int k = end; k < j; k++) low = Math.Min(low, slots[k].SocPct);
+        (low, lowAt) = (slots[j].SocPct, slots[j].Time);
+        for (int k = end; k < j; k++) if (slots[k].SocPct < low) (low, lowAt) = (slots[k].SocPct, slots[k].Time);
         break;
       }
-      low = Math.Min(low, slots[j].SocPct);
+      if (slots[j].SocPct < low) (low, lowAt) = (slots[j].SocPct, slots[j].Time);
     }
     double without = low - Soc.FromWhExact(addedWh, input.BatteryCapacityWh);
     if (without < input.AbsoluteMinSocPercent) return ForceChargeReasons.AbsoluteMinimum;
-    if (without < input.GetPreferredMinSoC()) return ForceChargeReasons.PreferredMinimum;
+    if (without < input.PreferredMinSocAt(lowAt)) return ForceChargeReasons.PreferredMinimum;
     return s.Mode == InverterModes.force_charge ? ForceChargeReasons.CheaperThanLater : ForceChargeReasons.SavedForLater;
   }
 

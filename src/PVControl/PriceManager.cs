@@ -174,31 +174,23 @@ namespace NetDeamon.apps.PVControl
     /// (the import market price, or the export's own price series).</summary>
     public PriceList PriceListExport => ExportTariffs.Prices(ExportFor);
 
-    /// <summary>The plan's import prices: <see cref="PriceListImport"/> with estimates for the unpublished quarters
+    /// <summary>The plan's import prices and where the fixed tariff is in force, from one state of the schedule (its
+    /// <see cref="TariffSchedule{T}.Copy"/>: the select changes it on another thread, and two reads could belong to
+    /// different choices). The prices: <see cref="PriceListImport"/> with estimates for the unpublished quarters
     /// (<see cref="PriceList.WithEstimatedPrices"/>). Each tariff is estimated from its own prices before the quarters
     /// are spliced — a market quarter tomorrow is never estimated from today's fixed price; a fixed price is known,
     /// no risk premium.</summary>
-    /// <param name="until">Extend up to here.</param>
-    /// <param name="premium">Risk premium on estimated market prices.</param>
-    public PriceList ImportPricesForPlanning(System.DateTime until, float premium) => ImportPlan(ImportTariffs, until, premium);
-
-    /// <summary><see cref="ImportPricesForPlanning(System.DateTime, float)"/> of one schedule.</summary>
-    private PriceList ImportPlan(TariffSchedule<ImportTariff> schedule, System.DateTime until, float premium) =>
-      schedule.Prices(t => ImportPricesForPlanning(t, until, premium));
-
-    /// <summary>The plan's import prices and where the fixed tariff is in force, from one read of the schedule — the select
-    /// may replace it on another thread between two reads, and prices and rules would then belong to different tariffs.</summary>
     /// <param name="now">Current time.</param>
     /// <param name="until">The plan's end.</param>
     /// <param name="premium">Risk premium on estimated market prices.</param>
     public (PriceList Prices, System.Collections.Generic.List<Simulator.FixedImportPeriod> Fixed) ImportForPlanning(
       System.DateTime now, System.DateTime until, float premium)
     {
-      var schedule = ImportTariffs;   // read once
-      return (ImportPlan(schedule, until, premium), FixedImportPeriods(schedule, now, until));
+      var schedule = ImportTariffs.Copy();
+      return (schedule.Prices(t => ImportPricesForPlanning(t, until, premium)), FixedImportPeriods(schedule, now, until));
     }
 
-    /// <summary>The plan's import prices of one tariff, everywhere (estimated as <see cref="ImportPricesForPlanning(System.DateTime, float)"/>).</summary>
+    /// <summary>The plan's import prices of one tariff, everywhere (estimated as <see cref="ImportForPlanning"/>).</summary>
     /// <param name="tariff">The tariff.</param>
     /// <param name="until">Extend up to here.</param>
     /// <param name="premium">Risk premium on estimated market prices.</param>
@@ -206,7 +198,7 @@ namespace NetDeamon.apps.PVControl
       ImportFor(tariff).WithEstimatedPrices(until, tariff == ImportTariff.Fixed ? 0 : premium);
 
     /// <summary>Where the fixed import tariff is in force over the plan (<see cref="Simulator.SimulationInput.FixedImportPeriods"/>).</summary>
-    /// <param name="schedule">The import tariff schedule (read once by the caller).</param>
+    /// <param name="schedule">The import tariff schedule (the caller's copy).</param>
     /// <param name="now">Current time.</param>
     /// <param name="until">The plan's end.</param>
     /// <remarks>Not unit tested: PriceManager reads PVControl's statics; <see cref="TariffSchedule{T}.PeriodsOf"/> is.</remarks>
@@ -229,7 +221,7 @@ namespace NetDeamon.apps.PVControl
           .Select(t => (t.ToString(), ImportPricesForPlanning(t, until, premium))),
         [ImportTariff.Fixed.ToString()]);
 
-    /// <summary>The plan's export prices, as <see cref="ImportPricesForPlanning"/>.</summary>
+    /// <summary>The plan's export prices, as <see cref="ImportForPlanning"/>'s.</summary>
     /// <param name="until">Extend up to here.</param>
     /// <param name="premium">Risk premium on estimated market prices (negative: an estimate is worth less).</param>
     public PriceList ExportPricesForPlanning(System.DateTime until, float premium) =>

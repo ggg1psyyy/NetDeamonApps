@@ -1109,7 +1109,7 @@ in `PVControl.yaml` (values or HA entities), one place per price.
   (`PriceList.WithEstimatedPrices`). Spliced first, a market tomorrow would be "estimated" from
   today's fixed price (flat), a fixed tomorrow from today's market (with a premium a known price
   doesn't need). So each tariff's full list is estimated on its own, then spliced
-  (`PriceManager.ImportPricesForPlanning`). With nothing pending the result is the old list,
+  (`PriceManager.ImportForPlanning`). With nothing pending the result is the old list,
   quarter for quarter.
 - **The cost log prices the booked quarter, not "now".** It books a quarter just after it ends —
   at 00:00:xx the 23:45 quarter, after the roll already. So the schedule keeps the tariff before the
@@ -1141,6 +1141,14 @@ paid: its planner trades the tank's standby loss against price differences, and 
 quarter would cost real kWh at the fixed price (its placement under the market run is therefore Fair's). Scenario runs (5 live snapshots × PV 0/1/3×, Fair vs Spot, a spot day 15 and 25 ct
 cheaper): Fair always normal only; Fair won every recorded November day; at −25 ct (40–44 of 96 quarters under Fair) the
 advisor chose the market, the DP charging in the cheapest quarters (Ø 0.17–0.18 €).
+
+Two cloud reviews (2026-11-15) sharpened it: the hold ban is only where the fixed tariff runs to the plan's end
+(`FixedImportUntilEnd`) — before a switch to the market a hold at the fixed price can pay for a dearer morning (the
+advisor's market run from Fixed overstated the market's cost without it); the end rule is off wherever nothing is kept
+above the floor (also the market with the preferred minimum at the floor); the charge reasons judge the preferred
+minimum in force at the low (`DpSteering.ReasonOf`); and the tariff schedule's state is one immutable value swapped by
+the select (`TariffSchedule`): it was changed in place on another thread, so a plan could read prices and fixed
+quarters — or a single list — from a half-made choice; a plan takes one `Copy()`.
 
 ### The floor cost a phantom euro (2026-11-15)
 

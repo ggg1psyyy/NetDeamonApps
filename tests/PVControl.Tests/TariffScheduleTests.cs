@@ -243,4 +243,19 @@ public class TariffScheduleTests
     Assert.Equal("PV surplus", HouseEnergy.AtPricesShown(forLoads, "PV surplus"));
     Assert.Equal("earliest 23:00 0.41 €", HouseEnergy.AtPricesShown(input, "earliest 23:00 0.41 €"));
   }
+
+  [Fact]
+  public void Copy_KeepsOneState_AChoiceAfterwardsDoesntReachIt()
+  {
+    // The select changes the schedule on another thread: a plan's prices and fixed quarters come from one copy.
+    var now = new DateTime(2026, 11, 15, 13, 7, 0);
+    var schedule = new TariffSchedule<ImportTariff>(ImportTariff.Market);
+    var copy = schedule.Copy();
+    schedule.Choose(ImportTariff.Fixed, now, TimeSpan.Zero);
+    Assert.Equal(ImportTariff.Market, copy.Chosen);
+    Assert.Null(copy.EffectiveFrom);
+    Assert.Empty(copy.PeriodsOf(ImportTariff.Fixed, now, now.Date.AddDays(2)));
+    Assert.Equal(ImportTariff.Fixed, schedule.Copy().Chosen);
+    Assert.Equal(now.Date.AddDays(1), schedule.Copy().EffectiveFrom);
+  }
 }

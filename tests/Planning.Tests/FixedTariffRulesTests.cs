@@ -167,13 +167,54 @@ public class FixedTariffRulesTests
   }
 
   [Fact]
-  public void EndShortfall_OffUnderTheFixedTariff_OnUnderTheMarket()
+  public void EndShortfall_OffWithNothingAboveTheFloor_OnForAPreferredOrEnforcedReserve()
   {
     var live = Live("2026-11-04_1200");
     int under = live.SocToWh(live.AbsoluteMinSocPercent) - 200;   // under the floor at the end
     Assert.True(PlanEvaluation.EndShortfall(live, under, new DpOptions()) > 1);   // the market: the end rule (preferred 20 %)
     Assert.Equal(0f, PlanEvaluation.EndShortfall(AtFair(live), live.SocToWh(live.AbsoluteMinSocPercent), new DpOptions()));
+    var atFloor = (Snap("2026-11-04_1200") with { PreferredMinSocPercent = live.AbsoluteMinSocPercent }).ToInput();
+    Assert.Equal(0f, PlanEvaluation.EndShortfall(atFloor, live.SocToWh(live.AbsoluteMinSocPercent) - 15, new DpOptions()));   // the market, preferred = floor
     var enforced = AtFair((Snap("2026-11-04_1200") with { EnforcePreferredSoc = true }).ToInput());
     Assert.True(PlanEvaluation.EndShortfall(enforced, enforced.SocToWh(enforced.AbsoluteMinSocPercent), new DpOptions()) > 1);
+  }
+
+  [Fact]
+  public void FixedToday_TheMarketFromMidnight_HoldsAllowedBeforeTheSwitch_ReasonsNotThePreferredMinimum()
+  {
+    // Fair today, the market from midnight, its morning dearer (the advisor's Market run from Fixed, or a switch chosen):
+    // a hold at the fixed price before the switch may pay, so it's allowed there; after it the market's rules.
+    var live = Live("2026-11-03_1230");
+    var midnight = live.StartTime.Date.AddDays(1);
+    var end = BatteryDpPlanner.HorizonEnd(live);
+    var prices = new PriceList(live.ImportPrices.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, p.StartTime < midnight ? Fair : p.Price)).ToList());
+    var input = live.WithPrices(prices, Flat(live.ExportPrices, Sonne), live.PublishedPricesUntil)
+      .WithImportTariff(prices, [new(TimeRange.Floor(live.StartTime, TimeRange.SlotMinutes), midnight)]);
+    Assert.False(input.FixedImportUntilEnd(midnight.AddMinutes(-15), end));
+    Assert.True(BatteryDpPlanner.HoldAllowed(input, midnight.AddHours(-2)) == BatteryDpPlanner.HoldAllowed(live, midnight.AddHours(-2)));
+    Assert.False(BatteryDpPlanner.HoldAllowed(AtFair(live), midnight.AddHours(-2)));   // fixed to the end: no hold
+    Assert.True(AtFair(live).FixedImportUntilEnd(midnight.AddHours(-2), end));
+
+    // It buys at the fixed price before the switch and holds the battery for the dearer market morning.
+    var plan = BatteryDpPlanner.Plan(input);
+    Assert.Contains(plan.Slots, x => x.Mode == InverterModes.force_charge && x.Time < midnight);
+    Assert.Contains(plan.Slots, x => x.Mode == InverterModes.grid_only && x.Time < midnight);
+  }
+
+  [Fact]
+  public void ReasonOf_ALowInTheFixedQuarters_NotThePreferredMinimum()
+  {
+    // A charge (~5 %), then the battery runs down to 18 % — 13 % without it, between the absolute 12 % and the preferred 20 %:
+    // under the market that charge keeps the preferred minimum; under the fixed tariff none is kept there.
+    var live = Live("2026-11-04_1200");
+    var t0 = TimeRange.Floor(live.StartTime, TimeRange.SlotMinutes);
+    int Wh(int pct) => live.SocToWh(pct);
+    var slots = new List<DpSlot> { new(t0, 20, InverterModes.force_charge, false, 30, 600, 0, 600, 0, EnergyWh: Wh(20)) };
+    for (int k = 1; k <= 12; k++)
+      slots.Add(new(t0.AddMinutes(15 * k), 30 - k, InverterModes.normal, false, 0, 0, 0, 0, 120, EnergyWh: Wh(30 - k)));
+    var plan = new DpPlan(slots, new PlanCost(0, 0, 0, 0), 19, EndEnergyWh: Wh(19));   // the low (18 %) in the slots, not at the end
+    var greedy = new Dictionary<DateTime, SimulationSlot>();
+    Assert.Equal(ForceChargeReasons.PreferredMinimum, DpSteering.ReasonOf(plan, 0, live, greedy));
+    Assert.NotEqual(ForceChargeReasons.PreferredMinimum, DpSteering.ReasonOf(plan, 0, AtFair(live), greedy));
   }
 }

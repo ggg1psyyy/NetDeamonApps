@@ -336,6 +336,16 @@ public class SimulationInput
   public int GetPreferredMinSoC() =>
     Math.Max(PreferredMinSocPercent, AbsoluteMinSocPercent);
 
+  /// <summary>Whether the fixed import tariff is in force from a quarter to an end (no market quarter follows before it).</summary>
+  /// <param name="t">The quarter's start.</param>
+  /// <param name="end">The end (the plan's horizon).</param>
+  public bool FixedImportUntilEnd(DateTime t, DateTime end)
+  {
+    foreach (var p in FixedImportPeriods)
+      if (t >= p.Start && t < p.End) return p.End >= end || FixedImportUntilEnd(p.End, end);
+    return false;
+  }
+
   /// <summary>The preferred minimum the DP keeps in a quarter, %: <see cref="GetPreferredMinSoC"/>, except under a fixed
   /// import tariff (<see cref="FixedImportAt"/>) the absolute minimum — a reserve bought at the same price as the energy
   /// it replaces only costs the round trip — unless it's enforced (<see cref="EnforcePreferredSoc"/>: the outage reserve,

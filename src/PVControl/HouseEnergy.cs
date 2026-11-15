@@ -486,13 +486,14 @@ namespace NetDeamon.apps.PVControl
         ? Prices.ImportPricesForPlanning(ImportTariff.Market, now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium) : null;
       SimulationInput ForLoads(SimulationInput i) => LoadPlanningInput(i, marketImport);
       var loadInput = ForLoads(baseInput);
-      var loadResult = marketImport is null ? baseResult : EnergySimulator.Simulate(loadInput);
+      SimulationResult? loadResult = marketImport is null ? baseResult : null;   // simulated when a load search needs it
+      SimulationResult LoadResult() => loadResult ??= EnergySimulator.Simulate(loadInput);
       void AddLoads(IReadOnlyList<ExtraLoad> loads)
       {
         baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. loads]);
         baseResult = EnergySimulator.Simulate(baseInput);
         loadInput = ForLoads(baseInput);
-        loadResult = marketImport is null ? baseResult : EnergySimulator.Simulate(loadInput);
+        loadResult = marketImport is null ? baseResult : null;
       }
 
       // House load staying off its forecast means the plans assumed a load that isn't happening.
@@ -521,7 +522,7 @@ namespace NetDeamon.apps.PVControl
         var reason = ReplanPolicy.Reason(load.LastPlan, snapshot, load.Config.ReplanIntervalMinutes, load.TakeReplanRequest());
         if (reason is not null)
         {
-          FindLoadWindow(load, loadInput, loadResult);
+          FindLoadWindow(load, loadInput, LoadResult());
           load.LastPlan = snapshot with { Latched = IsLatched(load, now) };
           load.LastPlanReason = reason;
         }
