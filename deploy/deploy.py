@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploys the NetDaemon host with its app plugins, and PVControl's Home Assistant files.
 
-  python deploy/deploy.py apps [--dry-run] [--force]   publish, stop the add-on, copy to its folder, start it, verify
+  python deploy/deploy.py apps [--dry-run]           publish, stop the add-on, copy to its folder, start it, verify
   python deploy/deploy.py ha [--write]                  merge src/PVControl/HA into the HA config (dry run without --write)
 
 Machine details come from deploy/local.json (not committed, see local.example.json); the HA URL and token from
@@ -145,7 +145,7 @@ def files_in(folder):
 def git(*args): return subprocess.run(['git', '-C', ROOT] + list(args), capture_output=True, text=True).stdout.strip()
 
 
-def apps(cfg, dry_run, force):
+def apps(cfg, dry_run):
     ha = Ha(cfg)
     if git('status', '--porcelain', '--untracked-files=no'):
         print('warning: uncommitted changes, the version will end in .dirty')
@@ -165,13 +165,6 @@ def apps(cfg, dry_run, force):
         wait = seconds_until_allowed(datetime.datetime.now())
         if not wait: break
         print(now(), f'waiting {wait} s (quarter-boundary writes)'); time.sleep(wait)
-    imp, mode = ha.state(cfg['grid_power_entity']), ha.state(cfg['mode_entity'])
-    grid_w = float(imp['state']) if imp else 0.0
-    import_w = -grid_w if cfg.get('grid_power_import_negative', True) else grid_w
-    print(now(), f"grid import {import_w:.0f} W, mode {mode['state'] if mode else '?'}")
-    if not force and (import_w > cfg.get('max_import_w', 2500) or (mode and mode['state'] in ('force_charge', 'force_charge_grid_only'))):
-        sys.exit('not deployed: high import or a charge is running (the import cap guard would only estimate the running '
-                 'quarter after a restart); retry later or use --force')
 
     target = cfg['addon_folder']
 
@@ -284,12 +277,11 @@ def main():
     sub = p.add_subparsers(dest='cmd', required=True)
     a = sub.add_parser('apps', help='publish, stop, copy, start, verify')
     a.add_argument('--dry-run', action='store_true', help='publish only')
-    a.add_argument('--force', action='store_true', help='deploy even while the import is high')
     h = sub.add_parser('ha', help="merge PVControl's HA files into the HA config")
     h.add_argument('--write', action='store_true', help='apply (otherwise a dry run)')
     args = p.parse_args()
     cfg = load_config()
-    apps(cfg, args.dry_run, args.force) if args.cmd == 'apps' else ha_files(cfg, args.write)
+    apps(cfg, args.dry_run) if args.cmd == 'apps' else ha_files(cfg, args.write)
 
 
 if __name__ == '__main__':

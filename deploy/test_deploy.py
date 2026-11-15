@@ -116,3 +116,14 @@ class BackupTests(unittest.TestCase):
         def start(): raise RuntimeError('HTTP Error 500')
         with self.assertRaises(RuntimeError):
             deploy.retrying(start, sleep=sleep, clock=lambda: t[0], retry_s=30, poll_s=15)
+
+
+class NoLoadCheckTests(unittest.TestCase):
+    """A restart during a force charge or a high import is fine: PVControl seeds the running quarter's import from the
+    meters' history. The deploy neither reads the grid power nor needs a --force to override a refusal."""
+    def test_apps_takes_no_force_and_the_config_no_load_settings(self):
+        import inspect, json
+        self.assertEqual(list(inspect.signature(deploy.apps).parameters), ['cfg', 'dry_run'])
+        example = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local.example.json')))
+        for key in ('grid_power_entity', 'grid_power_import_negative', 'max_import_w', 'mode_entity'):
+            self.assertNotIn(key, example)

@@ -21,8 +21,8 @@ python -m unittest discover deploy      # the script's tests
 - waits while the Supervisor runs a backup or restore (`ha jobs info` over SSH — `ssh` in `local.json`, default
   `root@<HA host>`, the SSH add-on), up to 15 min: during one it refuses to start an add-on, and a stopped NetDaemon
   stayed down; if the jobs can't be read it warns and goes on
-- refuses while the grid import is high or a force charge runs (after a restart the import cap guard only
-  estimates the running quarter); `--force` overrides
+- restarts also during a force charge or a high import: PVControl seeds the running quarter's import from the
+  meters' history and restores the import cap's state
 - stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json` and every DB;
   files the build no longer has are removed from the plugin folders) and starts it again — also if the copy fails;
   never copies over the running add-on (it would rewrite the DLLs under the process); a refused start (a backup began after the check)
