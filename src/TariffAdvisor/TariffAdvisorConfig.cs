@@ -9,13 +9,11 @@ public class TariffAdvisorConfig
   public bool Enabled { get; set; }
   /// <summary>PVControl's DP shadow DB (its snapshots, read only); relative = from this plugin's folder.</summary>
   public string SnapshotDb { get; set; } = "../PVControl/dp_shadow.db";
-  /// <summary>A switch is advised only if it saves at least this much, €.</summary>
+  /// <summary>The other tariff is the result only if it saves at least this much, €.</summary>
   public float MinSavingEur { get; set; } = 0.30f;
-  /// <summary>Time of day (HH:mm) from which the coming day is judged: tomorrow's prices are published ~13:00.</summary>
-  public string StartTime { get; set; } = "13:00";
   /// <summary>An older snapshot isn't judged (PVControl not running), minutes.</summary>
   public int MaxSnapshotAgeMinutes { get; set; } = 30;
 
   /// <summary>The settings of the decision.</summary>
-  public AdviceSettings Settings => new(MinSavingEur, Extensions.TimeOfDayOr(StartTime, TimeSpan.FromHours(13)), MaxSnapshotAgeMinutes);
+  public AdviceSettings Settings => new(MinSavingEur, MaxSnapshotAgeMinutes);
 }

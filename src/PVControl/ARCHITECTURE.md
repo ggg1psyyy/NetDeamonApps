@@ -1143,7 +1143,8 @@ each list's own refill price (a half-full battery is worth less under a cheap fi
 price), and its band/floor penalties aren't paid. So each plan counts its grid cost over the whole horizon — tonight's
 charging already depends on tomorrow's tariff — plus the end energy at today's refill price for both. The advice is
 relative to today's tariff, not one already chosen for tomorrow: the supplier allows one change a day (as far as known,
-2026-11). Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
+2026-11). It judges 13:00–20:00 only and then keeps its result: the user decides in the evening and wants one
+answer for tomorrow, not one that drifts with the night's forecast; a failure late in the window must not replace it. Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
 472 € (43 switches); with a 0.30-€ threshold 474.5 € in 7 switches — hence `MinSavingEur` 0.30.
 Not modelled (yet): the extra loads are where PVControl planned them under today's tariff — rescheduling them per
 candidate would need PVControl's load search, not just the DP. From Market it hardly matters (a flat price doesn't

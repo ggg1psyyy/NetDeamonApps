@@ -17,7 +17,7 @@ namespace NetDeamonApps.Tests;
 /// </summary>
 public class TariffAdviceTests
 {
-  static readonly AdviceSettings Settings = new(0.30f, TimeSpan.FromHours(13), 30);
+  static readonly AdviceSettings Settings = new(0.30f, 30);
 
   static readonly ForecastSnapshot Live = ForecastSnapshot.FromBytes(File.ReadAllBytes(
     Path.Combine(AppContext.BaseDirectory, "Data", "forecast_snapshot_2026-11-02_0600.json.gz")));
@@ -40,10 +40,11 @@ public class TariffAdviceTests
     TariffAdvice.Decide((Quarter, s), Quarter.AddMinutes(1), settings ?? Settings, plan);
 
   [Fact]
-  public void AFixedPriceFarUnderTheMarket_SwitchToFixed()
+  public void AFixedPriceFarUnderTheMarket_Fixed()
   {
     var a = Decide(With(0.10f));
-    Assert.Equal("switch_to_fixed", a.State);
+    Assert.Equal("Fixed", a.State);
+    Assert.Equal("decided", a.Status);
     Assert.Equal(DateOnly.FromDateTime(Tomorrow), a.ForDay);
     Assert.Equal("Market", a.CurrentTariff);
     Assert.True(a.SavingEur > 0.30f, a.Reason);
@@ -51,26 +52,26 @@ public class TariffAdviceTests
   }
 
   [Fact]
-  public void AFixedPriceOverTheMarket_Stay()
+  public void AFixedPriceOverTheMarket_Market()
   {
     var a = Decide(With(0.80f));
-    Assert.Equal("stay", a.State);
+    Assert.Equal("Market", a.State);
     Assert.True(a.SavingEur < 0, a.Reason);
   }
 
   [Fact]
-  public void TodayFixed_TheMarketCheaper_SwitchToMarket()
+  public void TodayFixed_TheMarketCheaper_Market()
   {
     var a = Decide(With(0.80f, active: "Fixed"));
-    Assert.Equal("switch_to_market", a.State);
+    Assert.Equal("Market", a.State);
     Assert.Equal("Fixed", a.CurrentTariff);
   }
 
   [Fact]
-  public void ASavingUnderTheMinimum_Stay()
+  public void ASavingUnderTheMinimum_TodaysTariff()
   {
     var a = Decide(With(0.10f), Settings with { MinSavingEur = 1000 });
-    Assert.Equal("stay", a.State);
+    Assert.Equal("Market", a.State);
     Assert.True(a.SavingEur > 0);
     Assert.Contains("only", a.Reason);
   }
@@ -79,7 +80,7 @@ public class TariffAdviceTests
   public void TheSamePricesUnderBothTariffs_NoSaving()
   {
     var a = Decide(With(0) with { ImportTariffs = new TariffPrices("Market", Tomorrow, new() { ["Market"] = Live.ImportPrices, ["Fixed"] = Live.ImportPrices }) });
-    Assert.Equal("stay", a.State);
+    Assert.Equal("Market", a.State);
     Assert.Equal(0, a.SavingEur!.Value, 4);
   }
 
@@ -109,22 +110,25 @@ public class TariffAdviceTests
     Assert.Equal(2.0f - PlanEvaluation.EndValue(today, 9000, refill), a.CostEur["Fixed"], 4);
   }
 
-  [Fact]
-  public void BeforeTheDaysPricesArePublished_Pending()
+  [Theory]
+  [InlineData("Market")]
+  [InlineData("Fixed")]
+  public void BeforeTheDaysPricesArePublished_TodaysTariff(string today)
   {
-    var a = Decide(With(0.10f, publishedUntil: Tomorrow));
-    Assert.Equal("pending", a.State);
+    var a = Decide(With(0.10f, active: today, publishedUntil: Tomorrow));
+    Assert.Equal(today, a.State);
+    Assert.Equal("pending", a.Status);
     Assert.Null(a.SavingEur);
   }
 
   [Fact]
   public void NoSnapshot_AStaleOne_OneWithoutTariffs_OrOnlyOneTariff_Unavailable()
   {
-    Assert.Equal("unavailable", TariffAdvice.Decide(null, Quarter, Settings).State);
-    Assert.Equal("unavailable", TariffAdvice.Decide((Quarter, With(0.10f)), Quarter.AddMinutes(31), Settings).State);
-    Assert.Equal("unavailable", Decide(Live with { ImportTariffs = null }).State);
+    Assert.Equal("Unavailable", TariffAdvice.Decide(null, Quarter, Settings).State);
+    Assert.Equal("Unavailable", TariffAdvice.Decide((Quarter, With(0.10f)), Quarter.AddMinutes(31), Settings).State);
+    Assert.Equal("Unavailable", Decide(Live with { ImportTariffs = null }).State);
     var onlyMarket = Decide(With(0) with { ImportTariffs = new TariffPrices("Market", Tomorrow, new() { ["Market"] = Live.ImportPrices }) });
-    Assert.Equal("unavailable", onlyMarket.State);
+    Assert.Equal("Unavailable", onlyMarket.State);
     Assert.Contains("Market", onlyMarket.Reason);
   }
 
@@ -132,25 +136,45 @@ public class TariffAdviceTests
   public void AFailure_Unavailable_WithTheError()
   {
     var a = TariffAdvice.Failed(new InvalidOperationException("database is locked"));
-    Assert.Equal("unavailable", a.State);
+    Assert.Equal("Error", a.State);
     Assert.Contains("database is locked", a.Reason);
   }
 
   [Theory]
   [InlineData(12, 59, false)]
   [InlineData(13, 0, true)]
-  [InlineData(23, 59, true)]
+  [InlineData(19, 59, true)]
+  [InlineData(20, 0, false)]
   [InlineData(0, 0, false)]
-  public void JudgedFromTheStartTimeUntilMidnight(int h, int m, bool due) =>
-    Assert.Equal(due, TariffAdvice.Due(Quarter.Date.AddHours(h).AddMinutes(m), Settings));
+  public void JudgedFrom13Until20(int h, int m, bool due) =>
+    Assert.Equal(due, TariffAdvice.Due(Quarter.Date.AddHours(h).AddMinutes(m)));
+
+  static readonly DateTime Evening = Quarter.Date.AddHours(19.75);
+  static readonly Advice Decided = new("Fixed", "decided", "Fixed saves 0.50 €", DateOnly.FromDateTime(Tomorrow));
+
+  [Fact]
+  public void ADecisionStays_AgainstALaterFailureOrStaleSnapshot_ButNotAgainstANewDecision()
+  {
+    Assert.Same(Decided, TariffAdvice.Shown(Decided, TariffAdvice.Failed(new Exception("x")), Evening));
+    Assert.Same(Decided, TariffAdvice.Shown(Decided, new Advice("Unavailable", "unavailable", "stale"), Evening));
+    var market = Decided with { State = "Market" };
+    Assert.Same(market, TariffAdvice.Shown(Decided, market, Evening));
+  }
+
+  [Fact]
+  public void WithoutADecisionForAComingDay_TheNewResultShows()
+  {
+    var error = TariffAdvice.Failed(new Exception("x"));
+    Assert.Same(error, TariffAdvice.Shown(null, error, Evening));
+    var pending = new Advice("Market", "pending", "not published", DateOnly.FromDateTime(Tomorrow.AddDays(1)));
+    Assert.Same(pending, TariffAdvice.Shown(Decided, pending, Tomorrow.AddHours(13)));   // yesterday's decision was for today
+  }
 
   [Fact]
   public void Config_TheYamlsValues()
   {
     var yaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TariffAdvisor.yaml"));
     Assert.Contains("MinSavingEur: 0.30", yaml);
-    Assert.Contains("StartTime: \"13:00\"", yaml);
-    Assert.Equal(TimeSpan.FromHours(13), new TariffAdvisorConfig { StartTime = "later" }.Settings.StartTime);
-    Assert.Equal("switch_to_fixed", TariffAdvice.SwitchTo("Fixed"));
+    Assert.DoesNotContain("StartTime", yaml);   // the window is in code (TariffAdvice.WindowStart/WindowEnd)
   }
 }

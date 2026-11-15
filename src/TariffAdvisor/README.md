@@ -1,12 +1,12 @@
 # TariffAdvisor
 
-Advises which import tariff — `Market` (spot) or `Fixed` — is cheaper for the coming day. It only advises: the switch
+Shows which import tariff — `Market` (spot) or `Fixed` — is cheaper for the coming day. It only advises: the switch
 is made at the supplier and in PVControl's `select.pv_control_import_tariff`.
 
 ## How it decides
 
-From `StartTime` (13:00, when tomorrow's day-ahead prices are out) until midnight it judges PVControl's latest planning
-situation once per quarter: the `ForecastSnapshot` in PVControl's `dp_shadow.db` (read only), which holds the
+Every quarter from 13:00 (tomorrow's day-ahead prices are out) until 20:00 (`TariffAdvice.WindowStart`/`WindowEnd`,
+in code) it judges PVControl's latest planning situation: the `ForecastSnapshot` in PVControl's `dp_shadow.db` (read only), which holds the
 forecasts, the battery, the settings and every import tariff's planning price list.
 
 - The DP planner (`src/Planning`, PVControl's DP options) plans the horizon (now → end of tomorrow) once per tariff:
@@ -23,14 +23,17 @@ forecasts, the battery, the settings and every import tariff's planning price li
 
 | State | Meaning |
 |---|---|
-| `stay` | today's tariff is cheaper, or the other saves less than `MinSavingEur` |
-| `switch_to_fixed` / `switch_to_market` | that tariff saves at least `MinSavingEur` |
-| `pending` | the day's prices aren't published yet |
-| `unavailable` | no or a stale snapshot (`MaxSnapshotAgeMinutes`), or only one tariff can be priced (PVControl.yaml: `ImportPriceFixedValue`/`ImportPriceFixedEntity`) |
+| `Market` / `Fixed` | the tariff for the coming day: the other one if it saves at least `MinSavingEur`, else today's; until the day's prices are published, today's tariff (attribute `status`: `pending`, else `decided`) |
+| `Unavailable` | no or a stale snapshot (`MaxSnapshotAgeMinutes`), or only one tariff can be priced (PVControl.yaml: `ImportPriceFixedValue`/`ImportPriceFixedEntity`) |
+| `Error` | judging failed (the log has the error) |
 
-Attributes: `for_day`, `current_tariff`, `cost_market_eur`, `cost_fixed_eur`, `saving_eur` (the best other tariff
-against today's), `min_saving_eur`, `reason`, `snapshot_at`, `computed_at`. Before 13:00 the last advice (for today)
-stays. `sensor.tariff_advisor_version` shows the deployed build.
+Outside the window the state stays: after 20:00 it is the decision for tomorrow (also through the night and the
+morning, until the next window). Once tomorrow is decided, a later `Unavailable` or `Error` in the window doesn't replace
+it (it is only logged); a new decision does.
+
+Attributes: `status`, `for_day`, `current_tariff`, `cost_market_eur`, `cost_fixed_eur`, `saving_eur` (the best other
+tariff against today's), `min_saving_eur`, `reason`, `snapshot_at`, `computed_at`. `sensor.tariff_advisor_version`
+shows the deployed build.
 
 ## Configuration (`TariffAdvisor.yaml`)
 
@@ -38,8 +41,7 @@ stays. `sensor.tariff_advisor_version` shows the deployed build.
 |---|---|---|
 | `Enabled` | – | `false`: nothing runs |
 | `SnapshotDb` | `../PVControl/dp_shadow.db` | PVControl's DP shadow DB, relative to this plugin's folder |
-| `MinSavingEur` | `0.30` | a switch is advised from this saving on |
-| `StartTime` | `13:00` | judged from this time of day |
+| `MinSavingEur` | `0.30` | the other tariff is the result from this saving on |
 | `MaxSnapshotAgeMinutes` | `30` | an older snapshot isn't judged |
 
 ## Build, test, run

@@ -17,10 +17,10 @@ using NetDeamon.apps.PVControl.Optimizer;
 namespace NetDeamon.apps.TariffAdvisor;
 
 /// <summary>
-/// Tariff advisor: is the other import tariff (Market/Fixed) cheaper for the coming day than today's? From
-/// <see cref="AdviceSettings.StartTime"/> on it judges PVControl's latest snapshot once per quarter
-/// (<see cref="TariffAdvice.Decide"/>) and shows the result in <c>sensor.tariff_advisor_advice</c>. It only advises:
-/// the switch itself is done at the supplier (and in PVControl's select).
+/// Tariff advisor: which import tariff (Market/Fixed) is cheaper for the coming day? From
+/// <see cref="TariffAdvice.WindowStart"/> to <see cref="TariffAdvice.WindowEnd"/> it judges PVControl's latest snapshot
+/// once per quarter (<see cref="TariffAdvice.Decide"/>); <c>sensor.tariff_advisor_advice</c> shows the tariff, which
+/// stays outside the window. It only advises: the switch itself is done at the supplier (and in PVControl's select).
 ///
 /// Independent of PVControl's code and state: it reads PVControl's dp_shadow.db (read only) and plans with the shared
 /// planner (src/Planning). The decision is unit tested; this class is the HA side.
@@ -43,7 +43,7 @@ public sealed class TariffAdvisor : IAsyncInitializable, IAsyncDisposable
   Entity _advice = null!;
   DateTime? _judgedQuarter;
   DateTime _judgedAt = DateTime.MinValue;
-  string? _lastState;
+  Advice? _shown;
 
   /// <summary>Creates the app.</summary>
   /// <param name="ha">HA context.</param>
@@ -68,13 +68,13 @@ public sealed class TariffAdvisor : IAsyncInitializable, IAsyncDisposable
       _logger.LogInformation("Tariff advisor disabled (TariffAdvisor.yaml: Enabled: false) — nothing runs");
       return;
     }
-    _advice = await RegisterAsync("sensor.tariff_advisor_advice", "Tariff Advisor - Advice", "mdi:scale-balance", "pending");
+    _advice = await RegisterAsync("sensor.tariff_advisor_advice", "Tariff Advisor - Advice", "mdi:scale-balance", TariffAdvice.Unavailable);
     var version = await RegisterAsync("sensor.tariff_advisor_version", "Tariff Advisor - Version", "mdi:tag-outline",
       AppVersion.Of(GetType().Assembly), republish: true);
     await _mqtt.SetStateAsync(version.EntityId, AppVersion.Of(GetType().Assembly)).ConfigureAwait(false);
     _timer = _scheduler.SchedulePeriodic(TimeSpan.FromMinutes(1), async () => await CycleAsync());
     await CycleAsync();
-    _logger.LogInformation("Tariff advisor ready: judging from {start} on, snapshots from {db}", _config.StartTime, _dbPath);
+    _logger.LogInformation("Tariff advisor ready: judging {start:hh\\:mm}–{end:hh\\:mm}, snapshots from {db}", TariffAdvice.WindowStart, TariffAdvice.WindowEnd, _dbPath);
   }
 
   /// <summary>Ends the timer (NetDaemon disposes the app on a reload).</summary>
@@ -93,7 +93,7 @@ public sealed class TariffAdvisor : IAsyncInitializable, IAsyncDisposable
     {
       var now = DateTime.Now;
       var settings = _config.Settings;
-      if (!TariffAdvice.Due(now, settings)) return;
+      if (!TariffAdvice.Due(now)) return;   // outside the window the last result (the decision) stays
       var latest = await ForecastSnapshotStore.ReadLatestAsync(_dbPath);
       if (latest?.Quarter == _judgedQuarter && now - _judgedAt < RecheckInterval) return;
       var advice = await Task.Run(() => TariffAdvice.Decide(latest, now, settings));   // two DP runs, ~1 s each
@@ -115,14 +115,21 @@ public sealed class TariffAdvisor : IAsyncInitializable, IAsyncDisposable
     }
   }
 
-  async Task PublishAsync(Advice a, DateTime now)
+  async Task PublishAsync(Advice next, DateTime now)
   {
-    if (a.State != _lastState)
-      _logger.LogInformation("Tariff advice: {state} — {reason}", a.State, a.Reason);
-    _lastState = a.State;
+    var a = TariffAdvice.Shown(_shown, next, now);
+    if (a != next)
+    {
+      _logger.LogWarning("Tariff advice: {state} for {day} stays — {reason}", a.State, a.ForDay, next.Reason);
+      return;   // the decision is shown already
+    }
+    if (a.State != _shown?.State)
+      _logger.LogInformation("Tariff advice: {state} ({status}) — {reason}", a.State, a.Status, a.Reason);
+    _shown = a;
     var attributes = new Dictionary<string, object?>
     {
       ["for_day"] = a.ForDay?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+      ["status"] = a.Status,
       ["current_tariff"] = a.CurrentTariff,
       ["saving_eur"] = a.SavingEur is { } s ? Math.Round(s, 2) : null,
       ["min_saving_eur"] = _config.MinSavingEur,
