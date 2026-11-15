@@ -438,6 +438,7 @@ namespace NetDeamon.apps.PVControl
       // Build the base SimulationInput without extra loads. FindEVChargingWindow will run
       // multiple test simulations to find the valid EV charging window, then we run the
       // final simulation with those EV ExtraLoads included.
+      var importPlan = Prices.ImportForPlanning(now, now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium);   // one tariff schedule
       var baseInput = new SimulationInput
       {
         StartTime = now,
@@ -452,10 +453,10 @@ namespace NetDeamon.apps.PVControl
         // tomorrow's daily pattern instead of nothing (scans) or the flat mean (cost comparisons).
         // A fixed price is known, not estimated: no risk premium on the slots past the published data. Each quarter
         // by the tariff in force then (a tariff chosen for tomorrow already prices tomorrow).
-        ImportPrices = Prices.ImportPricesForPlanning(now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium),
+        ImportPrices = importPlan.Prices,
         ExportPrices = Prices.ExportPricesForPlanning(now.Date.AddDays(2), -PVCC_Config.EstimatedPricePremium),
         // Under the fixed tariff a charge or a hold can't pay and no preferred reserve is kept (unless enforced).
-        FixedImportPeriods = Prices.FixedImportPeriods(now, now.Date.AddDays(2)),
+        FixedImportPeriods = importPlan.Fixed,
         PublishedPricesUntil = Prices.PriceListImport.End,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
         PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), ActualPVEnergyTodayWh(), now),

@@ -180,8 +180,23 @@ namespace NetDeamon.apps.PVControl
     /// no risk premium.</summary>
     /// <param name="until">Extend up to here.</param>
     /// <param name="premium">Risk premium on estimated market prices.</param>
-    public PriceList ImportPricesForPlanning(System.DateTime until, float premium) =>
-      ImportTariffs.Prices(t => ImportPricesForPlanning(t, until, premium));
+    public PriceList ImportPricesForPlanning(System.DateTime until, float premium) => ImportPlan(ImportTariffs, until, premium);
+
+    /// <summary><see cref="ImportPricesForPlanning(System.DateTime, float)"/> of one schedule.</summary>
+    private PriceList ImportPlan(TariffSchedule<ImportTariff> schedule, System.DateTime until, float premium) =>
+      schedule.Prices(t => ImportPricesForPlanning(t, until, premium));
+
+    /// <summary>The plan's import prices and where the fixed tariff is in force, from one read of the schedule — the select
+    /// may replace it on another thread between two reads, and prices and rules would then belong to different tariffs.</summary>
+    /// <param name="now">Current time.</param>
+    /// <param name="until">The plan's end.</param>
+    /// <param name="premium">Risk premium on estimated market prices.</param>
+    public (PriceList Prices, System.Collections.Generic.List<Simulator.FixedImportPeriod> Fixed) ImportForPlanning(
+      System.DateTime now, System.DateTime until, float premium)
+    {
+      var schedule = ImportTariffs;   // read once
+      return (ImportPlan(schedule, until, premium), FixedImportPeriods(schedule, now, until));
+    }
 
     /// <summary>The plan's import prices of one tariff, everywhere (estimated as <see cref="ImportPricesForPlanning(System.DateTime, float)"/>).</summary>
     /// <param name="tariff">The tariff.</param>
@@ -191,10 +206,13 @@ namespace NetDeamon.apps.PVControl
       ImportFor(tariff).WithEstimatedPrices(until, tariff == ImportTariff.Fixed ? 0 : premium);
 
     /// <summary>Where the fixed import tariff is in force over the plan (<see cref="Simulator.SimulationInput.FixedImportPeriods"/>).</summary>
+    /// <param name="schedule">The import tariff schedule (read once by the caller).</param>
     /// <param name="now">Current time.</param>
     /// <param name="until">The plan's end.</param>
-    public System.Collections.Generic.List<Simulator.FixedImportPeriod> FixedImportPeriods(System.DateTime now, System.DateTime until) =>
-      ImportTariffs.PeriodsOf(ImportTariff.Fixed, now, until).Select(p => new Simulator.FixedImportPeriod(p.Start, p.End)).ToList();
+    /// <remarks>Not unit tested: PriceManager reads PVControl's statics; <see cref="TariffSchedule{T}.PeriodsOf"/> is.</remarks>
+    private static System.Collections.Generic.List<Simulator.FixedImportPeriod> FixedImportPeriods(TariffSchedule<ImportTariff> schedule,
+      System.DateTime now, System.DateTime until) =>
+      schedule.PeriodsOf(ImportTariff.Fixed, now, until).Select(p => new Simulator.FixedImportPeriod(p.Start, p.End)).ToList();
 
     /// <summary>Every import tariff's planning list, for the tariff advisor (<see cref="Optimizer.ForecastSnapshot.ImportTariffs"/>):
     /// a tariff that can't be priced (<see cref="TariffSources.ImportMissing"/>, or a fixed price of 0 — e.g. its

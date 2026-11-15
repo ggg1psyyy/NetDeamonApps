@@ -1151,7 +1151,8 @@ between 1383 and 1412 Wh. Under the market the DP had dodged it by holding at 12
 the plans, taken for ties). Three fixes, one cause each: the floor and band penalties from the exact SoC (with 0.01 %
 for the Wh rounding), the DP's steps rounded up like the floor (a step's value never blends the one under it — that
 one carries every later quarter's penalty: 0.35 ct per quarter at 1382.4 → 1382), and a discharge to the floor ends at
-it, not 1 Wh under from the loss's rounding (`NextEnergyWh`; a real deficit in a replay still goes under). After it the
+it, not 1 Wh under from the loss's rounding (`NextEnergyWh`, shared by the greedy simulation and the replays — they end
+at the floor too; a real deficit in a replay still goes under, except one of exactly 1 Wh). After it the
 fixed-price plan costs exactly what it costs without any floor penalty. Under the market the effect is small (16 live
 snapshots before/after: the same first-quarter mode in all, mode counts ±0–2 in most, grid cost ±1 ct in 14; the
 holds there are price-driven, not the phantom): the evening runs to the floor and holds there until the cheap night

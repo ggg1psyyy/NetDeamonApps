@@ -48,7 +48,8 @@ public sealed record TariffPrices(string Active, DateTime NextSwitch, Dictionary
     if (From(from) is not { } prices) return null;
     var end = BatteryDpPlanner.HorizonEnd(input);
     var periods = new List<FixedImportPeriod>();
-    if (IsFixed(Active) && input.StartTime < NextSwitch) periods.Add(new(input.StartTime, NextSwitch));
+    var start = TimeRange.Floor(input.StartTime, TimeRange.SlotMinutes);   // the running quarter too, as the DP's slots
+    if (IsFixed(Active) && start < NextSwitch) periods.Add(new(start, NextSwitch));
     if (IsFixed(from) && NextSwitch < end) periods.Add(new(NextSwitch, end));
     return input.WithImportTariff(prices, periods);
   }

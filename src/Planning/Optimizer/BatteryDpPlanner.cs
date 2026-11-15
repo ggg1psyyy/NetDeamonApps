@@ -183,10 +183,11 @@ public static class PlanEvaluation
   /// <param name="o">Options (the floor's rate).</param>
   public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o)
   {
-    int preferred = input.PreferredMinSocAt(BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes));
-    // Nothing to keep above the absolute floor (fixed tariff, not enforced): normal stops there by itself, and the DP's
-    // aim half a step above it would cost a battery that ends exactly at the floor ~13 ct.
-    if (!input.EnforcePreferredSoc && preferred <= input.AbsoluteMinSocPercent) return 0;
+    var last = BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes);
+    // Nothing to keep above the absolute floor under the fixed tariff (not enforced): normal stops there by itself, and
+    // the DP's aim half a step above it would cost a battery that ends exactly at the floor ~13 ct.
+    if (!input.EnforcePreferredSoc && input.FixedImportAt(last)) return 0;
+    int preferred = input.PreferredMinSocAt(last);
     return (float)Math.Max(0, preferred - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
   }
 

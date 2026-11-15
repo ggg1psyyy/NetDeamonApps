@@ -110,8 +110,11 @@ public class FixedTariffRulesTests
     Assert.Equal([new FixedImportPeriod(next, end)], marketToday.Input(live, "Fixed")!.FixedImportPeriods);
     Assert.Empty(marketToday.Input(live, "Market")!.FixedImportPeriods);
     var fixedToday = marketToday with { Active = "Fixed" };
-    Assert.Equal([new FixedImportPeriod(live.StartTime, next)], fixedToday.Input(live, "Market")!.FixedImportPeriods);
-    Assert.Equal([new FixedImportPeriod(live.StartTime, next), new FixedImportPeriod(next, end)], fixedToday.Input(live, "Fixed")!.FixedImportPeriods);
+    var quarter = TimeRange.Floor(live.StartTime, TimeRange.SlotMinutes);   // the running quarter too (the snapshot starts seconds after it)
+    Assert.NotEqual(quarter, live.StartTime);
+    Assert.Equal([new FixedImportPeriod(quarter, next)], fixedToday.Input(live, "Market")!.FixedImportPeriods);
+    Assert.Equal([new FixedImportPeriod(quarter, next), new FixedImportPeriod(next, end)], fixedToday.Input(live, "Fixed")!.FixedImportPeriods);
+    Assert.False(BatteryDpPlanner.HoldAllowed(fixedToday.Input(live, "Market")!, quarter));
     Assert.Empty((marketToday with { Fixed = null }).Input(live, "Fixed")!.FixedImportPeriods);   // rows before the list: none
 
     var input = fixedToday.Input(live, "Market")!;
@@ -161,5 +164,16 @@ public class FixedTariffRulesTests
     Assert.True(EnergySimulator.Simulate(forLoads.WithExtraLoads([ev])).IsGridCheapVs(EnergySimulator.Simulate(forLoads)));
     var unpaid = fair.WithImportTariff(market, []);   // the market's prices as if paid: over the limit
     Assert.False(EnergySimulator.Simulate(unpaid.WithExtraLoads([ev])).IsGridCheapVs(EnergySimulator.Simulate(unpaid)));
+  }
+
+  [Fact]
+  public void EndShortfall_OffUnderTheFixedTariff_OnUnderTheMarket()
+  {
+    var live = Live("2026-11-04_1200");
+    int under = live.SocToWh(live.AbsoluteMinSocPercent) - 200;   // under the floor at the end
+    Assert.True(PlanEvaluation.EndShortfall(live, under, new DpOptions()) > 1);   // the market: the end rule (preferred 20 %)
+    Assert.Equal(0f, PlanEvaluation.EndShortfall(AtFair(live), live.SocToWh(live.AbsoluteMinSocPercent), new DpOptions()));
+    var enforced = AtFair((Snap("2026-11-04_1200") with { EnforcePreferredSoc = true }).ToInput());
+    Assert.True(PlanEvaluation.EndShortfall(enforced, enforced.SocToWh(enforced.AbsoluteMinSocPercent), new DpOptions()) > 1);
   }
 }
