@@ -118,6 +118,26 @@ namespace NetDeamon.apps.PVControl
     public static T? Parse(string? name) =>
       name is not null && Enum.TryParse(name, ignoreCase: true, out T t) && Enum.IsDefined(t) ? t : null;
 
+    /// <summary>Where a tariff is in force between two times, as periods of whole quarters (<see cref="At"/> per quarter).</summary>
+    /// <param name="tariff">The tariff.</param>
+    /// <param name="from">From here (its quarter).</param>
+    /// <param name="until">Until here (exclusive).</param>
+    /// <returns>The periods [start, end), in order.</returns>
+    public List<(DateTime Start, DateTime End)> PeriodsOf(T tariff, DateTime from, DateTime until)
+    {
+      var periods = new List<(DateTime, DateTime)>();
+      DateTime? open = null;
+      var t = TimeRange.Floor(from, TimeRange.SlotMinutes);
+      for (; t < until; t = t.AddMinutes(TimeRange.SlotMinutes))
+      {
+        bool inForce = EqualityComparer<T>.Default.Equals(At(t), tariff);
+        if (inForce && open is null) open = t;
+        else if (!inForce && open is { } o) { periods.Add((o, t)); open = null; }
+      }
+      if (open is { } last) periods.Add((last, t));
+      return periods;
+    }
+
     /// <summary>A price list for the schedule: each quarter from the list of the tariff in force then. Each list is
     /// complete for its tariff (including its estimated quarters), so an estimate never mixes two tariffs.</summary>
     /// <param name="listFor">The prices as if a tariff applied everywhere.</param>

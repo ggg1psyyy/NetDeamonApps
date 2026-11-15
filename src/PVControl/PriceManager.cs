@@ -187,8 +187,14 @@ namespace NetDeamon.apps.PVControl
     /// <param name="tariff">The tariff.</param>
     /// <param name="until">Extend up to here.</param>
     /// <param name="premium">Risk premium on estimated market prices.</param>
-    private PriceList ImportPricesForPlanning(ImportTariff tariff, System.DateTime until, float premium) =>
+    public PriceList ImportPricesForPlanning(ImportTariff tariff, System.DateTime until, float premium) =>
       ImportFor(tariff).WithEstimatedPrices(until, tariff == ImportTariff.Fixed ? 0 : premium);
+
+    /// <summary>Where the fixed import tariff is in force over the plan (<see cref="Simulator.SimulationInput.FixedImportPeriods"/>).</summary>
+    /// <param name="now">Current time.</param>
+    /// <param name="until">The plan's end.</param>
+    public System.Collections.Generic.List<Simulator.FixedImportPeriod> FixedImportPeriods(System.DateTime now, System.DateTime until) =>
+      ImportTariffs.PeriodsOf(ImportTariff.Fixed, now, until).Select(p => new Simulator.FixedImportPeriod(p.Start, p.End)).ToList();
 
     /// <summary>Every import tariff's planning list, for the tariff advisor (<see cref="Optimizer.ForecastSnapshot.ImportTariffs"/>):
     /// a tariff that can't be priced (<see cref="TariffSources.ImportMissing"/>, or a fixed price of 0 — e.g. its
@@ -202,7 +208,8 @@ namespace NetDeamon.apps.PVControl
         Enum.GetValues<ImportTariff>()
           .Where(t => TariffSources.ImportMissing(t, PVCC_Config.ImportPriceFixedEntity is not null, PVCC_Config.ImportPriceFixedValue) is null
             && (t != ImportTariff.Fixed || FixedImportNetto > 0))
-          .Select(t => (t.ToString(), ImportPricesForPlanning(t, until, premium))));
+          .Select(t => (t.ToString(), ImportPricesForPlanning(t, until, premium))),
+        [ImportTariff.Fixed.ToString()]);
 
     /// <summary>The plan's export prices, as <see cref="ImportPricesForPlanning"/>.</summary>
     /// <param name="until">Extend up to here.</param>

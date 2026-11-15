@@ -133,10 +133,11 @@ public class DpKeepModeTests
   [Fact]
   public void AtATenthOfACent_ItSwitched()
   {
-    // 21:05 at 46 %: the hold 0.2 ct cheaper for the night — normal running, grid_only chosen.
+    // 21:05 at 46 %: the hold 0.2 ct cheaper for the night — normal running, grid_only chosen without the hysteresis
+    // (live at 0.1 ct; since the floor is judged exactly — 2026-11-15 — the current quarter's gap is under 0.1 ct).
     var snap = Snap("forecast_snapshot_2026-11-10_2100.json.gz");
     var input = (snap with { StartTime = snap.StartTime.AddMinutes(5), StartSocPercent = 46, CurrentMode = InverterModes.normal }).ToInput();
-    Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input, new DpOptions(KeepModeEur: 0.001f)).Slots[0].Mode);
+    Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input, new DpOptions(KeepModeEur: 0)).Slots[0].Mode);
     Assert.Equal(InverterModes.normal, BatteryDpPlanner.Plan(input, new DpOptions()).Slots[0].Mode);
   }
 }

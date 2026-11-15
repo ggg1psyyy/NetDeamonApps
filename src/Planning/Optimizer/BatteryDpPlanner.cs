@@ -136,17 +136,26 @@ public sealed class DpRestCost
 /// </summary>
 public static class PlanEvaluation
 {
+  /// <summary>Within this of the floor, % (about 1 Wh): at it, not under it (rounding to whole Wh).</summary>
+  public const double FloorTolerancePct = 0.01;
+
   /// <summary>Penalty of a quarter starting at a SoC, €.</summary>
   /// <param name="input">Simulation input (floors).</param>
-  /// <param name="socPct">SoC at the slot start, % (fractional in the DP's grid).</param>
+  /// <param name="socPct">SoC at the slot start, % — exact (fractional), never whole %: the floor's energy lies between two
+  /// of the DP's energy steps, and the lower one rounded down to 11 % paid the floor's full 1 € for a battery exactly at
+  /// the floor (live 2026-11-04: the DP held or charged at 12–13 % to dodge it).</param>
   /// <param name="o">Options.</param>
   /// <param name="mode">The quarter's mode: the band only costs where the battery delivers (<see cref="BandApplies"/>).</param>
-  public static (float Band, float Floor) Penalty(SimulationInput input, double socPct, DpOptions o, InverterModes mode)
+  /// <param name="slot">The quarter's start (the preferred minimum in force then, <see cref="SimulationInput.PreferredMinSocAt"/>).</param>
+  public static (float Band, float Floor) Penalty(SimulationInput input, double socPct, DpOptions o, InverterModes mode, DateTime slot)
   {
     int floor = input.GetEffectiveMinSoC();
-    float band = BandApplies(mode) && !input.EnforcePreferredSoc && socPct < input.GetPreferredMinSoC()
-      ? (float)(input.GetPreferredMinSoC() - socPct) * o.BandPenaltyPerPctQuarter : 0f;
-    float under = socPct < floor ? (float)(floor - socPct) * o.FloorPenaltyPerPctQuarter : 0f;
+    int preferred = input.PreferredMinSocAt(slot);
+    float band = BandApplies(mode) && !input.EnforcePreferredSoc && socPct < preferred
+      ? (float)(preferred - socPct) * o.BandPenaltyPerPctQuarter : 0f;
+    // The floor's energy rounds up to whole Wh (12 % of 11520 Wh = 1383) and the DP's energy step at it rounds down
+    // (1382): a battery within that rounding is at the floor, not under it.
+    float under = socPct < floor - FloorTolerancePct ? (float)(floor - socPct) * o.FloorPenaltyPerPctQuarter : 0f;
     return (band, under);
   }
 
@@ -172,8 +181,14 @@ public static class PlanEvaluation
   /// <param name="input">Simulation input.</param>
   /// <param name="endEnergyWh">Energy at the end, Wh.</param>
   /// <param name="o">Options (the floor's rate).</param>
-  public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o) =>
-    (float)Math.Max(0, input.GetPreferredMinSoC() - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
+  public static float EndShortfall(SimulationInput input, int endEnergyWh, DpOptions o)
+  {
+    int preferred = input.PreferredMinSocAt(BatteryDpPlanner.HorizonEnd(input).AddMinutes(-TimeRange.SlotMinutes));
+    // Nothing to keep above the absolute floor (fixed tariff, not enforced): normal stops there by itself, and the DP's
+    // aim half a step above it would cost a battery that ends exactly at the floor ~13 ct.
+    if (!input.EnforcePreferredSoc && preferred <= input.AbsoluteMinSocPercent) return 0;
+    return (float)Math.Max(0, preferred - Soc.FromWhExact(endEnergyWh, input.BatteryCapacityWh)) * o.FloorPenaltyPerPctQuarter;
+  }
 
   /// <summary>Value of the energy in the battery at the end, €: above the hard floor, what it delivers (after the discharge
   /// loss — the charge loss is in the flows) at <see cref="RefillPrice"/>.</summary>
@@ -213,7 +228,7 @@ public static class PlanEvaluation
     foreach (var s in slots)
     {
       grid += input.GridCostOf(s.Time, s.ImportWh, s.ExportWh);
-      var (b, f) = Penalty(input, s.SocPct, o, s.Mode);
+      var (b, f) = Penalty(input, s.SocPct, o, s.Mode, s.Time);
       band += b;
       floor += f;
     }
@@ -280,7 +295,7 @@ public static class PlanEvaluation
   {
     var input = result.Input.WithBatteryLosses();
     var path = result.EnergyPathWh(input);
-    var slots = result.Slots.Select((s, i) => (s.Time, (double)input.WhToSoc(path[i]), s.GridImportWh, s.GridExportWh, s.State.Mode));
+    var slots = result.Slots.Select((s, i) => (s.Time, Soc.FromWhExact(path[i], input.BatteryCapacityWh), s.GridImportWh, s.GridExportWh, s.State.Mode));
     var index = result.Slots.Select((s, i) => (s.Time, i)).ToDictionary(x => x.Time, x => x.i);
     return Evaluate(input, slots, path[^1], o, t => index.TryGetValue(t, out int i) ? path[i] : null);
   }
@@ -324,7 +339,10 @@ public static class BatteryDpPlanner
     int states = 100 * o.StatesPerPercent + 1;
     double whPerState = WhPerState(input, o);
     int StateOf(int wh) => Math.Clamp((int)Math.Round(wh / whPerState), 0, states - 1);
-    int WhOf(int state) => (int)Math.Round(state * whPerState);
+    // Rounded up, like the floor's energy (SocToWh): a step's whole Wh never lie under its exact position, so its value
+    // never blends the step below — at the floor that one carries the floor penalty of every quarter after, and step 48
+    // at 1382 Wh (exactly 1382.4) took 0.35 ct per quarter from it (live 2026-11-04 under a fixed price).
+    int WhOf(int state) => (int)Math.Ceiling(state * whPerState - 1e-9);
     float ValueAt(float[] v, int wh) => Interpolate(v, wh, whPerState);
 
     var energies = times.Select(t => input.SlotEnergyWh(t)).ToArray();
@@ -378,7 +396,7 @@ public static class BatteryDpPlanner
       {
         int wh = WhOf(s);
         int pct = input.WhToSoc(wh);   // the whole % the simulation and the evaluation use
-        var (band, floor) = PlanEvaluation.Penalty(input, pct, o, InverterModes.normal);
+        var (band, floor) = PlanEvaluation.Penalty(input, Soc.FromWhExact(wh, input.BatteryCapacityWh), o, InverterModes.normal, times[i]);
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
         var normalFlows = Flows(input, actions[0], pv, totalLoad, wh, fractions[i]);
@@ -441,7 +459,7 @@ public static class BatteryDpPlanner
       return (list, energy);
     }
     PlanCost CostOf((List<DpSlot> Slots, int End) f) =>
-      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, (double)s.SocPct, s.GridImportWh, s.GridExportWh, s.Mode)), f.End, o,
+      PlanEvaluation.Evaluate(input, f.Slots.Select(s => (s.Time, Soc.FromWhExact(s.EnergyWh, input.BatteryCapacityWh), s.GridImportWh, s.GridExportWh, s.Mode)), f.End, o,
         t => f.Slots.FirstOrDefault(s => s.Time == t)?.EnergyWh);
 
     var plan = Forward(null);
@@ -466,7 +484,7 @@ public static class BatteryDpPlanner
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
           var (ch, dis, imp, exp) = Flows(input, a, pv0, load0 + extra0, startEnergy, fractions[0]);
           if (!holdOk && StoresUnderOnePercent(input, ch, fractions[0])) continue;
-          var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(startEnergy), o, a.Mode);
+          var (band, floor) = PlanEvaluation.Penalty(input, Soc.FromWhExact(startEnergy, input.BatteryCapacityWh), o, a.Mode, times[0]);
           float rest = input.GridCostOf(times[0], imp, exp) + DeviationEur(o, ch, dis, normalFlows0) + band + floor
             + RestAt(0, a, input.NextEnergyWh(startEnergy, ch, dis));
           if (rest < bestRest - o.TieEur) (best, bestRest) = (a, rest);
@@ -517,7 +535,7 @@ public static class BatteryDpPlanner
     float Rest(Action a)
     {
       var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, energy, fraction);
-      var (band, floor) = PlanEvaluation.Penalty(input, input.WhToSoc(energy), o, a.Mode);
+      var (band, floor) = PlanEvaluation.Penalty(input, Soc.FromWhExact(energy, input.BatteryCapacityWh), o, a.Mode, time);
       return input.GridCostOf(time, imp, exp) + DeviationEur(o, ch, dis, normalFlows) + band + floor
         + restValue(a, input.NextEnergyWh(energy, ch, dis));
     }
@@ -591,11 +609,16 @@ public static class BatteryDpPlanner
   /// <see cref="HoldAllowed(SimulationInput, int, int)"/> of a whole quarter, the running one too: the rule is per quarter.
   /// On the running quarter's rest it fell under 1 % a few minutes in and the minute's replan dropped the hold for the
   /// rest of the quarter (live 2026-11-08 07:15–08:45, 14:15–14:45: grid_only at :00, normal 3–7 minutes later, every quarter).
+  /// Never under a fixed import tariff (<see cref="SimulationInput.FixedImportAt"/>) unless the preferred minimum is enforced:
+  /// the grid costs the same later, so keeping the battery for then only loses — normal, the battery stops at its floor by itself.
   /// </summary>
-  /// <param name="input">Simulation input (forecasts, capacity, losses).</param>
+  /// <param name="input">Simulation input (forecasts, capacity, losses, the fixed tariff's quarters).</param>
   /// <param name="slot">Start of the quarter.</param>
   public static bool HoldAllowed(SimulationInput input, DateTime slot)
   {
+    // The same price later: holding the battery can't pay — unless the preferred minimum is enforced: normal runs down to
+    // the absolute minimum, the hold is what keeps the enforced reserve.
+    if (input.FixedImportAt(slot) && !input.EnforcePreferredSoc) return false;
     var (pv, load, extra) = input.QuarterEnergyWh(slot);
     return HoldAllowed(input, pv, load + extra);
   }

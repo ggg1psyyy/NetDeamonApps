@@ -15,7 +15,7 @@ A `ForecastSnapshot` holds everything a `SimulationInput` needs (`ToInput()`), p
 with and every import tariff's price list (`TariffPrices`: the active tariff, the next switch time, a list per tariff
 that can be priced). PVControl saves one per quarter in its `dp_shadow.db` (`ForecastSnapshotStore`: write, read all,
 read the latest — read-only, waiting while the writer holds the DB), so another plugin can plan "what if" on
-PVControl's current situation without PVControl's code. The store is the library's only I/O.
+PVControl's current situation without PVControl's code. The store is the library's only I/O. A candidate tariff's input — its prices and where a fixed tariff is in force (`SimulationInput.FixedImportPeriods`: no holds, no preferred reserve unless enforced) — comes from `TariffPrices.Input`.
 
 **Shipped by the host**, like Common: the host references it, a plugin compiles against it only
 (`Private="false" ExcludeAssets="runtime"`), so one copy is loaded for all plugins. Namespaces are PVControl's

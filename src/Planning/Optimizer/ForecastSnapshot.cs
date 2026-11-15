@@ -21,14 +21,37 @@ public sealed record LoadPoint(string Name, int Priority, DateTime Start, DateTi
 /// <param name="Active">The tariff in force at the snapshot (its name).</param>
 /// <param name="NextSwitch">When a tariff chosen now would take effect.</param>
 /// <param name="Import">Gross import prices per tariff name; a tariff without its price setting is missing.</param>
-public sealed record TariffPrices(string Active, DateTime NextSwitch, Dictionary<string, List<PricePoint>> Import)
+/// <param name="Fixed">The tariffs with a fixed price (their quarters get the fixed-tariff rules,
+/// <see cref="SimulationInput.FixedImportPeriods"/>); null (rows before them): none.</param>
+public sealed record TariffPrices(string Active, DateTime NextSwitch, Dictionary<string, List<PricePoint>> Import, List<string>? Fixed = null)
 {
   /// <summary>The tariffs' lists of a snapshot.</summary>
   /// <param name="active">The tariff in force.</param>
   /// <param name="nextSwitch">The next switch time.</param>
   /// <param name="lists">Each priceable tariff's list.</param>
-  public static TariffPrices Of(string active, DateTime nextSwitch, IEnumerable<(string Tariff, PriceList Prices)> lists) =>
-    new(active, nextSwitch, lists.ToDictionary(l => l.Tariff, l => l.Prices.Select(p => new PricePoint(p.StartTime, p.EndTime, p.Price)).ToList()));
+  /// <param name="fixedTariffs">The tariffs with a fixed price.</param>
+  public static TariffPrices Of(string active, DateTime nextSwitch, IEnumerable<(string Tariff, PriceList Prices)> lists, IEnumerable<string>? fixedTariffs = null) =>
+    new(active, nextSwitch, lists.ToDictionary(l => l.Tariff, l => l.Prices.Select(p => new PricePoint(p.StartTime, p.EndTime, p.Price)).ToList()),
+      fixedTariffs?.ToList());
+
+  /// <summary>Whether a tariff has a fixed price.</summary>
+  /// <param name="tariff">The tariff's name.</param>
+  public bool IsFixed(string tariff) => Fixed?.Contains(tariff) == true;
+
+  /// <summary>The planning input with today's tariff until <see cref="NextSwitch"/> and another one from it: its prices
+  /// (<see cref="From"/>) and where a fixed tariff is in force (<see cref="SimulationInput.FixedImportPeriods"/>).</summary>
+  /// <param name="input">The snapshot's input.</param>
+  /// <param name="from">The tariff from the switch on.</param>
+  /// <returns>The input; null if a tariff has no list.</returns>
+  public SimulationInput? Input(SimulationInput input, string from)
+  {
+    if (From(from) is not { } prices) return null;
+    var end = BatteryDpPlanner.HorizonEnd(input);
+    var periods = new List<FixedImportPeriod>();
+    if (IsFixed(Active) && input.StartTime < NextSwitch) periods.Add(new(input.StartTime, NextSwitch));
+    if (IsFixed(from) && NextSwitch < end) periods.Add(new(NextSwitch, end));
+    return input.WithImportTariff(prices, periods);
+  }
 
   /// <summary>Import prices with today's tariff until <see cref="NextSwitch"/> and another one from it.</summary>
   /// <param name="from">The tariff from the switch on.</param>
@@ -53,7 +76,8 @@ public sealed record ForecastSnapshot(
   DateTime? PublishedPricesUntil, InverterModes CurrentMode, ForceChargeReasons CurrentReason, bool CurrentBulk,
   bool CurrentChargeEnable, bool CurrentExportAllowed, List<PricePoint> ImportPrices, List<PricePoint> ExportPrices,
   Dictionary<DateTime, int> Pv, Dictionary<DateTime, int> Load, List<LoadPoint> ExtraLoads, int[]? VppW,
-  DateTime? TopUpArmedAt = null, TimeOnly? TopUpReadyBy = null, TariffPrices? ImportTariffs = null, DpOptions? Options = null)
+  DateTime? TopUpArmedAt = null, TimeOnly? TopUpReadyBy = null, TariffPrices? ImportTariffs = null, DpOptions? Options = null,
+  List<FixedImportPeriod>? FixedImportPeriods = null)
 {
   /// <summary>The snapshot of an input.</summary>
   /// <param name="i">The simulation input.</param>
@@ -67,7 +91,8 @@ public sealed record ForecastSnapshot(
     i.ExportPrices.Select(p => new PricePoint(p.StartTime, p.EndTime, p.Price)).ToList(),
     new Dictionary<DateTime, int>(i.PVPredictionWh), new Dictionary<DateTime, int>(i.LoadPredictionWh),
     i.ExtraLoads.Select(e => new LoadPoint(e.Name, e.Priority, e.StartTime, e.EndTime, e.PowerW, e.FromGrid)).ToList(),
-    i.VppChargePowerW is { } vpp ? Enumerable.Range(0, 101).Select(vpp).ToArray() : null, i.TopUpArmedAt, i.TopUpReadyBy);
+    i.VppChargePowerW is { } vpp ? Enumerable.Range(0, 101).Select(vpp).ToArray() : null, i.TopUpArmedAt, i.TopUpReadyBy,
+    FixedImportPeriods: i.FixedImportPeriods.Count > 0 ? i.FixedImportPeriods.ToList() : null);
 
   /// <summary>The simulation input again.</summary>
   public SimulationInput ToInput()
@@ -80,7 +105,7 @@ public sealed record ForecastSnapshot(
       EnforcePreferredSoc = EnforcePreferredSoc, MaxChargePowerAmps = MaxChargePowerAmps, InverterEfficiency = InverterEfficiency,
       ChargeVoltageV = ChargeVoltageV, MaxGridImportW = MaxGridImportW, ForceChargeMaxPrice = ForceChargeMaxPrice,
       ForceChargeTargetSocPercent = ForceChargeTargetSocPercent, EnableCheapForceCharge = EnableCheapForceCharge,
-      TopUpArmedAt = TopUpArmedAt, TopUpReadyBy = TopUpReadyBy,
+      TopUpArmedAt = TopUpArmedAt, TopUpReadyBy = TopUpReadyBy, FixedImportPeriods = FixedImportPeriods ?? [],
       OpportunisticDischarge = OpportunisticDischarge, PublishedPricesUntil = PublishedPricesUntil,
       CurrentMode = new InverterState(CurrentMode, CurrentReason, CurrentChargeEnable, CurrentExportAllowed) { Bulk = CurrentBulk },
       ImportPrices = ImportPrices.Select(p => new PriceTableEntry(p.Start, p.End, p.Price)).ToList(),

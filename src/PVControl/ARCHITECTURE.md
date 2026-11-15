@@ -1124,6 +1124,35 @@ in `PVControl.yaml` (values or HA entities), one place per price.
 on (found 2026-11-12 in a Fair vs Spot backtest: a 100× jump between consecutive rows). The old rows stay as they are;
 whatever reads prices from before that time converts them (÷ 100).
 
+### Under the fixed tariff: normal, the loads by the market (2026-11-15)
+
+The user's rules for Fair (fixed import, Sonne feed-in also flat): never a grid charge, the battery only for the house,
+mostly normal; the preferred reserve only when enforced (the outage reserve). Planning "as if market" and forcing the
+output to normal was rejected: the plan would assume charges that never happen (SoC forecast, the loads' battery
+supply, the advisor's snapshot) and the floor's protection would be gone. Instead the DP plans with the real flat price
+and two rules where the fixed tariff is in force — no hold, the preferred minimum = the absolute one unless enforced —
+and with those the price alone leaves nothing to buy. Probing first showed why rules were needed at all: at a flat
+import with the old market feed-in (up to 0.33 € > 0.2654) the DP bought to sell (correct, but gone with Sonne), and the
+preferred reserve and the floor (below) drove holds and charges. The loads plan on the market's prices: their timing
+is free at a fixed price, so the snapshot holds the placement a switch wants — the advisor's market run is fair without
+re-running PVControl's load search. Scenario runs (5 live snapshots × PV 0/1/3×, Fair vs Spot, a spot day 15 and 25 ct
+cheaper): Fair always normal only; Fair won every recorded November day; at −25 ct (40–44 of 96 quarters under Fair) the
+advisor chose the market, the DP charging in the cheapest quarters (Ø 0.17–0.18 €).
+
+### The floor cost a phantom euro (2026-11-15)
+
+Found while banning holds under the fixed tariff — the DP then charged at 66–75 % in the evening at a flat price. 12 %
+of 11520 Wh is 1382.4 Wh: the floor rounded up to 1383, the DP's energy step there down to 1382, and the floor penalty
+judged whole % — 1382 Wh was 11 %, a full 1 €/quarter for a battery exactly at the floor; its rest table jumped ~1 €
+between 1383 and 1412 Wh. Under the market the DP had dodged it by holding at 12–13 % (the "grid_only at the floor" in
+the plans, taken for ties). Three fixes, one cause each: the floor and band penalties from the exact SoC (with 0.01 %
+for the Wh rounding), the DP's steps rounded up like the floor (a step's value never blends the one under it — that
+one carries every later quarter's penalty: 0.35 ct per quarter at 1382.4 → 1382), and a discharge to the floor ends at
+it, not 1 Wh under from the loss's rounding (`NextEnergyWh`; a real deficit in a replay still goes under). After it the
+fixed-price plan costs exactly what it costs without any floor penalty; under the market the plans run normal down to
+the floor instead of holding just above it. Rounding `WhToSoc` half up was considered and rejected: every SoC shown and
+simulated would shift by up to 0.5 %, and the cliff only moves to x.5 %.
+
 ### The planner became its own library (2026-11)
 
 A tariff advisor (Fair vs Spot for tomorrow) has to plan "what if" with the same DP — as its own plugin, without a
@@ -1146,9 +1175,8 @@ relative to today's tariff, not one already chosen for tomorrow: the supplier al
 2026-11). It judges 13:00–20:00 only and then keeps its result: the user decides in the evening and wants one
 answer for tomorrow, not one that drifts with the night's forecast; a failure late in the window must not replace it. Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
 472 € (43 switches); with a 0.30-€ threshold 474.5 € in 7 switches — hence `MinSavingEur` 0.30.
-Not modelled (yet): the extra loads are where PVControl planned them under today's tariff — rescheduling them per
-candidate would need PVControl's load search, not just the DP. From Market it hardly matters (a flat price doesn't
-care when a load runs); from Fixed the loads sit in arbitrary spot hours, which overstates the Market cost.
+The extra loads are where PVControl planned them — by the market's prices under either tariff (see "Under the fixed
+tariff" above), so neither run needs PVControl's load search again.
 
 ---
 

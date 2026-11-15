@@ -204,4 +204,38 @@ public class TariffScheduleTests
     foreach (var old in new[] { "ImportPriceFixed:", "ExportPriceSameAsImport:", "ExportPriceFixed:" })
       Assert.DoesNotContain(lines, l => l.StartsWith(old));
   }
+
+  [Fact]
+  public void PeriodsOf_WhereATariffIsInForce_WholeQuarters()
+  {
+    var now = new DateTime(2026, 11, 15, 13, 7, 0);
+    var until = now.Date.AddDays(2);
+    var schedule = new TariffSchedule<ImportTariff>(ImportTariff.Market);
+    Assert.Empty(schedule.PeriodsOf(ImportTariff.Fixed, now, until));
+    Assert.Equal([(now.Date.AddHours(13), until)], schedule.PeriodsOf(ImportTariff.Market, now, until));
+    schedule.Choose(ImportTariff.Fixed, now, TimeSpan.Zero);   // from midnight
+    Assert.Equal([(now.Date.AddDays(1), until)], schedule.PeriodsOf(ImportTariff.Fixed, now, until));
+    Assert.Equal([(now.Date.AddHours(13), now.Date.AddDays(1))], schedule.PeriodsOf(ImportTariff.Market, now, until));
+  }
+
+  [Fact]
+  public void LoadPlanningInput_UnderTheFixedTariff_TheMarketsPricesWithoutTheFixedRules()
+  {
+    var start = new DateTime(2026, 11, 15, 13, 0, 0);
+    var slots = Enumerable.Range(0, 44).Select(q => start.AddMinutes(15 * q)).ToList();
+    var fixedPrices = new PriceList(slots.Select(t => new PriceTableEntry(t, t.AddMinutes(15), 0.2654f)).ToList());
+    var market = new PriceList(slots.Select(t => new PriceTableEntry(t, t.AddMinutes(15), 0.20f + 0.01f * (t.Hour % 5))).ToList());
+    var input = new NetDeamon.apps.PVControl.Simulator.SimulationInput
+    {
+      StartTime = start, StartSocPercent = 50, BatteryCapacityWh = 11520, AbsoluteMinSocPercent = 12, PreferredMinSocPercent = 20,
+      EnforcePreferredSoc = false, MaxChargePowerAmps = 30, InverterEfficiency = 0.95f, ImportPrices = fixedPrices, ExportPrices = fixedPrices,
+      LoadPredictionWh = [], PVPredictionWh = [], ExtraLoads = [], EnableCheapForceCharge = true, OpportunisticDischarge = false,
+      ForceChargeMaxPrice = 0.3f, ForceChargeTargetSocPercent = 90, CurrentMode = new InverterState(InverterModes.normal),
+      FixedImportPeriods = [new(start, start.AddDays(1))],
+    };
+    var forLoads = HouseEnergy.LoadPlanningInput(input, market);
+    Assert.Empty(forLoads.FixedImportPeriods);
+    Assert.Equal(market.Select(p => p.Price), forLoads.ImportPrices.Select(p => p.Price));
+    Assert.Same(input, HouseEnergy.LoadPlanningInput(input, null));   // the market already: the plan's own
+  }
 }

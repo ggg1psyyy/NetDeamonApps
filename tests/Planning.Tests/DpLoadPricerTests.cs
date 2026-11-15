@@ -74,7 +74,7 @@ public class DpLoadPricerTests
       var load = new ExtraLoad { Name = "Warm water", StartTime = at, EndTime = at.AddHours(wh / 2000.0), PowerW = 2000 };
       var replay = pricer.Replay([load]);
       Assert.All(replay.With, q => Assert.Equal(InverterModes.normal, q.Mode));
-      Assert.Equal(0f, replay.GridEur, 3);   // the battery covers it
+      Assert.InRange(replay.GridEur, 0f, 0.015f);   // the battery covers it (a 2-kWh load reaches the floor at its end: ~15 Wh)
       return replay.CostEur / (wh / 1000f);
     }
     // A little: the DP's marginal value there (a bit more charged at 21:00) — its own number, not the quarter's 0.65.

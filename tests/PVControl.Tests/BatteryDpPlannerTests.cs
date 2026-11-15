@@ -212,7 +212,8 @@ public class BatteryDpPlannerTests : TestBase
     // the battery delivers: holding or a top-up keep it).
     var strict = BatteryDpPlanner.Plan(EveningPeak(30), new DpOptions(BandPenaltyPerPctQuarter: 0.005f));
     var strictEvening = strict.Slots.Where(s => s.Time < Day.AddHours(23)).ToList();
-    Assert.True(strictEvening.Min(s => s.SocPct) >= 19, string.Join(", ", strictEvening.Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%")));
+    // (≥ 18 %: the band costs from the exact SoC — a quarter at 19.9 % pays 0.1 %, not the whole % it paid rounded down)
+    Assert.True(strictEvening.Min(s => s.SocPct) >= 18, string.Join(", ", strictEvening.Select(s => $"{s.Time:HH:mm} {s.Mode} {s.SocPct}%")));
   }
 
   [Fact]
@@ -550,8 +551,8 @@ public class BatteryDpPlannerTests : TestBase
     Assert.True(PlanEvaluation.BandApplies(InverterModes.normal));
     Assert.False(PlanEvaluation.BandApplies(InverterModes.grid_only));
     Assert.False(PlanEvaluation.BandApplies(InverterModes.force_charge));
-    Assert.Equal(0f, PlanEvaluation.Penalty(input, 10, O, InverterModes.grid_only).Band);
-    Assert.Equal(5 * O.BandPenaltyPerPctQuarter, PlanEvaluation.Penalty(input, 10, O, InverterModes.normal).Band, 6);
+    Assert.Equal(0f, PlanEvaluation.Penalty(input, 10, O, InverterModes.grid_only, input.StartTime).Band);
+    Assert.Equal(5 * O.BandPenaltyPerPctQuarter, PlanEvaluation.Penalty(input, 10, O, InverterModes.normal, input.StartTime).Band, 6);
   }
 
   // ── Charge start cost (DpOptions.ChargeStartEur) ──

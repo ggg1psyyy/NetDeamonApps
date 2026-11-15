@@ -454,6 +454,8 @@ namespace NetDeamon.apps.PVControl
         // by the tariff in force then (a tariff chosen for tomorrow already prices tomorrow).
         ImportPrices = Prices.ImportPricesForPlanning(now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium),
         ExportPrices = Prices.ExportPricesForPlanning(now.Date.AddDays(2), -PVCC_Config.EstimatedPricePremium),
+        // Under the fixed tariff a charge or a hold can't pay and no preferred reserve is kept (unless enforced).
+        FixedImportPeriods = Prices.FixedImportPeriods(now, now.Date.AddDays(2)),
         PublishedPricesUntil = Prices.PriceListImport.End,
         LoadPredictionWh = Prediction_Load.TodayAndTomorrow,
         PVPredictionWh = NetEnergyPrediction.WithRunningAvgCorrection(Prediction_PV.TodayAndTomorrow, _pvRunningAverage.GetAverage(), ActualPVEnergyTodayWh(), now),
@@ -474,6 +476,23 @@ namespace NetDeamon.apps.PVControl
       // are used by every FindLoadWindow call to compare against test simulations.
       var baseResult = EnergySimulator.Simulate(baseInput);
 
+      // The loads are placed by the market prices also under the fixed tariff: there every grid quarter costs the
+      // same, so their timing costs nothing, and in the market's cheap quarters they are where a switch to the market
+      // wants them (the tariff advisor compares that). The battery plans with the tariff in force (baseInput). Without
+      // the fixed tariff both are the same — no second simulation.
+      var marketImport = baseInput.FixedImportPeriods.Count > 0
+        ? Prices.ImportPricesForPlanning(ImportTariff.Market, now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium) : null;
+      SimulationInput ForLoads(SimulationInput i) => LoadPlanningInput(i, marketImport);
+      var loadInput = ForLoads(baseInput);
+      var loadResult = marketImport is null ? baseResult : EnergySimulator.Simulate(loadInput);
+      void AddLoads(IReadOnlyList<ExtraLoad> loads)
+      {
+        baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. loads]);
+        baseResult = EnergySimulator.Simulate(baseInput);
+        loadInput = ForLoads(baseInput);
+        loadResult = marketImport is null ? baseResult : EnergySimulator.Simulate(loadInput);
+      }
+
       // House load staying off its forecast means the plans assumed a load that isn't happening.
       if (_loadDeviation.Observe(now, CurrentAverageHouseLoad, Energy.SlotW(Prediction_Load.CurrentValue)))
         RequestReplan("house load off forecast");
@@ -483,13 +502,10 @@ namespace NetDeamon.apps.PVControl
       if (WarmWater is not null)
       {
         if (WarmWater.ReplanReason(now) is { } wwReason)
-          WarmWater.Replan(baseInput, baseResult, now, wwReason, PricerFor(baseInput, baseResult).Value);
+          WarmWater.Replan(loadInput, loadResult, now, wwReason, PricerFor(loadInput, loadResult).Value);
         var wwLoads = WarmWater.ExtraLoads(now);
         if (wwLoads.Count > 0)
-        {
-          baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. wwLoads]);
-          baseResult = EnergySimulator.Simulate(baseInput);
-        }
+          AddLoads(wwLoads);
       }
 
       // Find valid window for each schedulable load (highest priority first) — only when it's
@@ -503,15 +519,12 @@ namespace NetDeamon.apps.PVControl
         var reason = ReplanPolicy.Reason(load.LastPlan, snapshot, load.Config.ReplanIntervalMinutes, load.TakeReplanRequest());
         if (reason is not null)
         {
-          FindLoadWindow(load, baseInput, baseResult);
+          FindLoadWindow(load, loadInput, loadResult);
           load.LastPlan = snapshot with { Latched = IsLatched(load, now) };
           load.LastPlanReason = reason;
         }
         if (load.ExtraLoads.Count > 0)
-        {
-          baseInput = baseInput.WithExtraLoads([.. baseInput.ExtraLoads, .. load.ExtraLoads]);
-          baseResult = EnergySimulator.Simulate(baseInput);
-        }
+          AddLoads(load.ExtraLoads);
       }
 
       // The final simulation: the base with every load. Its running slot is the plan's decision now,
@@ -536,6 +549,14 @@ namespace NetDeamon.apps.PVControl
 
       Prediction_BatterySoC.UpdateData(fullSoC, now);
     }
+
+    /// <summary>The input the loads (EV, warm water) are planned on: the plan's own, or under the fixed tariff the same
+    /// with the market's import prices and no fixed-tariff rules — placed where the market is cheap (their timing costs
+    /// nothing at a fixed price), the battery in those simulations as under the market.</summary>
+    /// <param name="input">The plan's input.</param>
+    /// <param name="marketImport">The market's planning prices while the fixed tariff is in force; null: the market already.</param>
+    public static SimulationInput LoadPlanningInput(SimulationInput input, PriceList? marketImport) =>
+      marketImport is null ? input : input.WithImportTariff(marketImport, []);
 
     // ── Schedulable load window finding ──────────────────────────────────────────────────────
     // The simulation is the oracle: we run it with candidate ExtraLoad windows and check

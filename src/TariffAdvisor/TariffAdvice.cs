@@ -98,7 +98,7 @@ public static class TariffAdvice
 
     plan ??= (input, options) => BatteryDpPlanner.Plan(input, options);
     var input = snap.ToInput();
-    SimulationInput With(string tariff) => input.WithPrices(t.From(tariff)!, input.ExportPrices, input.PublishedPricesUntil);
+    SimulationInput With(string tariff) => t.Input(input, tariff)!;   // its prices and, where fixed, the fixed-tariff rules
     var today = With(t.Active);
     float refill = PlanEvaluation.RefillPrice(today);
     var cost = t.Import.Keys.ToDictionary(k => k, k => CostOf(plan(k == t.Active ? today : With(k), snap.Options), today, refill));

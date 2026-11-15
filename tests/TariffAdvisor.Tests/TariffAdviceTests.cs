@@ -33,7 +33,7 @@ public class TariffAdviceTests
     {
       ["Market"] = Live.ImportPrices,
       ["Fixed"] = Live.ImportPrices.Select(p => p with { Price = fixedPrice }).ToList(),
-    }),
+    }, ["Fixed"]),
   };
 
   static Advice Decide(ForecastSnapshot s, AdviceSettings? settings = null, Func<SimulationInput, DpOptions?, DpPlan>? plan = null) =>
@@ -94,6 +94,9 @@ public class TariffAdviceTests
     Assert.Equal(today[0], today[1]);
     Assert.Contains(seen, i => i.ImportPrices.Where(p => p.StartTime >= Tomorrow).All(p => p.Price == 0.10f));
     Assert.All(seen, i => Assert.Equal(Live.ExportPrices.Count, i.ExportPrices.Count()));   // export unchanged
+    // The fixed tariff's rules where it's in force: only the Fixed run, from the switch on.
+    Assert.Single(seen, i => i.FixedImportAt(Tomorrow) && !i.FixedImportAt(Tomorrow.AddMinutes(-15)));
+    Assert.Single(seen, i => i.FixedImportPeriods.Count == 0);
   }
 
   static DpPlan Plan(float gridCost, int endWh) => new([], new PlanCost(gridCost, 5, 5, 3), 0, EndEnergyWh: endWh);

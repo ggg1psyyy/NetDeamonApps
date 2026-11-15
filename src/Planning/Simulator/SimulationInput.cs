@@ -6,6 +6,11 @@ using NetDeamon.apps.PVControl.Optimizer;
 
 namespace NetDeamon.apps.PVControl.Simulator;
 
+/// <summary>Quarters priced at a fixed import tariff, [Start, End).</summary>
+/// <param name="Start">First quarter.</param>
+/// <param name="End">End (exclusive).</param>
+public sealed record FixedImportPeriod(DateTime Start, DateTime End);
+
 /// <summary>Everything <see cref="EnergySimulator.Simulate"/> needs, free of HA types (filled by HouseEnergy.RunSimulation, or by tests).</summary>
 public class SimulationInput
 {
@@ -38,6 +43,22 @@ public class SimulationInput
 
   /// <summary>End of the published prices (later ones are estimates); null = all published (tests).</summary>
   public DateTime? PublishedPricesUntil { get; init; }
+
+  /// <summary>
+  /// Where a fixed import tariff is in force (its price is the same in every quarter): there a grid charge or a hold
+  /// can't pay, so the DP doesn't hold the battery (<see cref="Optimizer.BatteryDpPlanner.HoldAllowed(SimulationInput, DateTime)"/>)
+  /// and keeps no preferred reserve unless it's enforced (<see cref="PreferredMinSocAt"/>). Empty: the market everywhere.
+  /// </summary>
+  public IReadOnlyList<FixedImportPeriod> FixedImportPeriods { get; init; } = [];
+
+  /// <summary>Whether a fixed import tariff is in force in a quarter (<see cref="FixedImportPeriods"/>).</summary>
+  /// <param name="t">The quarter's start.</param>
+  public bool FixedImportAt(DateTime t)
+  {
+    foreach (var p in FixedImportPeriods)
+      if (t >= p.Start && t < p.End) return true;
+    return false;
+  }
 
   /// <summary>How far price-driven plans that commit to a slot (EV sessions) may look.</summary>
   /// <param name="fallback">Used when there are no prices at all.</param>
@@ -178,12 +199,23 @@ public class SimulationInput
   /// <param name="storedWh">Energy available in the battery, Wh.</param>
   public int DischargeAcForWh(int storedWh) => storedWh <= 0 ? 0 : (int)(storedWh * FlowEfficiency + 1e-9);
 
-  /// <summary>Battery energy after a slot's flows, Wh (clamped to 0…capacity).</summary>
+  /// <summary>
+  /// Battery energy after a slot's flows, Wh (clamped to 0…capacity). A discharge down to the absolute minimum ends at it,
+  /// not 1 Wh under: the flows discharge down to it (<see cref="DischargeAcForWh"/>), only the loss's rounding up
+  /// (<see cref="DrawnWh"/>) took the last Wh — and under the floor the DP's interpolation drew from the energy step below
+  /// it, which carries the floor penalty of every quarter after. Only that rounding: a replay of other flows (lossless)
+  /// still runs under the floor as the real battery would.
+  /// </summary>
   /// <param name="energyWh">Energy in the battery, Wh.</param>
   /// <param name="chargeAcWh">AC charge of the slot, Wh.</param>
   /// <param name="dischargeAcWh">AC discharge of the slot, Wh.</param>
-  public int NextEnergyWh(int energyWh, int chargeAcWh, int dischargeAcWh) =>
-    Math.Clamp(energyWh + StoredWh(chargeAcWh) - DrawnWh(dischargeAcWh), 0, BatteryCapacityWh);
+  public int NextEnergyWh(int energyWh, int chargeAcWh, int dischargeAcWh)
+  {
+    int next = energyWh + StoredWh(chargeAcWh) - DrawnWh(dischargeAcWh);
+    int floor = SocToWh(AbsoluteMinSocPercent);
+    if (energyWh >= floor && next < floor && floor - next <= 1) next = floor;   // the loss's rounding, not a deficit
+    return Math.Clamp(next, 0, BatteryCapacityWh);
+  }
 
   private PriceList? _quarterHourlyImportPrices;
   /// <summary><see cref="ImportPrices"/> as 15-min entries (built once per input).</summary>
@@ -285,6 +317,14 @@ public class SimulationInput
   public int GetPreferredMinSoC() =>
     Math.Max(PreferredMinSocPercent, AbsoluteMinSocPercent);
 
+  /// <summary>The preferred minimum the DP keeps in a quarter, %: <see cref="GetPreferredMinSoC"/>, except under a fixed
+  /// import tariff (<see cref="FixedImportAt"/>) the absolute minimum — a reserve bought at the same price as the energy
+  /// it replaces only costs the round trip — unless it's enforced (<see cref="EnforcePreferredSoc"/>: the outage reserve,
+  /// the hard floor then).</summary>
+  /// <param name="t">The quarter's start.</param>
+  public int PreferredMinSocAt(DateTime t) =>
+    !EnforcePreferredSoc && FixedImportAt(t) ? AbsoluteMinSocPercent : GetPreferredMinSoC();
+
   /// <summary>The floor in force (<see cref="EnforcePreferredSoc"/>), %.</summary>
   public int GetEffectiveMinSoC() =>
     EnforcePreferredSoc ? PreferredMinSocPercent : AbsoluteMinSocPercent;
@@ -380,6 +420,13 @@ public class SimulationInput
   public SimulationInput WithPrices(PriceList import, PriceList export, DateTime? publishedUntil = null) =>
     Copy(ExtraLoads, import, export, publishedUntil);
 
+  /// <summary>Copy with other import prices and where a fixed tariff is in force (another tariff's plan).</summary>
+  /// <param name="import">Replaces <see cref="ImportPrices"/>.</param>
+  /// <param name="fixedPeriods">Replaces <see cref="FixedImportPeriods"/>.</param>
+  /// <returns>The copy.</returns>
+  public SimulationInput WithImportTariff(PriceList import, IReadOnlyList<FixedImportPeriod> fixedPeriods) =>
+    Copy(ExtraLoads, import, ExportPrices, PublishedPricesUntil, fixedPeriods: fixedPeriods);
+
   /// <summary>Copy with the given loads and prices, everything else the same.</summary>
   /// <param name="loads">Extra loads.</param>
   /// <param name="import">Import prices.</param>
@@ -389,9 +436,11 @@ public class SimulationInput
   /// <param name="losses">Replaces <see cref="BatteryLosses"/>; null keeps it.</param>
   /// <param name="load">Replaces <see cref="LoadPredictionWh"/>; null keeps it.</param>
   /// <param name="mode">Replaces <see cref="CurrentMode"/>; null keeps it.</param>
+  /// <param name="fixedPeriods">Replaces <see cref="FixedImportPeriods"/>; null keeps it.</param>
   private SimulationInput Copy(List<ExtraLoad> loads, PriceList import, PriceList export, DateTime? publishedUntil, bool? losses = null,
-    Dictionary<DateTime, int>? load = null, InverterState? mode = null) => new()
+    Dictionary<DateTime, int>? load = null, InverterState? mode = null, IReadOnlyList<FixedImportPeriod>? fixedPeriods = null) => new()
   {
+    FixedImportPeriods = fixedPeriods ?? FixedImportPeriods,
     BatteryLosses = losses ?? BatteryLosses,
     StartTime = StartTime,
     StartSocPercent = StartSocPercent,
