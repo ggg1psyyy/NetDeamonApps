@@ -93,4 +93,13 @@ public class TariffPricesTests : IDisposable
     Assert.Equal(41, latest.StartSocPercent);
     Assert.Equal(3, (await ForecastSnapshotStore.ReadAllAsync(_db)).Count);
   }
+
+  [Fact]
+  public void DpPlan_EndEnergy_TheExactEnergyItsEndSocRoundsDown()
+  {
+    var input = Snap("forecast_snapshot_2026-11-02_0600.json.gz").ToInput();
+    var plan = BatteryDpPlanner.Plan(input);
+    Assert.True(plan.EndEnergyWh > 0);
+    Assert.Equal(plan.EndSocPct, input.WhToSoc(plan.EndEnergyWh));
+  }
 }

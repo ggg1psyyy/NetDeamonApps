@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The TariffAdvisor plugin (src/TariffAdvisor); the planner at run time (the plugin only compiles against it). -->
+  <Import Project="..\Tests.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TariffAdvisor\TariffAdvisor.csproj" />
+    <ProjectReference Include="..\..\src\Planning\Planning.csproj" />
+  </ItemGroup>
+
+  <!-- A live snapshot of the planner tests (one copy). -->
+  <ItemGroup>
+    <None Include="..\Planning.Tests\Data\forecast_snapshot_2026-11-02_0600.json.gz" Link="Data\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

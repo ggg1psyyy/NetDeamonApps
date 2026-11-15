@@ -148,8 +148,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Time of day ("HH:mm") a tariff chosen in HA takes effect (the supplier switches the contract then).</summary>
     public string TariffSwitchTime { get; set; } = "00:00";
     /// <summary><see cref="TariffSwitchTime"/> parsed; midnight if it can't be read.</summary>
-    public TimeSpan TariffSwitchTimeOfDay => TimeSpan.TryParse(TariffSwitchTime, System.Globalization.CultureInfo.InvariantCulture, out var t)
-      && t >= TimeSpan.Zero && t < TimeSpan.FromDays(1) ? t : TimeSpan.Zero;
+    public TimeSpan TariffSwitchTimeOfDay => Extensions.TimeOfDayOr(TariffSwitchTime, TimeSpan.Zero);
     /// <summary>Entity with the fixed energy price, netto (without tax and network fee), €/kWh; takes priority over the value.</summary>
     public Entity? ImportPriceFixedEntity { get; set; }
     /// <summary>Fixed energy price, netto (without tax and network fee), €/kWh.</summary>

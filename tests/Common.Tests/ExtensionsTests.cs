@@ -100,4 +100,15 @@ public class ParseExtensionsTests
     Assert.Equal(ok, Extensions.TryParseEnum(state, out Mode mode));
     Assert.Equal(expected, mode);
   }
+
+  [Theory]
+  [InlineData("00:00", 0)]
+  [InlineData("13:00", 13)]
+  [InlineData("06:30", 6.5)]
+  [InlineData("24:00", -1)]
+  [InlineData("25:00", -1)]
+  [InlineData("later", -1)]
+  [InlineData(null, -1)]
+  public void TimeOfDayOr_ATimeOfDay_ElseTheFallback(string? text, double hours) =>
+    Assert.Equal(hours < 0 ? TimeSpan.FromMinutes(1) : TimeSpan.FromHours(hours), Extensions.TimeOfDayOr(text, TimeSpan.FromMinutes(1)));
 }

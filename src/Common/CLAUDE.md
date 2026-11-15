@@ -16,7 +16,7 @@ every plugin — run all tests (`dotnet test`).
 ## Tests (`tests/Common.Tests`)
 
 - **`CalculationsTests`** — the shared basic calculations (`src/Common/Calculations.cs`: time ranges/slot fractions/rounding, W/Wh/minutes, SoC/Wh and charge time, weighted and age-weighted means, hour-of-day profile, least squares, step functions), `DayLog`, `ToSlug` (`GetNextQuarterHour` is PVControl's: `PVControlExtensionsTests`); `Energy.CounterIncrease` (every meter's increase — DataLogger, import cap, cost tracker; resets and glitches) is pinned in `HistoryTimestampTests`
-- **`ExtensionsTests`**, **`ParseExtensionsTests`** — `GetUnitMultiplicator`, `TryParseToIntList`, `TryParseEnum` (any enum by name)
+- **`ExtensionsTests`**, **`ParseExtensionsTests`** — `GetUnitMultiplicator`, `TryParseToIntList`, `TryParseEnum` (any enum by name), `TimeOfDayOr` (a configured "HH:mm" — PVControl's `TariffSwitchTime`, TariffAdvisor's `StartTime`)
 - **`AppFilesTests`** — `AppFiles.PathOf`: a relative location lies in the app assembly's (plugin) folder, an absolute one stays
 - **`AppVersionTests`** — build version from git (`Directory.Build.targets` target `GitVersion`, `src/Common/AppVersion.cs`: each app reads its own assembly), shown as `sensor.pv_control_version` / `sensor.heating_test_version` and the devices' firmware
 - **`AppSubscriptionsTests`** — every subscription ended once on dispose, one added afterwards at once, a failing one doesn't keep the others

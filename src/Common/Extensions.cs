@@ -85,6 +85,13 @@ namespace NetDeamon.apps
     /// <param name="text">The time text.</param>
     /// <returns>Local time (not UTC, as SqliteDataReader.GetDateTime returns for offsets).</returns>
     public static DateTime FromISO8601(string text) => DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).LocalDateTime;
+
+    /// <summary>A configured time of day ("HH:mm", e.g. a YAML setting).</summary>
+    /// <param name="text">The text.</param>
+    /// <param name="fallback">When it isn't a time of day (unreadable, or 24:00 and later).</param>
+    /// <returns>The time of day.</returns>
+    public static TimeSpan TimeOfDayOr(string? text, TimeSpan fallback) =>
+      TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out var t) && t >= TimeSpan.Zero && t < TimeSpan.FromDays(1) ? t : fallback;
     /// <summary>Factor from an entity's unit_of_measurement to the base unit (W, Wh, €).</summary>
     /// <param name="entity">Entity with the unit attribute.</param>
     /// <returns>The factor; 1 without a unit.</returns>

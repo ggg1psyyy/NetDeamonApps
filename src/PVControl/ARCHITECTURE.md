@@ -1138,6 +1138,14 @@ candidate could be rebuilt from it. A tariff without a usable price is left out 
 "save" everything). The DP options go in too — the advisor must plan with PVControl's, not the defaults. The table's
 SQL moved with it (`ForecastSnapshotStore`): one reader, the latest row only (the DB is ~10 MB).
 
+The advisor compares **money, not the planner's objective**: `PlanCost.Total` values the energy left at the end at
+each list's own refill price (a half-full battery is worth less under a cheap fixed price than under a winter spot
+price), and its band/floor penalties aren't paid. So each plan counts its grid cost over the whole horizon — tonight's
+charging already depends on tomorrow's tariff — plus the end energy at today's refill price for both. The advice is
+relative to today's tariff, not one already chosen for tomorrow: the supplier allows one change a day (as far as known,
+2026-11). Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
+472 € (43 switches); with a 0.30-€ threshold 474.5 € in 7 switches — hence `MinSavingEur` 0.30.
+
 ---
 
 ## HA entity auto-creation

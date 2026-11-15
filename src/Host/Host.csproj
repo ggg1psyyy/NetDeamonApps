@@ -25,6 +25,7 @@
         <AppPlugin Include="..\DataLogger\DataLogger.csproj" />
         <AppPlugin Include="..\PVControl\PVControl.csproj" />
         <AppPlugin Include="..\MidiControl\MidiControl.csproj" />
+        <AppPlugin Include="..\TariffAdvisor\TariffAdvisor.csproj" />
     </ItemGroup>
     <Target Name="PublishAppPlugins" AfterTargets="Publish">
         <!-- The host doesn't reference the plugins, so its restore doesn't cover them: restore first (own evaluation). -->

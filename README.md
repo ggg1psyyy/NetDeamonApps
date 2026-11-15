@@ -18,6 +18,7 @@ of app plugins, one plugin per app — each its own project, buildable and testa
 | [`src/DataLogger`](src/DataLogger/README.md) | Logs energy sensor history hourly/daily to SQLite (PVControl's load forecast reads it) |
 | [`src/HeatingTest`](src/HeatingTest/README.md) | Automated step test of the heat pump's heating curve, with its own SQLite log |
 | [`src/MidiControl`](src/MidiControl/README.md) | BCF2000 MIDI controller integration (side project) |
+| [`src/TariffAdvisor`](src/TariffAdvisor/README.md) | Which import tariff (Market/Fixed) is cheaper for the coming day, planned with the shared DP on PVControl's latest snapshot |
 | `tests/<Project>.Tests` | xUnit tests per project |
 | [`deploy/`](deploy/README.md) | Deploy to the NetDaemon add-on and PVControl's HA automations |
 | [`tools/LoadBacktest`](tools/LoadBacktest/README.md) | Offline backtest of load forecast models |

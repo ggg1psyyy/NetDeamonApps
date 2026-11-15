@@ -87,7 +87,8 @@ public readonly record struct TopUpGoal(DateTime Deadline, int TargetWh);
 /// <param name="Cost">What it costs (<see cref="PlanEvaluation"/>).</param>
 /// <param name="EndSocPct">SoC at the end, %.</param>
 /// <param name="Rest">The DP's cost of the rest from every quarter and battery energy (<see cref="DpRestCost"/>).</param>
-public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndSocPct, DpRestCost? Rest = null);
+/// <param name="EndEnergyWh">Battery energy at the end, Wh (exact; <paramref name="EndSocPct"/> is it in whole %).</param>
+public sealed record DpPlan(IReadOnlyList<DpSlot> Slots, PlanCost Cost, int EndSocPct, DpRestCost? Rest = null, int EndEnergyWh = 0);
 
 /// <summary>
 /// The DP's table of the cheapest rest: for each quarter of the plan (and the horizon's end) and each battery energy, what
@@ -478,7 +479,7 @@ public static class BatteryDpPlanner
         }
       }
     }
-    return new DpPlan(plan.Slots, cost, input.WhToSoc(plan.End), new DpRestCost(start, value, whPerState));
+    return new DpPlan(plan.Slots, cost, input.WhToSoc(plan.End), new DpRestCost(start, value, whPerState), plan.End);
   }
 
   /// <summary>

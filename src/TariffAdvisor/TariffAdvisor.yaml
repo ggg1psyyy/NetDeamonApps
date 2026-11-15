@@ -1,0 +1,12 @@
+NetDeamon.apps.TariffAdvisor.TariffAdvisorConfig:
+  # false: the app does nothing at all (no entities, no timer).
+  Enabled: true
+  # PVControl's DP shadow DB, read only: its latest snapshot is the planning situation judged.
+  SnapshotDb: "../PVControl/dp_shadow.db"
+  # A switch is advised only if it saves at least this much over the plan's horizon (€).
+  MinSavingEur: 0.30
+  # From this time of day the coming day is judged, every quarter (tomorrow's prices are published ~13:00);
+  # before it the last advice (for today) stays.
+  StartTime: "13:00"
+  # An older snapshot isn't judged (PVControl not running): minutes.
+  MaxSnapshotAgeMinutes: 30

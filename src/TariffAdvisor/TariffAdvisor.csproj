@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TariffAdvisor: which import tariff (Market/Fixed) is cheaper for the coming day, planned with the shared DP on
+       PVControl's latest snapshot (README.md). A NetDaemon app plugin (../AppPlugin.props). -->
+  <Import Project="..\AppPlugin.props" />
+
+  <ItemGroup>
+    <!-- The planner: shipped by the host, compiled against only (one loaded copy for all plugins). -->
+    <ProjectReference Include="..\Planning\Planning.csproj" Private="false" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Data.Sqlite" ExcludeAssets="runtime;native" />
+  </ItemGroup>
+
+</Project>
