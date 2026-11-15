@@ -103,7 +103,11 @@ public sealed class TariffAdvisor : IAsyncInitializable, IAsyncDisposable
     }
     catch (Exception ex)
     {
+      // Never leave an old advice standing: unavailable with the error, judged again after the recheck interval.
       _logger.LogError(ex, "Tariff advisor cycle failed");
+      _judgedAt = DateTime.Now;
+      try { await PublishAsync(TariffAdvice.Failed(ex), _judgedAt); }
+      catch (Exception publish) { _logger.LogError(publish, "Tariff advisor: publishing the failure failed"); }
     }
     finally
     {

@@ -15,6 +15,8 @@ forecasts, the battery, the settings and every import tariff's planning price li
 - A plan's cost = its grid cost over the whole horizon (tonight's charging depends on tomorrow's tariff too) less the
   energy left in the battery at the end, valued at today's tariff's refill price for both plans. The planner's
   penalties aren't money and don't count.
+- Planned extra loads (EV sessions, warm-water heatings) stay where PVControl scheduled them under today's tariff:
+  under Fixed they aren't placed in cheap spot hours, so from Fixed the Market cost is somewhat overstated.
 - The advice is relative to **today's** tariff (one change a day): a tariff already chosen for tomorrow doesn't change it.
 
 `sensor.tariff_advisor_advice`:

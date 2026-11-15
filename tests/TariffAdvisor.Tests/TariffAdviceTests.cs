@@ -128,6 +128,14 @@ public class TariffAdviceTests
     Assert.Contains("Market", onlyMarket.Reason);
   }
 
+  [Fact]
+  public void AFailure_Unavailable_WithTheError()
+  {
+    var a = TariffAdvice.Failed(new InvalidOperationException("database is locked"));
+    Assert.Equal("unavailable", a.State);
+    Assert.Contains("database is locked", a.Reason);
+  }
+
   [Theory]
   [InlineData(12, 59, false)]
   [InlineData(13, 0, true)]

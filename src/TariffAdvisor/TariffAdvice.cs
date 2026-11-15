@@ -36,6 +36,10 @@ public static class TariffAdvice
   /// <param name="tariff">The tariff's name (as PVControl's select).</param>
   public static string SwitchTo(string tariff) => "switch_to_" + tariff.ToLowerInvariant();
 
+  /// <summary>The advice when judging failed (the DB unreadable, the planner threw): unavailable, with the error.</summary>
+  /// <param name="error">The error.</param>
+  public static Advice Failed(Exception error) => new("unavailable", $"judging failed: {error.Message}");
+
   /// <summary>Whether the coming day is judged now (from <see cref="AdviceSettings.StartTime"/> until midnight; before
   /// that the last advice — for today — stays).</summary>
   /// <param name="now">Current time.</param>

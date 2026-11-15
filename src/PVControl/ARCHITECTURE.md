@@ -1145,6 +1145,9 @@ charging already depends on tomorrow's tariff — plus the end energy at today's
 relative to today's tariff, not one already chosen for tomorrow: the supplier allows one change a day (as far as known,
 2026-11). Backtest on the cost log (2025-06 to 2026-11, energy only): Spot 535 €, Fair 618 €, the better one each day
 472 € (43 switches); with a 0.30-€ threshold 474.5 € in 7 switches — hence `MinSavingEur` 0.30.
+Not modelled (yet): the extra loads are where PVControl planned them under today's tariff — rescheduling them per
+candidate would need PVControl's load search, not just the DP. From Market it hardly matters (a flat price doesn't
+care when a load runs); from Fixed the loads sit in arbitrary spot hours, which overstates the Market cost.
 
 ---
 
