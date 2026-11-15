@@ -1728,11 +1728,12 @@ namespace NetDeamon.apps.PVControl
       var todayAndTomorrow = new Dictionary<DateTime, int>(_house.Prediction_BatterySoC.TodayAndTomorrow);   // copied on the cycle's thread
       bool requested = shadow.RunRequested && !firstPlan;
       var running = _steeredState;   // read on the cycle's thread
+      var tariffs = _house.Prices.ImportTariffPrices(now, now.Date.AddDays(2), PVCC_Config.EstimatedPricePremium);   // as the plan's (HouseEnergy)
       return Task.Run(async () =>
       {
         try
         {
-          if (await shadow.RunAsync(sim, now, running) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
+          if (await shadow.RunAsync(sim, now, running, tariffs) is { } report && shadow.LastPlan is { } plan && !_subscriptions.IsDisposed)
           {
             await PVCC_EntityManager.SetStateAsync(entity.EntityId, report.DpModeNow.ToString());
             await PVCC_EntityManager.SetAttributesAsync(entity.EntityId, Optimizer.DpShadow.Attributes(report));

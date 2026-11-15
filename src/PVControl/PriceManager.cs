@@ -181,7 +181,28 @@ namespace NetDeamon.apps.PVControl
     /// <param name="until">Extend up to here.</param>
     /// <param name="premium">Risk premium on estimated market prices.</param>
     public PriceList ImportPricesForPlanning(System.DateTime until, float premium) =>
-      ImportTariffs.Prices(t => ImportFor(t).WithEstimatedPrices(until, t == ImportTariff.Fixed ? 0 : premium));
+      ImportTariffs.Prices(t => ImportPricesForPlanning(t, until, premium));
+
+    /// <summary>The plan's import prices of one tariff, everywhere (estimated as <see cref="ImportPricesForPlanning(System.DateTime, float)"/>).</summary>
+    /// <param name="tariff">The tariff.</param>
+    /// <param name="until">Extend up to here.</param>
+    /// <param name="premium">Risk premium on estimated market prices.</param>
+    private PriceList ImportPricesForPlanning(ImportTariff tariff, System.DateTime until, float premium) =>
+      ImportFor(tariff).WithEstimatedPrices(until, tariff == ImportTariff.Fixed ? 0 : premium);
+
+    /// <summary>Every import tariff's planning list, for the tariff advisor (<see cref="Optimizer.ForecastSnapshot.ImportTariffs"/>):
+    /// a tariff that can't be priced (<see cref="TariffSources.ImportMissing"/>, or a fixed price of 0 — e.g. its
+    /// entity unavailable) is left out.</summary>
+    /// <param name="now">Current time.</param>
+    /// <param name="until">Extend up to here.</param>
+    /// <param name="premium">Risk premium on estimated market prices.</param>
+    public Optimizer.TariffPrices ImportTariffPrices(System.DateTime now, System.DateTime until, float premium) =>
+      Optimizer.TariffPrices.Of(ImportTariffs.Active.ToString(),
+        TariffSchedule<ImportTariff>.NextSwitch(now, PVCC_Config.TariffSwitchTimeOfDay),
+        Enum.GetValues<ImportTariff>()
+          .Where(t => TariffSources.ImportMissing(t, PVCC_Config.ImportPriceFixedEntity is not null, PVCC_Config.ImportPriceFixedValue) is null
+            && (t != ImportTariff.Fixed || FixedImportNetto > 0))
+          .Select(t => (t.ToString(), ImportPricesForPlanning(t, until, premium))));
 
     /// <summary>The plan's export prices, as <see cref="ImportPricesForPlanning"/>.</summary>
     /// <param name="until">Extend up to here.</param>

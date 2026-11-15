@@ -11,8 +11,11 @@ plans the battery. No Home Assistant and no app state — a plan is a function o
 | `SourceShares.cs` | What a kWh costs by its source (PV, grid, battery) |
 | `PlanningTypes.cs`, `PVControlExtensions.cs` | The types it plans with (modes, reasons, price entry) and the prediction-window helpers |
 
-A `ForecastSnapshot` holds everything a `SimulationInput` needs (`ToInput()`); PVControl saves one per quarter in its
-`dp_shadow.db`, so another plugin can plan "what if" on PVControl's current situation without PVControl's code.
+A `ForecastSnapshot` holds everything a `SimulationInput` needs (`ToInput()`), plus the DP options it was planned
+with and every import tariff's price list (`TariffPrices`: the active tariff, the next switch time, a list per tariff
+that can be priced). PVControl saves one per quarter in its `dp_shadow.db` (`ForecastSnapshotStore`: write, read all,
+read the latest — read-only, waiting while the writer holds the DB), so another plugin can plan "what if" on
+PVControl's current situation without PVControl's code. The store is the library's only I/O.
 
 **Shipped by the host**, like Common: the host references it, a plugin compiles against it only
 (`Private="false" ExcludeAssets="runtime"`), so one copy is loaded for all plugins. Namespaces are PVControl's

@@ -99,8 +99,10 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <param name="now">Current time.</param>
     /// <param name="running">The mode the plan that steers runs now (<see cref="DpSteering.RunningInput"/>); null: the
     /// greedy plan's own.</param>
+    /// <param name="tariffs">The import tariffs' lists (read on the cycle's thread), stored with the snapshot for the
+    /// tariff advisor.</param>
     /// <returns>The comparison; null if a run was already going.</returns>
-    public async Task<DpShadowReport?> RunAsync(SimulationResult greedy, DateTime now, InverterState? running = null)
+    public async Task<DpShadowReport?> RunAsync(SimulationResult greedy, DateTime now, InverterState? running = null, TariffPrices? tariffs = null)
     {
       if (Interlocked.Exchange(ref _running, 1) == 1) return null;
       try
@@ -116,7 +118,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
         var quarter = TimeRange.Floor(now, TimeRange.SlotMinutes);
         if (quarter > _lastLoggedQuarter)
         {
-          await LogAsync(quarter, Last, ForecastSnapshot.From(input));
+          await LogAsync(quarter, Last, ForecastSnapshot.From(input) with { ImportTariffs = tariffs, Options = options });
           _lastLoggedQuarter = quarter;
         }
         return Last;
@@ -266,27 +268,7 @@ namespace NetDeamon.apps.PVControl.Optimizer
       cmd.Parameters.AddWithValue("$ms", r.RuntimeMs);
       await cmd.ExecuteNonQueryAsync();
 
-      await NetDeamon.apps.SqliteSchema.ExecuteAsync(con, "CREATE TABLE IF NOT EXISTS forecast (quarter TEXT PRIMARY KEY, snapshot BLOB)");
-      await using var fc = con.CreateCommand();
-      fc.CommandText = "INSERT OR REPLACE INTO forecast VALUES ($q, $s)";
-      fc.Parameters.AddWithValue("$q", quarter.ToISO8601());
-      fc.Parameters.AddWithValue("$s", snapshot.ToBytes());
-      await fc.ExecuteNonQueryAsync();
-    }
-
-    /// <summary>The stored planning situations of a shadow log, by quarter (for a replay).</summary>
-    /// <param name="dbPath">The shadow's DB.</param>
-    public static async Task<List<(DateTime Quarter, ForecastSnapshot Snapshot)>> ReadSnapshotsAsync(string dbPath)
-    {
-      var result = new List<(DateTime, ForecastSnapshot)>();
-      await using var con = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False");
-      await con.OpenAsync();
-      await using var cmd = con.CreateCommand();
-      cmd.CommandText = "SELECT quarter, snapshot FROM forecast ORDER BY quarter";
-      await using var rd = await cmd.ExecuteReaderAsync();
-      while (await rd.ReadAsync())
-        result.Add((NetDeamon.apps.Extensions.FromISO8601(rd.GetString(0)), ForecastSnapshot.FromBytes((byte[])rd[1])));
-      return result;
+      await ForecastSnapshotStore.WriteAsync(con, quarter, snapshot);
     }
   }
 }

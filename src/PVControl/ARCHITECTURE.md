@@ -1132,6 +1132,12 @@ so they moved to `src/Planning` unchanged (namespaces too) with the few types th
 DB). The host ships the library like Common, so all plugins share one loaded copy; the other plugin gets PVControl's
 current situation from the `ForecastSnapshot` it already saves each quarter — no call into PVControl at run time.
 
+For that the snapshot also carries every import tariff's own planning list (`TariffPrices`), not just the plan's
+spliced one: with a choice pending, the plan's list already prices tomorrow with the chosen tariff, so neither
+candidate could be rebuilt from it. A tariff without a usable price is left out instead of priced at 0 (it would
+"save" everything). The DP options go in too — the advisor must plan with PVControl's, not the defaults. The table's
+SQL moved with it (`ForecastSnapshotStore`): one reader, the latest row only (the DB is ~10 MB).
+
 ---
 
 ## HA entity auto-creation

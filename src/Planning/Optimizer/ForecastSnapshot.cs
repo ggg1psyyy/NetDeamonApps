@@ -15,6 +15,32 @@ public sealed record PricePoint(DateTime Start, DateTime End, float Price);
 public sealed record LoadPoint(string Name, int Priority, DateTime Start, DateTime End, int PowerW, bool FromGrid);
 
 /// <summary>
+/// The import tariffs at a snapshot: each tariff's full price list over the horizon (as if it applied everywhere,
+/// estimated like the plan's), so a plugin can price the coming day with another tariff than today's.
+/// </summary>
+/// <param name="Active">The tariff in force at the snapshot (its name).</param>
+/// <param name="NextSwitch">When a tariff chosen now would take effect.</param>
+/// <param name="Import">Gross import prices per tariff name; a tariff without its price setting is missing.</param>
+public sealed record TariffPrices(string Active, DateTime NextSwitch, Dictionary<string, List<PricePoint>> Import)
+{
+  /// <summary>The tariffs' lists of a snapshot.</summary>
+  /// <param name="active">The tariff in force.</param>
+  /// <param name="nextSwitch">The next switch time.</param>
+  /// <param name="lists">Each priceable tariff's list.</param>
+  public static TariffPrices Of(string active, DateTime nextSwitch, IEnumerable<(string Tariff, PriceList Prices)> lists) =>
+    new(active, nextSwitch, lists.ToDictionary(l => l.Tariff, l => l.Prices.Select(p => new PricePoint(p.StartTime, p.EndTime, p.Price)).ToList()));
+
+  /// <summary>Import prices with today's tariff until <see cref="NextSwitch"/> and another one from it.</summary>
+  /// <param name="from">The tariff from the switch on.</param>
+  /// <returns>The list; null if a tariff has no list.</returns>
+  public PriceList? From(string from) =>
+    Import.TryGetValue(Active, out var today) && Import.TryGetValue(from, out var next)
+      ? new PriceList(today.Where(p => p.Start < NextSwitch).Concat(next.Where(p => p.Start >= NextSwitch))
+          .OrderBy(p => p.Start).Select(p => new PriceTableEntry(p.Start, p.End, p.Price)).ToList())
+      : null;
+}
+
+/// <summary>
 /// Everything a simulation input holds at a moment — the forecasts (PV, load), the prices, the planned extra loads, the
 /// settings, the current mode and the learned VPP curve (sampled per %) — so a replay can rebuild the planning situation
 /// exactly (<see cref="ToInput"/>): the DP shadow stores one per quarter (dp_shadow.db, table forecast) to replay the DP
@@ -27,7 +53,7 @@ public sealed record ForecastSnapshot(
   DateTime? PublishedPricesUntil, InverterModes CurrentMode, ForceChargeReasons CurrentReason, bool CurrentBulk,
   bool CurrentChargeEnable, bool CurrentExportAllowed, List<PricePoint> ImportPrices, List<PricePoint> ExportPrices,
   Dictionary<DateTime, int> Pv, Dictionary<DateTime, int> Load, List<LoadPoint> ExtraLoads, int[]? VppW,
-  DateTime? TopUpArmedAt = null, TimeOnly? TopUpReadyBy = null)
+  DateTime? TopUpArmedAt = null, TimeOnly? TopUpReadyBy = null, TariffPrices? ImportTariffs = null, DpOptions? Options = null)
 {
   /// <summary>The snapshot of an input.</summary>
   /// <param name="i">The simulation input.</param>

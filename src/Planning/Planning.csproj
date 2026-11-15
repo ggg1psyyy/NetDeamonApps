@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Common\Common.csproj" />
+    <!-- The stored snapshots (ForecastSnapshotStore); like Common's, the host ships SQLite. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- Moved out of PVControl with internals PVControl (and its tests) still use; the other plugins see the public API only. -->

@@ -198,11 +198,24 @@ public class DpShadowTests : TestBase, IDisposable
     var shadow = new DpShadow(new DpShadowConfig(), _db);
     var sim = EnergySimulator.Simulate(Rich());
     await shadow.RunAsync(sim, Day.AddHours(21).AddMinutes(7));
-    var stored = await DpShadow.ReadSnapshotsAsync(_db);
+    var stored = await ForecastSnapshotStore.ReadAllAsync(_db);
     var (quarter, snapshot) = Assert.Single(stored);
     Assert.Equal(Day.AddHours(21), quarter);
     Assert.Equal(31, snapshot.StartSocPercent);
     Assert.Equal(2, snapshot.ExtraLoads.Count);
   }
-}
 
+  [Fact]
+  public async Task RunAsync_StoresTheTariffsAndTheOptionsWithTheSnapshot()
+  {
+    var config = new DpShadowConfig { ChargeStartEur = 0.02f };
+    var shadow = new DpShadow(config, _db);
+    var sim = EnergySimulator.Simulate(Rich());
+    var tariffs = TariffPrices.Of("Market", Day.AddDays(1), [("Market", sim.Input.ImportPrices), ("Fixed", sim.Input.ImportPrices)]);
+    await shadow.RunAsync(sim, Day.AddHours(21).AddMinutes(7), tariffs: tariffs);
+    var (_, snapshot) = (await ForecastSnapshotStore.ReadLatestAsync(_db))!.Value;
+    Assert.Equal(new[] { "Market", "Fixed" }, snapshot.ImportTariffs!.Import.Keys);
+    Assert.Equal(Day.AddDays(1), snapshot.ImportTariffs.NextSwitch);
+    Assert.Equal(config.Options, snapshot.Options);
+  }
+}

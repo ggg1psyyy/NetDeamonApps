@@ -51,7 +51,8 @@ NetDeamon.apps.PVControl.PVConfig:
   # before it with the tariff in force, those from it with the chosen one.
   TariffSwitchTime: "00:00"
   # ImportPriceFixedEntity: input_number.fixed_energy_price
-  # ImportPriceFixedValue: 0.12
+  # The fixed tariff's energy price (Hofer Grünstrom Fair, netto): priced for the tariff advisor and a switch to Fixed
+  ImportPriceFixedValue: 0.14125
   # How the raw price data is interpreted:
   #   QuarterHourly = use each 15-min price as-is
   #   Hourly        = average the four 15-min prices within each hour and apply that
