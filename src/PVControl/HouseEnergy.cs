@@ -561,6 +561,13 @@ namespace NetDeamon.apps.PVControl
     public static SimulationInput LoadPlanningInput(SimulationInput input, PriceList? marketImport) =>
       marketImport is null ? input : input.ForLoadPlanning(marketImport);
 
+    /// <summary>A load's reason or price scan as shown: under the fixed tariff the loads are placed on the market's prices
+    /// (<see cref="LoadPlanningInput"/>), so its amounts are the market's — marked as such, not mistaken for what's paid.</summary>
+    /// <param name="input">The input the load was planned on.</param>
+    /// <param name="text">The reason or scan.</param>
+    public static string AtPricesShown(SimulationInput input, string text) =>
+      input.PaidImportPrices is null || !text.Contains('€') ? text : text + " (market prices; the fixed price is paid)";
+
     // ── Schedulable load window finding ──────────────────────────────────────────────────────
     // The simulation is the oracle: we run it with candidate ExtraLoad windows and check
     // whether the result satisfies the mode-specific conditions. The first valid start slot
@@ -810,7 +817,7 @@ namespace NetDeamon.apps.PVControl
         decided = true;
         load.ExtraLoads = extraLoads;
         load.ChargeNow = chargeNow;
-        load.ChargeReason = reason;
+        load.ChargeReason = AtPricesShown(baseInput, reason);
         load.PredictedEnd = end;
       }
 
@@ -1214,7 +1221,7 @@ namespace NetDeamon.apps.PVControl
           preferredStart: running ? null : previousLoads.FirstOrDefault(e => e.EndTime > now)?.StartTime, minWindowMinutes: load.Config.MinWindowMinutes, now: now,
           pricer: price);
         if (planned is not { } p) return;
-        load.PriceScan = p.Scan ?? "n/a";
+        load.PriceScan = AtPricesShown(baseInput, p.Scan ?? "n/a");
 
         // Two blocks with a pause, where the unbroken session runs through dearer quarters (SessionPlanner.FindSplit).
         if (p.Choice is StartChoice.Earliest or StartChoice.Cheaper or StartChoice.DeadlineEarliest or StartChoice.DeadlineCheapest
@@ -1226,7 +1233,7 @@ namespace NetDeamon.apps.PVControl
           var blocks = SessionPlanner.ChooseSupply(sessions => baseInput.SimulateWith(sessions), split.Sessions, baseResult, keepFromGrid, price).Loads;
           var first = blocks[0];
           bool firstNow = first.StartTime <= currentSlot;
-          load.PriceScan = $"{p.Scan} · split {first.StartTime:HH:mm}–{first.EndTime:HH:mm} + {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} saves {split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} €";
+          load.PriceScan = AtPricesShown(baseInput, $"{p.Scan} · split {first.StartTime:HH:mm}–{first.EndTime:HH:mm} + {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} saves {split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} €");
           string splitWhy = $"split: {first.StartTime:HH:mm}–{first.EndTime:HH:mm}, pause, {blocks[1].StartTime:HH:mm}–{blocks[1].EndTime:HH:mm} ({split.SavingEur.ToString("F2", CultureInfo.InvariantCulture)} € cheaper than unbroken)";
           SetResult([.. blocks], firstNow,
             firstNow

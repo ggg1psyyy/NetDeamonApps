@@ -238,5 +238,9 @@ public class TariffScheduleTests
     Assert.Equal(market.Select(p => p.Price), forLoads.ImportPrices.Select(p => p.Price));
     Assert.Equal(fixedPrices.Select(p => p.Price), forLoads.PaidImportPrices!.Select(p => p.Price));   // the limit at the price paid
     Assert.Same(input, HouseEnergy.LoadPlanningInput(input, null));   // the market already: the plan's own
+    // What's shown: amounts at the market's prices are marked under the fixed tariff, nothing else.
+    Assert.EndsWith("(market prices; the fixed price is paid)", HouseEnergy.AtPricesShown(forLoads, "earliest 23:00 0.41 €"));
+    Assert.Equal("PV surplus", HouseEnergy.AtPricesShown(forLoads, "PV surplus"));
+    Assert.Equal("earliest 23:00 0.41 €", HouseEnergy.AtPricesShown(input, "earliest 23:00 0.41 €"));
   }
 }
