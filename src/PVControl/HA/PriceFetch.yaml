@@ -12,8 +12,7 @@ conditions:
     before: "16:00:00"
   - condition: template
     value_template: >-
-      {% set ents = ['sensor.epex_spot_data_market_price', 'sensor.epex_spot_data_market_price_2',
-                     'sensor.epex_spot_data_market_price_3', 'sensor.epex_spot_data_market_price_4'] %}
+      {% set ents = ['sensor.extern_epex_spot_data_market_price', 'sensor.extern_epex_spot_data_market_price_2'] %}
       {%- set ns = namespace(until='') %}
       {%- for e in ents %}{% set d = state_attr(e, 'data') %}{% if d %}{% set last = d[-1].end_time | string %}{% if last > ns.until %}{% set ns.until = last %}{% endif %}{% endif %}{% endfor %}
       {{ ns.until == '' or as_datetime(ns.until) < today_at() + timedelta(days=2) }}

@@ -11,10 +11,8 @@ PVControl.DataLoggerConfig:
   # Priority-ordered fallback list — same epex_spot source family PVControl.yaml uses,
   # since one or another provider variant occasionally stops reporting for hours/days.
   PriceEnergyImportEntities:
-    - sensor.epex_spot_data_market_price
-    - sensor.epex_spot_data_market_price_2
-    - sensor.epex_spot_data_market_price_4
-    - sensor.epex_spot_data_market_price_3
+    - sensor.extern_epex_spot_data_market_price
+    - sensor.extern_epex_spot_data_market_price_2
   # How to determine which entity's value to log as priceenergyexport, checked in order:
   #   1. PriceEnergyExportSameAsImport: true -> reuse the resolved import price entity
   #   2. PriceEnergyExportFixed: true        -> PriceEnergyExportFixedEntity or PriceEnergyExportFixedValue
