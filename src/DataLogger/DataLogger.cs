@@ -31,8 +31,8 @@ namespace PVControl
     public Entity? BatterySoCEntity { get; set; }
     public Entity? PVYieldEntity { get; set; }
 
-    /// <summary>Priority-ordered fallback list — the EPEX provider occasionally stops
-    /// reporting for hours/days, so we fall through to the next source that has a valid state.</summary>
+    /// <summary>The market (exchange) price, netto — column <c>priceenergyimport</c>; priority-ordered, the first
+    /// with a valid state is used (PVControl's <c>sensor.pv_control_current_market_price</c>).</summary>
     public List<Entity>? PriceEnergyImportEntities { get; set; }
 
     /// <summary>First entity in <see cref="PriceEnergyImportEntities"/> with a currently
@@ -74,6 +74,14 @@ namespace PVControl
       }
     }
 
+    // What was paid and earned (schema v10, since 2026-11-17), from PVControl: the import price by tariff (VAT, network
+    // fee and supplier addition in; under a fixed tariff the fixed price), and its cost counters (€, never resetting).
+    /// <summary>The import price paid, brutto, €/kWh — column <c>priceimportpaid</c> (time-weighted mean).</summary>
+    public Entity? PriceImportPaidEntity { get; set; }
+    /// <summary>The import cost counter, brutto, € — column <c>importcost</c> (counter increase).</summary>
+    public Entity? ImportCostEntity { get; set; }
+    /// <summary>The export earnings counter, € — column <c>exportearnings</c> (counter increase).</summary>
+    public Entity? ExportEarningsEntity { get; set; }
     public Entity? ImportEnergyEntity { get; set; }
     /// <summary>Grid import counters (kWh), in priority order: the first with readings in a period gives its highest 15-min import (schema v8).</summary>
     public List<Entity> ImportTotalEntities { get; set; } = [];
@@ -377,6 +385,9 @@ namespace PVControl
         // price over its window regardless of the source sensor's native update granularity.
         AddFloatTask(averageTasks, _config.PriceEnergyExportEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.PriceEnergyImportEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.PriceImportPaidEntity, FloatTask.average, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ImportCostEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
+        AddFloatTask(averageTasks, _config.ExportEarningsEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.PVYieldEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.HouseEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
         AddFloatTask(averageTasks, _config.ImportEnergyEntity, FloatTask.diff, historyStart, historyEnd, GetFloatStateHistory);
@@ -408,6 +419,9 @@ namespace PVControl
         float? priceEnergyImport = GetFloatTaskResult(averageTasks, _config.PriceEnergyImportEntity);
         float? priceEnergyExport = GetFloatTaskResult(averageTasks, _config.PriceEnergyExportEntity)
           ?? (_config.PriceEnergyExportFixed ? _config.PriceEnergyExportFixedValue : null);
+        float? priceImportPaid = GetFloatTaskResult(averageTasks, _config.PriceImportPaidEntity);
+        float? importCost = GetFloatTaskResult(averageTasks, _config.ImportCostEntity);
+        float? exportEarnings = GetFloatTaskResult(averageTasks, _config.ExportEarningsEntity);
         int? pvYield = Wh(GetFloatTaskResult(averageTasks, _config.PVYieldEntity));
         // sensor.house_energy_consumption_day reports Wh already (the other counters kWh); the load prediction reads Wh.
         int? houseEnergyUsed = GetFloatTaskResult(averageTasks, _config.HouseEnergyEntity) is { } houseWh ? (int)Math.Round(houseWh) : null;
@@ -442,6 +456,7 @@ namespace PVControl
           ("maxquarterimport", await maxQuarter),
           ("pvcontrolmode", ctl.Mode), ("pvmodechanges", ctl.ModeChanges), ("feedinminutes", ctl.FeedinMinutes),
           ("forcechargeminutes", ctl.ForceChargeMinutes), ("chargedisabledminutes", ctl.ChargeDisabledMinutes), ("invertereepromwrites", ctl.EepromWrites),
+          ("priceimportpaid", priceImportPaid), ("importcost", importCost), ("exportearnings", exportEarnings),
         ];
         var insertCommand = con.CreateCommand();
         insertCommand.CommandText = $"INSERT OR IGNORE INTO {(daily ? "daily" : "hourly")} ({string.Join(", ", values.Select(v => v.Column))}) " +
@@ -752,6 +767,17 @@ namespace PVControl
         _logger.LogInformation("DataLogger DB migrated to v9: PVControl mode and inverter EEPROM writes added");
         await SqliteSchema.SetVersionAsync(con, 9);
       }
+      if (actualDBVersion < 10)
+      {
+        foreach (var table in new[] { "hourly", "daily" })
+        {
+          string sql = AddColumnsSql(table, PaidColumns, await SqliteSchema.ColumnsAsync(con, table));
+          if (sql.Length > 0)
+            await SqliteSchema.ExecuteAsync(con, sql);
+        }
+        _logger.LogInformation("DataLogger DB migrated to v10: import price paid, import cost and export earnings added");
+        await SqliteSchema.SetVersionAsync(con, 10);
+      }
       await con.CloseAsync();
     }
 
@@ -779,6 +805,10 @@ namespace PVControl
       "pvcontrolmode TEXT", "pvmodechanges INTEGER", "feedinminutes REAL", "forcechargeminutes REAL",
       "chargedisabledminutes REAL", "invertereepromwrites INTEGER",
     ];
+
+    /// <summary>v10: the import price paid (brutto, by tariff, €/kWh, time-weighted mean) and the period's import cost
+    /// and export earnings (€, counter increases) — next to <c>priceenergyimport</c>, the market price netto.</summary>
+    public static readonly string[] PaidColumns = ["priceimportpaid REAL", "importcost REAL", "exportearnings REAL"];
 
     /// <summary>ALTER TABLE statements for the columns a table doesn't have yet (a migration step may run again after an interruption).</summary>
     /// <param name="table">Table name.</param>

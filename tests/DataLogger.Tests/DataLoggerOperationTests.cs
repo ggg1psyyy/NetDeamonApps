@@ -79,6 +79,33 @@ public class DataLoggerOperationTests
     Assert.Equal(8, all.Length);
   }
 
+  [Fact]
+  public void MigrationV10_AddsThePaidColumns_OnlyMissingOnes()
+  {
+    using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+    con.Open();
+    var c = con.CreateCommand();
+    // An interrupted run had added one column already.
+    c.CommandText = "CREATE TABLE hourly (timestamp TEXT, priceenergyimport REAL, importcost REAL)";
+    c.ExecuteNonQuery();
+    c.CommandText = DataLogger.AddColumnsSql("hourly", DataLogger.PaidColumns, Columns(c, "hourly").ToHashSet());
+    c.ExecuteNonQuery();
+    var all = Columns(c, "hourly");
+    Assert.Contains("priceimportpaid", all);
+    Assert.Contains("exportearnings", all);
+    Assert.Equal(5, all.Length);
+  }
+
+  [Fact]
+  public void PeriodValue_Diff_ACostCounter_RestartGlitchSkipped()
+  {
+    // PVControl's € counters (sum_import_cost_brutto) never reset; at a restart the sensor can read 0 for a moment
+    // before PVControl restores it — a glitch, not a reset: the hour's cost stays what was added.
+    var readings = new (DateTime, double?)[]
+      { (Hour, 973.10), (Hour.AddMinutes(15), 973.20), (Hour.AddMinutes(20), 0), (Hour.AddMinutes(21), 973.20), (Hour.AddMinutes(45), 973.30) };
+    Assert.Equal(0.2f, DataLogger.PeriodValue(readings, DataLogger.FloatTask.diff, Hour, Hour.AddHours(1))!.Value, 3);
+  }
+
   static string[] Columns(Microsoft.Data.Sqlite.SqliteCommand c, string table)
   {
     c.CommandText = $"SELECT group_concat(name) FROM pragma_table_info('{table}')";

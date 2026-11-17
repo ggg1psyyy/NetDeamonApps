@@ -8,11 +8,15 @@ PVControl.DataLoggerConfig:
   HumidityEntity: sensor.pirateweather_humidity
   BatterySoCEntity: sensor.solax_battery_capacity
   PVYieldEntity: sensor.solax_today_s_solar_energy
-  # Priority-ordered fallback list — same epex_spot source family PVControl.yaml uses,
-  # since one or another provider variant occasionally stops reporting for hours/days.
+  # All prices and costs from PVControl (one source: its price sources, tariffs, VAT and network fee).
+  # priceenergyimport: the market (exchange) price, netto, €/kWh ("unknown" while PVControl has none).
   PriceEnergyImportEntities:
-    - sensor.extern_epex_spot_data_market_price
-    - sensor.extern_epex_spot_data_market_price_2
+    - sensor.pv_control_current_market_price
+  # priceimportpaid: the import price paid, brutto, by tariff (fixed or market), €/kWh.
+  PriceImportPaidEntity: sensor.pv_control_current_import_price_brutto
+  # importcost / exportearnings: € in the period (increase of PVControl's cost counters).
+  ImportCostEntity: sensor.pv_control_sum_import_cost_brutto
+  ExportEarningsEntity: sensor.pv_control_sum_export_earnings_brutto
   # How to determine which entity's value to log as priceenergyexport, checked in order:
   #   1. PriceEnergyExportSameAsImport: true -> reuse the resolved import price entity
   #   2. PriceEnergyExportFixed: true        -> PriceEnergyExportFixedEntity or PriceEnergyExportFixedValue

@@ -273,4 +273,16 @@ public class EnergyCostTests : TestBase
     Assert.Equal(0.2154f, PriceManager.FixedFeedInPrice(0.2344f, -0.019f), 5);
     Assert.Equal(0.08f, PriceManager.FixedFeedInPrice(0.08f, 0), 5);   // a fixed price as paid
   }
+
+  [Fact]
+  public void SensorState_ThePriceCoveringNow_UnknownWithoutOne_NeverZero()
+  {
+    // sensor.pv_control_current_market_price: the DataLogger averages it; a 0 for "no price" (2026-11-17 09:14,
+    // every source gone after a rename) would be averaged in as a real price.
+    var t = new DateTime(2026, 11, 17, 9, 0, 0);
+    var list = new PriceList([new PriceTableEntry(t, t.AddMinutes(15), 0.27797f)]);
+    Assert.Equal("0.27797", PriceManager.SensorState(list, t.AddMinutes(5)));
+    Assert.Equal("unknown", PriceManager.SensorState(list, t.AddMinutes(20)));
+    Assert.Equal("unknown", PriceManager.SensorState(new PriceList(), t));
+  }
 }

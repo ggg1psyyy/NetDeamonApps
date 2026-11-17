@@ -78,6 +78,7 @@ namespace NetDeamon.apps.PVControl
     private bool _dpStale;
     private Entity _currentImportPriceBruttoEntity = null!;
     private Entity _currentExportPriceBruttoEntity = null!;
+    private Entity _currentMarketPriceEntity = null!;
     private Entity _activeNetworkPricePeriodEntity = null!;
     private Entity _sumImportCostBruttoEntity = null!;
     private Entity _sumImportCostEnergyOnlyEntity = null!;
@@ -1714,6 +1715,7 @@ namespace NetDeamon.apps.PVControl
         data = _house.Prices.PriceListExport.Select(s => new { start_time = s.StartTime.ToISO8601(), end_time = s.EndTime.ToISO8601(), price_per_kwh = s.Price }),
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentExportPriceBruttoEntity.EntityId, attr_currentExportPrice);
+      await PVCC_EntityManager.SetStateAsync(_currentMarketPriceEntity.EntityId, PriceManager.SensorState(_house.Prices.PriceListNetto, now));
 
 
       await PVCC_EntityManager.SetStateAsync(_bestExportPriceEntity.EntityId, _house.Prices.PriceListExport.MostExpensiveToday.Price.ToString(CultureInfo.InvariantCulture));
@@ -2092,6 +2094,14 @@ namespace NetDeamon.apps.PVControl
           unit_of_measurement = "€/kWh",
         },
         defaultValue: "0",
+        reRegister: reset);
+
+      _currentMarketPriceEntity = await RegisterSensor("sensor.pv_control_current_market_price", "Current market price (netto)", "MONETARY", "mdi:chart-line",
+        addConfig: new
+        {
+          unit_of_measurement = "€/kWh",
+        },
+        defaultValue: "unknown",
         reRegister: reset);
 
       _activeNetworkPricePeriodEntity = await RegisterSensor("sensor.pv_control_active_network_price_period", "Active network price period", null, "mdi:calendar-clock",

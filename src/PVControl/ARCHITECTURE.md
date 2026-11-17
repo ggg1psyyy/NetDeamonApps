@@ -215,6 +215,17 @@ averaged 43 % instead of ~22 %. Rows before that date are plain means; models th
 now rounded to Wh instead of truncated. One state parser for every column (`DataLogger.Number`: NaN/∞
 rejected like the old regex did).
 
+**DataLogger prices from PVControl since 2026-11-17 (schema v10).** `priceenergyimport` was read from the EPEX
+entities directly — the raw market price, netto — while `priceenergyexport` came from PVControl (the feed-in price
+as paid): two kinds of price side by side. The morning the EPEX sources were renamed in HA, every name had to be
+changed in three places (PVControl, DataLogger, the fetch automation). Now every price and cost column comes from
+PVControl, the one place that knows the sources, the tariff, VAT and network fee: `priceenergyimport` stays the
+market price, netto (`sensor.pv_control_current_market_price`, same meaning as before — a column must not change
+what it means mid-series; under a fixed tariff it shows what the market would have cost), `priceimportpaid` the price
+paid by tariff, `importcost`/`exportearnings` the € of the period as increases of PVControl's cost counters (no price ×
+energy rounding, a missed hour is caught up by the next). The market sensor is `unknown` without a price, not 0: the
+morning's outage put 0 into the export price's hourly mean (09:00: 0.171 instead of 0.215).
+
 ### PV running-average correction (`NetEnergyPrediction.WithRunningAvgCorrection`)
 
 Applied to the PV forecast both when computing `Prediction_NetEnergy` and when building

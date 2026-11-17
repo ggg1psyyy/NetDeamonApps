@@ -18,6 +18,10 @@ One row per hour (`hourly`, stamped hh:59:59 local time with offset) and per loc
 | `pvcontrolmode`, `pvmodechanges` | `PVControlModeEntity` | PVControl mode held longest; number of mode changes |
 | `feedinminutes`, `forcechargeminutes` | `PVControlModeEntity` | minutes in `feedin_priority`; in `force_charge` / `force_charge_grid_only` |
 | `chargedisabledminutes` | `BatteryChargingEnabledEntity` | minutes with battery charging off |
+| `priceenergyimport` | `PriceEnergyImportEntities` (PVControl's `sensor.pv_control_current_market_price`) | market (exchange) price, netto, €/kWh — whatever the tariff |
+| `priceimportpaid` | `PriceImportPaidEntity` (PVControl's import price brutto) | import price paid, by tariff (VAT, network fee, supplier addition in), €/kWh |
+| `priceenergyexport` | `PriceEnergyExportEntities` (PVControl's export price brutto) | feed-in price as paid, €/kWh |
+| `importcost`, `exportearnings` | `ImportCostEntity`, `ExportEarningsEntity` (PVControl's cost counters) | € paid for import / earned by export in the period, counter increase |
 | `invertereepromwrites` | `InverterEepromEntities` | state changes of the inverter's EEPROM settings (work mode, manual mode, charge current, export limit) = writes |
 
 ## Build, test, run
@@ -37,5 +41,5 @@ dotnet test tests/DataLogger.Tests
 | Test class | What it covers |
 |---|---|
 | `DataLoggerPeriodTests` | DataLogger hours and days across both clock changes, backfill of an empty table |
-| `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, state changes, time-weighted means, prevailing heat pump mode, migrations (v6, v7, v9) |
+| `DataLoggerOperationTests` | DataLogger operation columns: minutes in a state, state changes, time-weighted means, prevailing heat pump mode, migrations (v6, v7, v9, v10), a € counter's restart glitch |
 | `AppFilesTests` | The DB's default location: in the plugin's folder, next to its YAML |

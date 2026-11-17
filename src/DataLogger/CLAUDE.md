@@ -10,5 +10,5 @@ project and build the DB with its SQL — run them as well.
 ## Tests (`tests/DataLogger.Tests`)
 
 - **`DataLoggerPeriodTests`** — DataLogger periods as UTC instants: both repeated hours in October, no row for the skipped March hour, 23/25-h days, backfill
-- **`DataLoggerOperationTests`** — DataLogger schema v6/v7/v9: the period's value (`PeriodValue`: time-weighted mean, counter increase; `Number`: the one state parser), minutes in a state, state changes, time-weighted means, prevailing mode, the v6, v7 (heat and electricity per mode) and v9 (PVControl mode, inverter EEPROM writes) migrations
+- **`DataLoggerOperationTests`** — DataLogger schema v6/v7/v9/v10: the period's value (`PeriodValue`: time-weighted mean, counter increase; `Number`: the one state parser), minutes in a state, state changes, time-weighted means, prevailing mode, the v6, v7 (heat and electricity per mode), v9 (PVControl mode, inverter EEPROM writes) and v10 (price paid, import cost, export earnings) migrations; a € counter's restart glitch skipped
 - **`AppFilesTests`** — the DB's default location in the plugin folder

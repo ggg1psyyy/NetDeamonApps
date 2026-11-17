@@ -67,6 +67,13 @@ namespace NetDeamon.apps.PVControl
       return best;
     }
 
+    /// <summary>A price list's price at a time as a sensor state: the number (invariant), or "unknown" where no entry
+    /// covers it — never 0, which a logger would average in as a real price.</summary>
+    /// <param name="list">The prices.</param>
+    /// <param name="t">The time.</param>
+    public static string SensorState(PriceList list, System.DateTime t) =>
+      list.TryGetPrice(t, out float price) ? price.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+
     /// <summary>Raw EPEX Spot netto import prices (€/kWh), lazily fetched and cached.</summary>
     public PriceList PriceListNetto
     {

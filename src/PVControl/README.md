@@ -193,6 +193,7 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 |---|---|
 | `sensor.pv_control_current_import_price_brutto` | Current gross import price (€/kWh) incl. taxes, network, markup; `data` attribute holds the full price list |
 | `sensor.pv_control_current_export_price_brutto` | Current gross export/feed-in price (€/kWh); `data` attribute holds the full price list |
+| `sensor.pv_control_current_market_price` | Current market (exchange) price, netto (€/kWh), from the price source in use — whatever the tariff; `unknown` while no price covers now (never 0). The DataLogger logs it |
 | `sensor.pv_control_best_import_price_today` | Cheapest import price slot today (€/kWh) |
 | `sensor.pv_control_best_export_price_today` | Highest export price slot today (€/kWh) |
 | `sensor.pv_control_price_publication` | When tomorrow's prices arrived today (`HH:mm`, `pending`, or `published` after a restart); attributes `prices_until` and `days` (the last 14 days' publication times, each with `sources`: when every price entity first had tomorrow) |
