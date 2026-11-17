@@ -1337,6 +1337,10 @@ namespace NetDeamon.apps.PVControl
       StartPvForecast(now);
       await ExpireTopUpAsync(now);
       await PublishPricePublicationAsync(now);
+      // Every cycle, not only on a price entity's change: a renamed or dead source sends no event, and the held list
+      // must still drop yesterday at midnight.
+      if (_house.Prices.UpdatePriceList(now))
+        _house.RequestReplan("prices updated");
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _house.AddAverageGridPowerValue(grid);
@@ -1697,7 +1701,7 @@ namespace NetDeamon.apps.PVControl
     /// <param name="now">Current time.</param>
     private async Task PublishPricesAsync(DateTime now)
     {
-      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, _house.Prices.PriceListImport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentImportPriceBruttoEntity.EntityId, PriceManager.SensorState(_house.Prices.PriceListImport, now));
       await PVCC_EntityManager.SetStateAsync(_activeNetworkPricePeriodEntity.EntityId, _house.Prices.ActiveNetworkPricePeriodName);
       var attr_currentImportPrice = new
       {
@@ -1708,7 +1712,7 @@ namespace NetDeamon.apps.PVControl
       };
       await PVCC_EntityManager.SetAttributesAsync(_currentImportPriceBruttoEntity.EntityId, attr_currentImportPrice);
 
-      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, _house.Prices.PriceListExport.GetPrice(now).ToString(CultureInfo.InvariantCulture));
+      await PVCC_EntityManager.SetStateAsync(_currentExportPriceBruttoEntity.EntityId, PriceManager.SensorState(_house.Prices.PriceListExport, now));
       var attr_currentExportPrice = new
       {
         _netto_price = _house.Prices.PriceListNettoExport.GetPrice(now),

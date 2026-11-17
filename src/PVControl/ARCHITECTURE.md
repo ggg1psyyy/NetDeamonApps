@@ -760,7 +760,12 @@ charged at 7.2 kW until the deploy at 09:26 (`AbsoluteMinimum`, price 0). Even u
 was laid into the market list's slots, and there were none. Since then `PriceList.MergeHeld`: fresh prices win, the
 quarters no source gives any more keep their last price (day-ahead prices are final once published: a held quarter is
 the real price, not a guess; from today's midnight, what a source gives too), saved to `held_prices.json` for
-restarts; a fixed price gets its own quarters without a market list (`PriceList.Quarters`); and if nothing covers now,
+restarts (written at the start too, not first at the next change). The list is refreshed every cycle, not only on a
+price entity's event — a renamed entity sends none, and the held list must still drop yesterday at midnight. A fixed
+price covers today and tomorrow whatever the market list holds (`PriceManager.FixedSlots`: with only yesterday's
+market slots left past midnight, the fixed price would have had no quarter for now). The plan estimates beyond the held
+list as before; "now" (the mode, the price shown and booked) only takes a real price — held prices cover the day they
+were published for, so under the market this means no source for more than a day. And if nothing covers now,
 the mode is plain normal (`HouseEnergy.WithoutPrices`, reason `NoPrices`) — keeping the inverter's current mode was the
 alternative, but it would keep a running grid charge going. Health: only held prices = degraded, none = error.
 

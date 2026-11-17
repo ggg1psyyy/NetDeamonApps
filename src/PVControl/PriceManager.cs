@@ -31,6 +31,15 @@ namespace NetDeamon.apps.PVControl
       var (import, export) = HeldPriceFile.Load(path);
       _priceListCache = PriceList.MergeHeld(PriceListNetto, import, now.Date);
       _independentExportPriceListCache = PriceList.MergeHeld(PriceListNettoIndependentExport, export, now.Date);
+      SaveHeld();   // now, not at the next change (~13:00): a restart before then would find no file
+    }
+
+    /// <summary>Writes the held lists to the file (if one is kept and there's anything to hold).</summary>
+    private void SaveHeld()
+    {
+      if (_heldFile is null || _priceListCache.Count == 0) return;
+      try { HeldPriceFile.Save(_heldFile, _priceListCache, _independentExportPriceListCache); }
+      catch (System.Exception ex) { PVCC_Logger.LogWarning("Held prices not saved: {Message}", ex.Message); }
     }
 
     /// <summary>Fetches the netto prices again; the quarters no source gives any more are held
@@ -45,11 +54,7 @@ namespace NetDeamon.apps.PVControl
       bool changed = !import.SameAs(_priceListCache) || !export.SameAs(_independentExportPriceListCache);
       _priceListCache = import;
       _independentExportPriceListCache = export;
-      if (changed && _heldFile is not null && import.Count > 0)
-      {
-        try { HeldPriceFile.Save(_heldFile, import, export); }
-        catch (System.Exception ex) { PVCC_Logger.LogWarning("Held prices not saved: {Message}", ex.Message); }
-      }
+      if (changed) SaveHeld();
       return changed;
     }
 
@@ -159,7 +164,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (tariff != ImportTariff.Fixed) return PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
       float price = FixedImportNetto;   // read once per list
-      return FixedSlots(price);
+      return FixedSlots(PriceListNetto, System.DateTime.Today, price);
     }
 
     /// <summary>Brutto import prices of one tariff, everywhere.</summary>
@@ -187,15 +192,18 @@ namespace NetDeamon.apps.PVControl
       if (tariff != ExportTariff.Fixed)
         return new(NettoExportFor(tariff).Select(p => new PriceTableEntry(p.StartTime, p.EndTime, ExportPrice(p.Price, null, true))));
       float price = FixedExportPrice;   // read once per list
-      return FixedSlots(price);
+      return FixedSlots(PriceListNetto, System.DateTime.Today, price);
     }
 
-    /// <summary>A fixed price in the market list's slots (so it reconciles with the market's quarters), or — without
-    /// any market price — in today's and tomorrow's quarters: a fixed price needs no market (<see cref="PriceList.Quarters"/>).</summary>
+    /// <summary>A fixed price in every quarter of today and tomorrow and of the market list (so it reconciles with the
+    /// market's quarters): a fixed price needs no market — an empty or outdated market list (every source dead past
+    /// midnight) still prices now (<see cref="PriceList.Quarters"/>, <see cref="PriceList.MergeHeld"/>).</summary>
+    /// <param name="market">The market list (its quarters).</param>
+    /// <param name="today">Today's midnight.</param>
     /// <param name="price">The fixed price.</param>
-    private PriceList FixedSlots(float price) =>
-      PriceListNetto.Count > 0 ? new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)))
-      : PriceList.Quarters(System.DateTime.Today, System.DateTime.Today.AddDays(2), price);
+    public static PriceList FixedSlots(PriceList market, System.DateTime today, float price) =>
+      PriceList.MergeHeld(new(market.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price))),
+        PriceList.Quarters(today, today.AddDays(2), price), today);
 
     /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/>, each quarter by its tariff.</summary>
     public PriceList PriceListNettoImport => ImportTariffs.Prices(NettoImportFor);

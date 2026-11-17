@@ -389,6 +389,28 @@ public class PriceListTests
   }
 
   [Fact]
+  public void FixedSlots_NoMarket_OrOnlyYesterdays_StillCoverNow()
+  {
+    var now = Day.AddHours(0.5);   // 00:30, every source dead since yesterday
+    var none = PriceManager.FixedSlots(new PriceList(), Day, 0.14125f);
+    Assert.True(none.TryGetPrice(now, out float p));
+    Assert.Equal(0.14125f, p);
+    Assert.Equal(Day.AddDays(2), none.End);
+    var yesterdays = PriceManager.FixedSlots(PriceList.Quarters(Day.AddDays(-1), Day, 0.3f), Day, 0.14125f);
+    Assert.True(yesterdays.TryGetPrice(now, out p));
+    Assert.Equal(0.14125f, yesterdays.GetPrice(Day.AddHours(-1)));   // the market's slots get the fixed price too
+  }
+
+  [Fact]
+  public void FixedSlots_MarketTodayAndTomorrow_TheSameQuarters()
+  {
+    var market = PriceList.Quarters(Day, Day.AddDays(2), 0.2f);
+    var fixedList = PriceManager.FixedSlots(market, Day, 0.14125f);
+    Assert.Equal(192, fixedList.Count);
+    Assert.All(fixedList, q => Assert.Equal(0.14125f, q.Price));
+  }
+
+  [Fact]
   public void WithoutPrices_NormalWithReason_ElseThePlan()
   {
     var charge = new InverterState(InverterModes.force_charge, ForceChargeReasons.AbsoluteMinimum);
