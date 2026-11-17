@@ -452,6 +452,10 @@ public class RetiredEntitiesTests
   [Fact]
   public void TheOldChargeCurrentLimitSensor_IsRetired() =>
     Assert.Contains("sensor.pv_control_battery_charge_current_limit", NetDeamon.apps.PVControl.PVControl.RetiredEntities);
+
+  [Fact]
+  public void TheApplyTariffNowSwitch_IsRetired_ItsAButton() =>
+    Assert.Contains("switch.pv_control_tariff_apply_now", NetDeamon.apps.PVControl.PVControl.RetiredEntities);
 }
 
 /// <summary>HA's automation and script editors rewrite automations.yaml / scripts.yaml on every save and drop all
