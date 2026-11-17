@@ -349,6 +349,7 @@ public static class BatteryDpPlanner
     var energies = times.Select(t => input.SlotEnergyWh(t)).ToArray();
     var fractions = times.Select(t => input.SlotFraction(t)).ToArray();
     var holdOks = times.Select(t => HoldAllowed(input, t)).ToArray();   // per whole quarter, the running one too
+    var floorOnly = times.Select(t => HoldOnlyAtFloor(input, t)).ToArray();
 
     // value[i][c][s]: cheapest cost from slot i in state s to the end, c = 1 if the quarter before charged from the grid
     // (only with a ChargeStartEur; else one layer); policy[i][c][s]: the action taken
@@ -391,7 +392,7 @@ public static class BatteryDpPlanner
       var (pv, load, extra) = energies[i];
       int totalLoad = load + extra;
       bool held = input.BatteryHeldForLoad(times[i], pv, totalLoad);
-      bool holdOk = holdOks[i];
+      bool holdOk = holdOks[i] || floorOnly[i];   // at the floor below (per state)
       var actions = Actions(input, o, held, holdOk);
       for (int s = 0; s < states; s++)
       {
@@ -401,6 +402,7 @@ public static class BatteryDpPlanner
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
         var normalFlows = Flows(input, actions[0], pv, totalLoad, wh, fractions[i]);
+        bool holdHere = floorOnly[i] ? NormalCrossesFloor(input, wh, normalFlows) : holdOk;
         // Per path (VPP, bulk): the last charge target's flows, and whether the targets above give the same (see below)
         var lastCharge = new (int, int, int, int)?[2];
         var capped = new bool[2];
@@ -420,7 +422,8 @@ public static class BatteryDpPlanner
           var (ch, dis, imp, exp) = flows;
           // A "charge" that stores under 1 % is a hold under another name (the battery doesn't discharge): the hold rule
           // applies to it (2026-11-03: 1–34 Wh force_charge quarters in daylight where the hold was ruled out).
-          if (a.Mode == InverterModes.force_charge && !holdOk && StoresUnderOnePercent(input, ch, fractions[i])) continue;
+          if (a.Mode == InverterModes.force_charge && !holdHere && StoresUnderOnePercent(input, ch, fractions[i])) continue;
+          if (a.Mode == InverterModes.grid_only && !held && !holdHere) continue;
           int next = input.NextEnergyWh(wh, ch, dis);
           float rest = input.GridCostOf(times[i], imp, exp) + DeviationEur(o, ch, dis, normalFlows)
             + (PlanEvaluation.BandApplies(a.Mode) ? band : 0) + floor + ValueAt(value[i + 1][LayerAfter(a)], next);
@@ -474,12 +477,12 @@ public static class BatteryDpPlanner
       while (blockEnd < n && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
       if (plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
       {
-        bool holdOk = holdOks[0];
         bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };
         Action? best = null;
         float bestRest = float.MaxValue;
-        var actions0 = Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOk);
+        var actions0 = Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOks[0] || floorOnly[0]);
         var normalFlows0 = Flows(input, actions0[0], pv0, load0 + extra0, startEnergy, fractions[0]);
+        bool holdOk = floorOnly[0] ? NormalCrossesFloor(input, startEnergy, normalFlows0) : holdOks[0];
         foreach (var a in actions0)
         {
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
@@ -529,10 +532,13 @@ public static class BatteryDpPlanner
       return planned;
     var keep = new Action(current, false, 0);
     bool held = input.BatteryHeldForLoad(time, pv, totalLoad);
-    var actions = Actions(input, o, held, HoldAllowed(input, time));
+    bool floorOnly = HoldOnlyAtFloor(input, time);
+    var actions = Actions(input, o, held, HoldAllowed(input, time) || floorOnly);
     if (!actions.Contains(keep))
       return planned;
     var normalFlows = Flows(input, actions[0], pv, totalLoad, energy, fraction);
+    if (keep.Mode == InverterModes.grid_only && !held && floorOnly && !NormalCrossesFloor(input, energy, normalFlows))
+      return planned;
     float Rest(Action a)
     {
       var (ch, dis, imp, exp) = Flows(input, a, pv, totalLoad, energy, fraction);
@@ -625,6 +631,28 @@ public static class BatteryDpPlanner
     var (pv, load, extra) = input.QuarterEnergyWh(slot);
     return HoldAllowed(input, pv, load + extra);
   }
+
+  /// <summary>
+  /// Where a hold may only keep the floor: the fixed import tariff in force to the horizon's end with the preferred minimum
+  /// enforced. At the same price later a hold above the floor only moves when the grid is used — a tie the DP broke by
+  /// its state grid (live 2026-11-17 07:30, enforced 20 %: grid_only at 61 %, 58 %, 34 %, 30 %, normal in between). There
+  /// a hold is allowed exactly in the quarters where normal would take the battery under the floor
+  /// (<see cref="NormalCrossesFloor"/>) — also with weak PV (the 1-% rule of <see cref="HoldAllowed(SimulationInput, int, int)"/>
+  /// would leave a grid charge to keep the floor, which the price-block rule then started at once): normal down to the
+  /// floor, then held. In normal the inverter runs Self Use down to its own minimum (the absolute one), so the hold is
+  /// what keeps the enforced floor.
+  /// </summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="slot">Start of the quarter.</param>
+  public static bool HoldOnlyAtFloor(SimulationInput input, DateTime slot) =>
+    input.EnforcePreferredSoc && input.FixedImportUntilEnd(slot, HorizonEnd(input));
+
+  /// <summary>Whether normal would end the quarter under the effective floor (<see cref="SimulationInput.GetEffectiveMinSoC"/>).</summary>
+  /// <param name="input">Simulation input.</param>
+  /// <param name="energyWh">Energy at the quarter's start, Wh.</param>
+  /// <param name="normalFlows">The quarter's flows in normal.</param>
+  internal static bool NormalCrossesFloor(SimulationInput input, int energyWh, (int Charge, int Discharge, int Import, int Export) normalFlows) =>
+    input.NextEnergyWh(energyWh, normalFlows.Charge, normalFlows.Discharge) < input.SocToWh(input.GetEffectiveMinSoC());
 
   /// <summary>
   /// Whether a grid charge stores under 1 % SoC per quarter — a hold under another name where holds are ruled out

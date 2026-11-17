@@ -1150,6 +1150,17 @@ minimum in force at the low (`DpSteering.ReasonOf`); and the tariff schedule's s
 the select (`TariffSchedule`): it was changed in place on another thread, so a plan could read prices and fixed
 quarters — or a single list — from a half-made choice; a plan takes one `Copy()`.
 
+**Enforced: holds only at the floor (2026-11-17).** The first morning on Fair with the preferred minimum enforced (20 %,
+battery 63 %) the plan held at 61 %, 58 %, 34 % and 30 % with normal in between — 57 holds in eight blocks. At one price
+everywhere a hold above the floor only moves *when* the grid is used, not how much: a tie the DP broke by its state grid.
+Making normal stop at the enforced floor in the model was not an option: plain normal runs as Self Use, down to the
+inverter's own minimum (only the feed-in loop takes `min_soc_pct`), so the hold is what keeps the enforced floor. So
+`HoldOnlyAtFloor`: under the fixed tariff to the plan's end with enforce on, a hold only in a quarter where normal would
+end under the floor — also with weak PV (the 1-% rule kept the hold out of tomorrow's dull morning, the DP kept the floor
+with a 216-Wh grid charge, and the price-block rule, the whole flat day being one block, started it at once). Result on
+the snapshot: normal down to 21 %, one hold block to the PV, the same cost (1.6912 €); one normal quarter is left inside
+the block (00:00), the last part of a percent the 18:30 quarter's draw would have taken under the floor.
+
 ### The floor cost a phantom euro (2026-11-15)
 
 Found while banning holds under the fixed tariff — the DP then charged at 66–75 % in the evening at a flat price. 12 %

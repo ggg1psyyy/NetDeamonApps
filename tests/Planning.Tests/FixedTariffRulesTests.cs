@@ -70,6 +70,27 @@ public class FixedTariffRulesTests
   }
 
   [Fact]
+  public void Fixed_Enforced_HoldsOnlyAtTheFloor_NormalDownToItThenHeld()
+  {
+    // Live 2026-11-17 07:30 (Fair, enforced 20 %, 63 %): grid_only at 61 %, 58 %, 34 %, 30 %, normal in between — ties at
+    // the flat price. Now normal down to the floor, then held to the PV; no charge (the morning's weak PV kept the hold
+    // out and a charge kept the floor, which the price-block rule started at once).
+    var live = Live("2026-11-17_0730");
+    Assert.True(live.EnforcePreferredSoc);
+    var plan = BatteryDpPlanner.Plan(live);
+    int floorWh = live.SocToWh(live.PreferredMinSocPercent);
+    Assert.DoesNotContain(plan.Slots, s => s.Mode == InverterModes.force_charge);
+    Assert.All(plan.Slots.Where(s => s.Mode == InverterModes.grid_only),
+      s => Assert.True(s.EnergyWh < floorWh + live.SocToWh(2), $"{s.Time:dd HH:mm} held at {s.EnergyWh} Wh"));
+    Assert.All(plan.Slots, s => Assert.True(s.EnergyWh >= floorWh - 1, $"{s.Time:dd HH:mm} {s.EnergyWh} Wh"));
+    // one hold block: at most one normal quarter inside it (the last part of a percent above the floor)
+    int holdStarts = plan.Slots.Zip(plan.Slots.Skip(1)).Count(p => p.First.Mode != InverterModes.grid_only && p.Second.Mode == InverterModes.grid_only);
+    Assert.InRange(holdStarts, 1, 2);
+    Assert.True(BatteryDpPlanner.HoldOnlyAtFloor(live, live.StartTime));
+    Assert.False(BatteryDpPlanner.HoldOnlyAtFloor((Snap("2026-11-17_0730") with { EnforcePreferredSoc = false }).ToInput(), live.StartTime));   // banned there (HoldAllowed)
+  }
+
+  [Fact]
   public void MarketToday_FixedFromMidnight_HoldsOnlyBeforeTheSwitch()
   {
     var live = Live("2026-11-04_1200");
