@@ -23,6 +23,14 @@ python deploy/deploy.py apps          # Publish, copy to the add-on, restart, ve
 dotnet test                          # Run all unit tests (from repo root; one project: dotnet test tests/PVControl.Tests)
 ```
 
+**Running all tests on a small machine (≤ 4 GB RAM): one project at a time, 2 xUnit threads** — a plain `dotnet test`
+runs every test project in parallel (the DP scenario tests on live snapshots are heavy) and ran the dev container out of
+memory twice (OOM kills, the container hung):
+
+```bash
+for p in tests/*.Tests; do echo "== $p"; timeout 900 dotnet test $p -m:1 -- xUnit.MaxParallelThreads=2 2>&1 | grep -E " error |Failed |Passed!|Failed!"; done
+```
+
 One test project per project lives at `tests/<Project>.Tests/` (shared settings in `tests/Tests.props`, all in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with valid HA host/token.
 
 ## Testing Requirements
