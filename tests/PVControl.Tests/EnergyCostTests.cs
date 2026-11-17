@@ -265,5 +265,12 @@ public class EnergyCostTests : TestBase
     Assert.Equal((0.12f + 0.0688f) * 1.2f, PriceManager.GrossImportPrice(0.45f, 0.12f, 1.1f, 0.015f, 0.0688f, 0.2f), 5);   // the market doesn't matter
     Assert.Equal(0.12f * 1.2f, PriceManager.GrossImportPrice(0.10f, 0.12f, 1.1f, 0.015f, 0, 0.2f), 5);                     // energy only
   }
-}
 
+  [Fact]
+  public void FixedFeedInPrice_TheSourcePlusTheAddition_NoNetworkOrTax()
+  {
+    // Hofer Sonne 2026-11: the reference value's low estimate 0.2344, less 1.9 ct.
+    Assert.Equal(0.2154f, PriceManager.FixedFeedInPrice(0.2344f, -0.019f), 5);
+    Assert.Equal(0.08f, PriceManager.FixedFeedInPrice(0.08f, 0), 5);   // a fixed price as paid
+  }
+}

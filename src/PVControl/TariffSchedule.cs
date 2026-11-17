@@ -75,6 +75,22 @@ namespace NetDeamon.apps.PVControl
       }
     }
 
+    /// <summary>The pending choice takes effect now instead of at the switch time (the contract already changed): from
+    /// the running quarter's start, so <see cref="Roll"/> makes it the active one and the quarters before keep the old
+    /// tariff (<see cref="Previous"/>).</summary>
+    /// <param name="now">Current time.</param>
+    /// <returns>True if a choice was pending.</returns>
+    public bool ApplyNow(DateTime now)
+    {
+      lock (_write)
+      {
+        var s = _s;
+        if (s.EffectiveFrom is null) return false;
+        _s = s with { EffectiveFrom = now.RoundToNearestQuarterHour() };
+        return true;
+      }
+    }
+
     /// <summary>The switch time passed: the chosen tariff becomes the active one.</summary>
     /// <param name="now">Current time.</param>
     /// <returns>True if it rolled over.</returns>

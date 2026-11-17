@@ -104,10 +104,17 @@ namespace NetDeamon.apps.PVControl
         ? v : PVCC_Config.ImportPriceFixedValue;
 
     /// <summary>The fixed feed-in price of the export tariff <see cref="ExportTariff.Fixed"/>, €/kWh as paid (no
-    /// netto breakdown): the entity's value, else the configured one.</summary>
+    /// netto breakdown): the entity's value, else the configured one, plus <see cref="PVConfig.ExportPriceFixedAddition"/>.</summary>
     private static float FixedExportPrice =>
-      PVCC_Config.ExportPriceFixedEntity is not null && PVCC_Config.ExportPriceFixedEntity.TryGetStateValue(out float v, numericalGetBaseValue: false)
-        ? v : PVCC_Config.ExportPriceFixedValue;
+      FixedFeedInPrice(PVCC_Config.ExportPriceFixedEntity is not null && PVCC_Config.ExportPriceFixedEntity.TryGetStateValue(out float v, numericalGetBaseValue: false)
+        ? v : PVCC_Config.ExportPriceFixedValue, PVCC_Config.ExportPriceFixedAddition);
+
+    /// <summary>A fixed feed-in price as paid: the source's value plus the contract's addition (negative: a deduction,
+    /// e.g. a reference market value less the supplier's share); no network fee or tax (<see cref="GrossPrice"/>).</summary>
+    /// <param name="value">The entity's or the configured value, €/kWh.</param>
+    /// <param name="addition">€/kWh added to it.</param>
+    /// <returns>€/kWh.</returns>
+    public static float FixedFeedInPrice(float value, float addition) => GrossPrice(value, 1, addition, 0, 0);
 
     /// <summary>The fixed energy price in force at a time, netto, €/kWh; null while the import tariff is the market.</summary>
     /// <param name="t">The time (a quarter's start).</param>

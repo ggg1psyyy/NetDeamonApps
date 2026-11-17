@@ -163,6 +163,9 @@ namespace NetDeamon.apps.PVControl
     public ExportTariff ExportTariff { get; set; } = ExportTariff.SameAsImport;
     public Entity? ExportPriceFixedEntity { get; set; }
     public float ExportPriceFixedValue { get; set; } = default;
+    /// <summary>Added to the fixed feed-in price (<see cref="ExportPriceFixedEntity"/> or <see cref="ExportPriceFixedValue"/>),
+    /// €/kWh; negative = a deduction (the source gives a reference value, the contract pays less).</summary>
+    public float ExportPriceFixedAddition { get; set; } = default;
     public List<Entity>? CurrentExportPriceEntities { get; set; }
     public float ExportPriceMultiplier { get; set; } = default;
     public float ExportPriceAddition { get; set; } = default;

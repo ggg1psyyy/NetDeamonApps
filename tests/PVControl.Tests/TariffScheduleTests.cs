@@ -44,6 +44,22 @@ public class TariffScheduleTests
   }
 
   [Fact]
+  public void ApplyNow_ThePendingChoiceFromTheRunningQuarter_TheQuartersBeforeKeepTheOldTariff()
+  {
+    // Live 2026-11-17: the supplier's fixed tariff already ran that day; chosen at 07:05, applied now — not at midnight.
+    var s = new TariffSchedule<ImportTariff>(ImportTariff.Market);
+    s.Choose(ImportTariff.Fixed, Day.AddHours(7).AddMinutes(5), Midnight);
+    Assert.True(s.ApplyNow(Day.AddHours(7).AddMinutes(6)));
+    Assert.Equal(Day.AddHours(7), s.EffectiveFrom);
+    Assert.True(s.Roll(Day.AddHours(7).AddMinutes(6)));
+    Assert.Equal(ImportTariff.Fixed, s.Active);
+    Assert.Equal(ImportTariff.Fixed, s.At(Day.AddHours(7)));         // the running quarter
+    Assert.Equal(ImportTariff.Market, s.At(Day.AddHours(6.75)));     // booked before: as it was
+    Assert.Equal(Day.AddHours(7), s.Since);
+    Assert.False(s.ApplyNow(Day.AddHours(8)));                      // nothing pending
+  }
+
+  [Fact]
   public void Roll_OnlyFromTheSwitchTime()
   {
     var s = new TariffSchedule<ExportTariff>(ExportTariff.SameAsImport);

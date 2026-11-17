@@ -13,7 +13,7 @@ NetDeamon.apps.PVControl.PVConfig:
     - sensor.epex_spot_data_market_price_4   # Energy-Charts, 15 min
     - sensor.epex_spot_data_market_price_3   # ENTSO-E Transparency, 15 min
   ImportPriceMultiplier: 1.0
-  ImportPriceAddition: 0.012
+  ImportPriceAddition: 0.015833   # Hofer Grünstrom Spot: 1.583 ct/kWh netto on the market price
   ImportPriceNetwork: 0.07992
   ImportPriceNetworkPeriods:
     # SNAP (Sommer-Nieder-Arbeitspreis): 20% discount on network fee, Apr–Sep 10:00–16:00
@@ -52,13 +52,13 @@ NetDeamon.apps.PVControl.PVConfig:
   TariffSwitchTime: "00:00"
   # ImportPriceFixedEntity: input_number.fixed_energy_price
   # The fixed tariff's energy price (Hofer Grünstrom Fair, netto): priced for the tariff advisor and a switch to Fixed
-  ImportPriceFixedValue: 0.14125
+  ImportPriceFixedValue: 0.14125   # 14.125 ct/kWh netto; ImportPriceTax (VAT) and the network fee are added to it
   # How the raw price data is interpreted:
   #   QuarterHourly = use each 15-min price as-is
   #   Hourly        = average the four 15-min prices within each hour and apply that
   #                    mean to all four slots (use this if your provider bills the
   #                    hourly EPEX average rather than the raw 1/4h price)
-  ImportPriceResolution: Hourly
+  ImportPriceResolution: QuarterHourly   # Hofer Spot bills the 15-min price
   # Tomorrow's prices arrive ~13:00; until then the simulation estimates them from the same hour a
   # day earlier. Risk premium on those estimates: import × 1.05, export × 0.95 — an estimated slot
   # only wins over a published one when it's clearly better.
@@ -72,8 +72,12 @@ NetDeamon.apps.PVControl.PVConfig:
   #   Fixed        = a fixed feed-in price as paid (ExportPriceFixedEntity takes priority over ExportPriceFixedValue)
   #   Market       = its own market price, CurrentExportPriceEntities (fallback list, like import), scaled below
   ExportTariff: SameAsImport
-  # ExportPriceFixedEntity: sensor.some_fixed_feedin_tariff
-  # ExportPriceFixedValue: 0.05
+  # Hofer Grünstrom Sonne: the Referenzmarktwert PV less a deduction. Source: the running month's estimate, low end
+  # (HACS integration ha-referenzmarktwert); ExportPriceFixedValue only while the entity is unavailable (Nov 2026).
+  # ExportPriceFixedAddition is added to either (negative = deduction, €/kWh).
+  ExportPriceFixedEntity: sensor.extern_referenzmarktwert_pv_estimate_running_month_low
+  ExportPriceFixedValue: 0.234
+  ExportPriceFixedAddition: -0.019
   # CurrentExportPriceEntities:
   #   - sensor.epex_spot_data_price_2
   ExportPriceMultiplier: 0.8

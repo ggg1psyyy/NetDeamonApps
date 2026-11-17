@@ -55,6 +55,7 @@ negative hours instead of the PV being curtailed. Independent of opportunistic e
 | `number.pv_control_max_price_for_forcecharge` | Price ceiling (ct/kWh) for grid import during force-charge; also the "cheap grid" threshold for PriorityPlus loads |
 | `number.pv_control_forcecharge_target_soc` | Target SoC (%) of the battery top-up |
 | `select.pv_control_import_tariff` | Import tariff: `Market` or `Fixed` (see [Tariffs](#tariffs)); attributes `active`, `effective_from`, `previous`, `since` |
+| `switch.pv_control_tariff_apply_now` | Momentary: the tariff selects' pending choices take effect now (from the running quarter), not at `TariffSwitchTime` |
 | `select.pv_control_export_tariff` | Export tariff: `SameAsImport`, `Fixed` or `Market` (see [Tariffs](#tariffs)); attributes `active`, `effective_from`, `previous`, `since` |
 
 ## Status entities
@@ -212,7 +213,7 @@ The two tariff selects choose how prices are formed; the prices themselves come 
 | Export tariff | Feed-in price |
 |---|---|
 | `SameAsImport` | the import market price, scaled with `ExportPriceMultiplier`/`ExportPriceAddition`/`ExportPriceNetwork`/`ExportPriceTax` |
-| `Fixed` | `ExportPriceFixedEntity` (else `ExportPriceFixedValue`), as paid |
+| `Fixed` | `ExportPriceFixedEntity` (else `ExportPriceFixedValue`) + `ExportPriceFixedAddition` (negative: a deduction, e.g. a reference market value less the supplier's share), as paid |
 | `Market` | its own market price sources, `CurrentExportPriceEntities`, scaled as above |
 
 On import the network fee (incl. `ImportPriceNetworkPeriods`) and `ImportPriceTax` apply to both tariffs. The market price sources still give the time slots of a fixed price, and a fixed price gets no risk premium past the published data. `ImportTariff` / `ExportTariff` in `PVControl.yaml` are the start values; after that the selects keep the choice.
@@ -221,7 +222,7 @@ On import the network fee (incl. `ImportPriceNetworkPeriods`) and `ImportPriceTa
 
 Each quarter's DP snapshot (`dp_shadow.db`) also stores every import tariff's planning list (a tariff whose price isn't set, or is 0, is left out) — what the tariff advisor plugin compares.
 
-**A choice takes effect at `TariffSwitchTime`** (default `00:00`, the supplier switches the contract then): until then the select's attribute `active` is the tariff in force and `effective_from` the switch. The plan prices every quarter with the tariff in force then — a tariff chosen in the evening for tomorrow already prices tomorrow's quarters, and the estimates for tomorrow come from that tariff's own prices. The cost log prices each booked quarter the same way. A tariff whose price setting is missing (e.g. `Fixed` without a fixed price) is refused with a warning in the log; the select shows the previous choice.
+**A choice takes effect at `TariffSwitchTime`** (default `00:00`, the supplier switches the contract then): until then the select's attribute `active` is the tariff in force and `effective_from` the switch. The plan prices every quarter with the tariff in force then — a tariff chosen in the evening for tomorrow already prices tomorrow's quarters, and the estimates for tomorrow come from that tariff's own prices. The cost log prices each booked quarter the same way. A tariff whose price setting is missing (e.g. `Fixed` without a fixed price) is refused with a warning in the log; the select shows the previous choice. **`switch.pv_control_tariff_apply_now`** (momentary, turns itself off) puts the pending choices in force from the running quarter instead — for a contract the supplier already switched; the quarters before keep the old tariff (`previous`/`since`).
 
 The simulation plans until the end of tomorrow, but tomorrow's EPEX prices only arrive in the afternoon. Until then the missing hours are estimated with the price of the same hour a day earlier (the daily pattern repeats well enough; estimates are never negative). Estimates carry a risk premium (`EstimatedPricePremium`, default 5 %: import × 1.05, export × 0.95), so an estimated slot only wins over a published one when it's clearly better. Price-driven commitments — EV session starts — still only use published prices.
 

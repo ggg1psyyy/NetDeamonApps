@@ -71,6 +71,7 @@ namespace NetDeamon.apps.PVControl
     private Entity _plannerEntity = null!;
     private Entity _importTariffEntity = null!;
     private Entity _exportTariffEntity = null!;
+    private Entity _tariffApplyNowEntity = null!;
     // select.pv_control_planner: the selected planner, the one in effect this cycle, and whether the DP couldn't steer.
     private Optimizer.Planner _planner = Optimizer.Planner.greedy;
     private Optimizer.Planner _effectivePlanner = Optimizer.Planner.greedy;
@@ -235,6 +236,7 @@ namespace NetDeamon.apps.PVControl
       await SubscribeCommandAsync(_plannerEntity);
       await SubscribeCommandAsync(_importTariffEntity);
       await SubscribeCommandAsync(_exportTariffEntity);
+      await SubscribeCommandAsync(_tariffApplyNowEntity);
       await SubscribeCommandAsync(_enableOpportunisticExport);
 
       PVCC_Logger.LogInformation("Setting up command subscriptions for {count} schedulable loads", _house.SchedulableLoads.Count);
@@ -347,6 +349,8 @@ namespace NetDeamon.apps.PVControl
       if (entity.EntityId == _exportTariffEntity.EntityId)
         await ChooseTariffAsync(entity, _house.Prices.ExportTariffs, newState, t => TariffSources.ExportMissing(t,
           PVCC_Config.ExportPriceFixedEntity is not null, PVCC_Config.ExportPriceFixedValue, PVCC_Config.CurrentExportPriceEntities?.Count ?? 0));
+      if (entity.EntityId == _tariffApplyNowEntity.EntityId && newState == "on")
+        await ApplyTariffsNowAsync();
       if (entity.EntityId == _overrideModeEntity.EntityId && entity.State is not null)
       {
         if (Enum.TryParse(newState, out InverterModes modeselect))
@@ -1839,6 +1843,18 @@ namespace NetDeamon.apps.PVControl
       await PublishTariffAsync(entity, schedule);
     }
 
+    /// <summary>switch.pv_control_tariff_apply_now (momentary): the pending tariff choices take effect from the running
+    /// quarter instead of at the switch time — the supplier already changed the contract; then it turns itself off.</summary>
+    private async Task ApplyTariffsNowAsync()
+    {
+      var now = DateTime.Now;
+      bool import = _house.Prices.ImportTariffs.ApplyNow(now), export = _house.Prices.ExportTariffs.ApplyNow(now);
+      PVCC_Logger.LogInformation("Tariff choice applied now: import {Import}, export {Export}",
+        import ? _house.Prices.ImportTariffs.Chosen.ToString() : "nothing pending", export ? _house.Prices.ExportTariffs.Chosen.ToString() : "nothing pending");
+      await RollTariffsAsync(now);
+      await PVCC_EntityManager.SetStateAsync(_tariffApplyNowEntity.EntityId, "OFF");
+    }
+
     /// <summary>At the switch time a chosen tariff takes over: published, and a new plan.</summary>
     /// <param name="now">Current time.</param>
     private async Task RollTariffsAsync(DateTime now)
@@ -1993,6 +2009,9 @@ namespace NetDeamon.apps.PVControl
         addConfig: new { options = Enum.GetNames<ExportTariff>() },
         defaultValue: PVCC_Config.ExportTariff.ToString(),
         reRegister: reset);
+
+      _tariffApplyNowEntity = await RegisterSensor("switch.pv_control_tariff_apply_now", "Apply tariff choice now", "switch", "mdi:cash-fast",
+        defaultValue: "OFF", reRegister: reset);
 
       _forceChargeEntity = await RegisterSensor("switch.pv_control_force_charge_at_cheapest_period", "Battery top-up", "switch", "mdi:transmission-tower",
         defaultValue: "OFF",
