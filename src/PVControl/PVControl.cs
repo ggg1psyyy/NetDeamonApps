@@ -180,8 +180,8 @@ namespace NetDeamon.apps.PVControl
         _house.OverrideMode = mode;
       if (_plannerEntity.TryGetStateValue(out Optimizer.Planner planner))
         _planner = planner;
-      _house.Prices.ImportTariffs = RestoreTariff(_importTariffEntity, PVCC_Config.ImportTariff);
-      _house.Prices.ExportTariffs = RestoreTariff(_exportTariffEntity, PVCC_Config.ExportTariff);
+      _house.Prices.ImportTariffs = RestoreTariff(_importTariffEntity, PVCC_Config.ImportTariffDefault);
+      _house.Prices.ExportTariffs = RestoreTariff(_exportTariffEntity, PVCC_Config.ExportTariffDefault);
       await PublishTariffAsync(_importTariffEntity, _house.Prices.ImportTariffs);
       await PublishTariffAsync(_exportTariffEntity, _house.Prices.ExportTariffs);
       if (_prefBatterySoCEntity.TryGetStateValue(out int prefSoC))
@@ -1806,6 +1806,14 @@ namespace NetDeamon.apps.PVControl
     /// active one, when the choice takes effect, and the tariff before the last switch.</summary>
     /// <param name="entity">The select.</param>
     /// <param name="start">The YAML's tariff (first start).</param>
+    /// <summary>Whether the running tariff (in force or chosen) is not the YAML's default — then the YAML no longer says
+    /// what runs (logged at start; the select keeps the choice, the default only seeds a new select).</summary>
+    /// <param name="active">Tariff in force.</param>
+    /// <param name="chosen">Tariff chosen (pending or in force).</param>
+    /// <param name="yamlDefault">ImportTariffDefault / ExportTariffDefault.</param>
+    public static bool TariffDiffersFromDefault<T>(T active, T chosen, T yamlDefault) where T : struct, Enum =>
+      !EqualityComparer<T>.Default.Equals(active, yamlDefault) || !EqualityComparer<T>.Default.Equals(chosen, yamlDefault);
+
     private static TariffSchedule<T> RestoreTariff<T>(Entity entity, T start) where T : struct, Enum
     {
       string? Attr(string name) => entity.TryGetJsonAttribute(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
@@ -1813,6 +1821,9 @@ namespace NetDeamon.apps.PVControl
         PVCC_Config.TariffSwitchTimeOfDay, Attr("previous"), Attr("since"));
       PVCC_Logger.LogInformation("{Entity}: {Active} (chosen {Chosen}, from {From})", entity.EntityId, schedule.Active, schedule.Chosen,
         schedule.EffectiveFrom?.ToString("yyyy-MM-dd HH:mm") ?? "-");
+      if (TariffDiffersFromDefault(schedule.Active, schedule.Chosen, start))
+        PVCC_Logger.LogInformation("{Entity}: {Chosen} differs from the YAML default {Start} (only used when the select is created)",
+          entity.EntityId, schedule.Chosen, start);
       return schedule;
     }
 
@@ -2010,11 +2021,11 @@ namespace NetDeamon.apps.PVControl
       // The supply contracts' tariffs (prices: PVControl.yaml); a choice takes effect at TariffSwitchTime.
       _importTariffEntity = await RegisterSensor("select.pv_control_import_tariff", "Import tariff", "select", "mdi:cash-clock",
         addConfig: new { options = Enum.GetNames<ImportTariff>() },
-        defaultValue: PVCC_Config.ImportTariff.ToString(),
+        defaultValue: PVCC_Config.ImportTariffDefault.ToString(),
         reRegister: reset);
       _exportTariffEntity = await RegisterSensor("select.pv_control_export_tariff", "Export tariff", "select", "mdi:cash-plus",
         addConfig: new { options = Enum.GetNames<ExportTariff>() },
-        defaultValue: PVCC_Config.ExportTariff.ToString(),
+        defaultValue: PVCC_Config.ExportTariffDefault.ToString(),
         reRegister: reset);
 
       _tariffApplyNowEntity = await RegisterSensor("switch.pv_control_tariff_apply_now", "Apply tariff choice now", "switch", "mdi:cash-fast",
@@ -2437,7 +2448,7 @@ namespace NetDeamon.apps.PVControl
           $"{load.Config.Name} - Energy per {load.Config.LevelUnit}",
           null, "mdi:lightning-bolt",
           addConfig: new { min = 0.001, max = 10, step = 0.001, mode = "box", unit_of_measurement = $"kWh/{load.Config.LevelUnit}" },
-          defaultValue: load.Config.EnergyPerLevelUnitKwh.ToString("F3", CultureInfo.InvariantCulture),
+          defaultValue: load.Config.EnergyPerLevelUnitKwhDefault.ToString("F3", CultureInfo.InvariantCulture),
           reRegister: reset);
         if (load.EnergyPerLevelEntity.TryGetStateValue(out float savedPerLevel, numericalGetBaseValue: false) && savedPerLevel > 0)
           load.EnergyPerLevelKwh = savedPerLevel;
@@ -2447,7 +2458,7 @@ namespace NetDeamon.apps.PVControl
           $"{load.Config.Name} - Charge Power",
           "power", "mdi:flash",
           addConfig: new { min = 0, max = 50000, step = 10, mode = "box", unit_of_measurement = "W" },
-          defaultValue: load.Config.AvgPowerW.ToString(CultureInfo.InvariantCulture),
+          defaultValue: load.Config.AvgPowerWDefault.ToString(CultureInfo.InvariantCulture),
           reRegister: reset);
         if (load.ChargePowerEntity.TryGetStateValue(out int savedPower, numericalGetBaseValue: false) && savedPower > 0)
           load.LearnedPower = savedPower;

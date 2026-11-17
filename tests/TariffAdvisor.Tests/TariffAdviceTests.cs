@@ -176,8 +176,12 @@ public class TariffAdviceTests
   [Fact]
   public void Config_TheYamlsValues()
   {
-    var yaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TariffAdvisor.yaml"));
-    Assert.Contains("MinSavingEur: 0.30", yaml);
-    Assert.DoesNotContain("StartTime", yaml);   // the window is in code (TariffAdvice.WindowStart/WindowEnd)
+    foreach (var file in ConfigKeys.Files("TariffAdvisor"))
+    {
+      var yaml = File.ReadAllText(file);
+      Assert.Contains("MinSavingEur: 0.30", yaml);
+      Assert.DoesNotContain("StartTime", yaml);   // the window is in code (TariffAdvice.WindowStart/WindowEnd)
+      Assert.Empty(ConfigKeys.Unmatched(yaml, typeof(NetDeamon.apps.TariffAdvisor.TariffAdvisorConfig)));
+    }
   }
 }

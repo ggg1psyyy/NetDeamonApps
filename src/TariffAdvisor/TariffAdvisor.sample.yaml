@@ -1,3 +1,5 @@
+# Sample of TariffAdvisor.yaml — copy it to TariffAdvisor.yaml (not in git: the real config stays local and on HA, deploy.py copies it)
+# and adapt it. A new or renamed key goes into both files.
 NetDeamon.apps.TariffAdvisor.TariffAdvisorConfig:
   # false: the app does nothing at all (no entities, no timer).
   Enabled: true

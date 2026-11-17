@@ -118,11 +118,11 @@ namespace NetDeamon.apps.PVControl.Managers
 
     /// <summary>
     /// Measured energy per level unit (kWh, e.g. per % SoC), on the meter's side — charger
-    /// losses included. Starts at Config.EnergyPerLevelUnitKwh; learned while running.
+    /// losses included. Starts at Config.EnergyPerLevelUnitKwhDefault; learned while running.
     /// </summary>
     public float EnergyPerLevelKwh { get; set; }
 
-    /// <summary>Typical measured power while running (W). Starts at Config.AvgPowerW; learned while running.</summary>
+    /// <summary>Typical measured power while running (W). Starts at Config.AvgPowerWDefault; learned while running.</summary>
     public double LearnedPower { get; set; }
     public int LearnedPowerW => (int)Math.Round(LearnedPower);
 
@@ -312,8 +312,8 @@ namespace NetDeamon.apps.PVControl.Managers
     public SchedulableLoadRuntime(SchedulableLoadConfig config)
     {
       Config = config;
-      EnergyPerLevelKwh = config.EnergyPerLevelUnitKwh;
-      LearnedPower = config.AvgPowerW;
+      EnergyPerLevelKwh = config.EnergyPerLevelUnitKwhDefault;
+      LearnedPower = config.AvgPowerWDefault;
     }
 
     /// <summary>HA entity-ID slug: lowercase Name with spaces replaced by underscores.</summary>

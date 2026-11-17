@@ -1,3 +1,5 @@
+# Sample of PVControl.yaml — copy it to PVControl.yaml (not in git: the real config stays local and on HA, deploy.py copies it)
+# and adapt it. A new or renamed key goes into both files.
 NetDeamon.apps.PVControl.PVConfig:
   # config entries marked with '***' are required
 
@@ -39,12 +41,13 @@ NetDeamon.apps.PVControl.PVConfig:
       EndYear: 2099
       Price: 0.06882
   ImportPriceTax: 0.2
-  # Import tariff (start value; afterwards select.pv_control_import_tariff in HA keeps the choice):
+  # Import tariff, the default: only used when select.pv_control_import_tariff is created; afterwards the select keeps
+  # the choice (a restart with a different select only logs the difference):
   #   Market = the market price × ImportPriceMultiplier + ImportPriceAddition
   #   Fixed  = the fixed energy price below (netto: without tax and network fee, €/kWh); the network fee (incl. its
-  #            periods) and the tax stay. The market price entities still give the time slots (and the export price
-  #            with ExportTariff SameAsImport).
-  ImportTariff: Market
+  #            periods) and the tax stay. No market price needed (the export price with ExportTariffDefault
+  #            SameAsImport still is the market's).
+  ImportTariffDefault: Market
   # Time of day a tariff chosen in HA takes effect (import and export): until then the plan prices the quarters
   # before it with the tariff in force, those from it with the chosen one.
   TariffSwitchTime: "00:00"
@@ -65,11 +68,11 @@ NetDeamon.apps.PVControl.PVConfig:
   # error over the scored nights (sensor.pv_control_load_forecast, 0–30 %) — a reserve for a load above the forecast.
   # This value (%) until 7 nights are scored.
   LoadMarginPct: 15
-  # Export (feed-in) tariff (start value; afterwards select.pv_control_export_tariff in HA keeps the choice):
+  # Export (feed-in) tariff, the default (as ImportTariffDefault, select.pv_control_export_tariff):
   #   SameAsImport = the import market price, scaled with the export settings below
   #   Fixed        = a fixed feed-in price as paid (ExportPriceFixedEntity takes priority over ExportPriceFixedValue)
   #   Market       = its own market price, CurrentExportPriceEntities (fallback list, like import), scaled below
-  ExportTariff: SameAsImport
+  ExportTariffDefault: SameAsImport
   # Hofer Grünstrom Sonne: the Referenzmarktwert PV less a deduction. Source: the running month's estimate, low end
   # (HACS integration ha-referenzmarktwert); ExportPriceFixedValue only while the entity is unavailable (Nov 2026).
   # ExportPriceFixedAddition is added to either (negative = deduction, €/kWh).
@@ -161,9 +164,10 @@ NetDeamon.apps.PVControl.PVConfig:
   SchedulableLoads:
     - Name: "EV Charger"
       Priority: 10
-      # EnergyPerLevelUnitKwh: kWh per % — 60 kWh battery / 100 % = 0.6
-      EnergyPerLevelUnitKwh: 0.6
-      AvgPowerW: 1800
+      # Defaults of the learned numbers (number.pv_control_<load>_energy_per_level / _charge_power: once created the
+      # entity wins). kWh per % — 60 kWh battery / 100 % = 0.6; the charge power also bounds the metered energy check.
+      EnergyPerLevelUnitKwhDefault: 0.6
+      AvgPowerWDefault: 1800
       MinActivePowerW: 500
       LevelUnit: "%"
       TargetLevelMin: 20
@@ -182,8 +186,8 @@ NetDeamon.apps.PVControl.PVConfig:
       # Known DB column names: carcharge, warmwaterenergy, heatpumpenergy. Omit if no DB history.
       HistoryDbColumn: "carcharge"
       # Minimum window length (minutes) required to start a session.
-      # Prevents start/stop oscillation when the window is marginal (e.g. real draw > AvgPowerW).
-      # Tune alongside AvgPowerW — if real draw matches preset, 0 is fine.
+      # Prevents start/stop oscillation when the window is marginal (e.g. real draw > AvgPowerWDefault).
+      # Tune alongside AvgPowerWDefault — if real draw matches preset, 0 is fine.
       MinWindowMinutes: 15
       # Minimum off-time after a session stops before it may restart (stops are never delayed).
       MinOffMinutes: 15

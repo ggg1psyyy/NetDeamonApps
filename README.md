@@ -61,7 +61,7 @@ second time next to the add-on — PVControl would then command the inverter twi
 1. `src/<Name>/<Name>.csproj` importing `../AppPlugin.props` (NetDaemon packages, Common, `EnableDynamicLoading`,
    YAML copied to the output); add own packages to it — they stay in the plugin's folder. A package the host already
    provides (e.g. `Microsoft.Data.Sqlite`) is referenced with `ExcludeAssets="runtime;native"`, so it isn't copied again.
-2. Apps as usual: a class with `[NetDaemonApp]`, its config from `<Name>.yaml` (`IAppConfig<T>`).
+2. Apps as usual: a class with `[NetDaemonApp]`, its config from `<Name>.yaml` (`IAppConfig<T>`; local only, the repo has `<Name>.sample.yaml`).
 3. Files the app keeps (DBs): a relative location resolved with `AppFiles.PathOf(location, GetType().Assembly)` lies
    in the plugin's folder, next to its YAML.
 4. Subscriptions on the MQTT entity manager (`PrepareCommandSubscriptionAsync(...).SubscribeAsync`) outlive the app —
@@ -77,5 +77,5 @@ just the plugin and its own dependencies; a plugin built against another NetDaem
 ## Development notes
 
 - All dynamic HA entities (sensors, selects, numbers, switches, times) are registered via MQTT (`IMqttEntityManager`), not static YAML
-- App-specific configuration (entity IDs, thresholds) lives in each app's `.yaml` file
+- App-specific configuration (entity IDs, thresholds) lives in each app's `.yaml` file. App configs are **not in git**: the repo has `src/<Name>/<Name>.sample.yaml` (sensible defaults, examples, comments); the real `src/<Name>/<Name>.yaml` stays local (`.gitignore`) and on HA — copy the sample once and adapt it. `deploy.py apps` copies it, refuses to deploy when one is missing, prints which configs changed and keeps the live one as `<Name>.yaml.bak-<time>` (the newest 10). A key whose value can change at runtime (it only seeds an HA entity) is named `…Default`. The build never ships a sample (NetDaemon reads every `*.yaml` under `./apps`), and a test checks that every key of the sample and the local file binds to the config class (NetDaemon ignores one that doesn't).
 - Central package versions in `Directory.Packages.props`; shared build settings and the git version in `Directory.Build.props` / `.targets`

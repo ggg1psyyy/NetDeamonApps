@@ -144,7 +144,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>The import tariff's start value (<c>select.pv_control_import_tariff</c> keeps the user's choice after
     /// that): <see cref="ImportTariff.Fixed"/> = the energy price is <see cref="ImportPriceFixedEntity"/> (else
     /// <see cref="ImportPriceFixedValue"/>) instead of the market price × multiplier + addition; network fee and tax stay.</summary>
-    public ImportTariff ImportTariff { get; set; } = ImportTariff.Market;
+    public ImportTariff ImportTariffDefault { get; set; } = ImportTariff.Market;
     /// <summary>Time of day ("HH:mm") a tariff chosen in HA takes effect (the supplier switches the contract then).</summary>
     public string TariffSwitchTime { get; set; } = "00:00";
     /// <summary><see cref="TariffSwitchTime"/> parsed; midnight if it can't be read.</summary>
@@ -160,7 +160,7 @@ namespace NetDeamon.apps.PVControl
     /// (<see cref="LoadModel.NightForecastTracker.MinNightsForMargin"/>), %.</summary>
     public double LoadMarginPct { get; set; } = 15;
     /// <summary>The export tariff's start value (<c>select.pv_control_export_tariff</c> keeps the user's choice after that).</summary>
-    public ExportTariff ExportTariff { get; set; } = ExportTariff.SameAsImport;
+    public ExportTariff ExportTariffDefault { get; set; } = ExportTariff.SameAsImport;
     public Entity? ExportPriceFixedEntity { get; set; }
     public float ExportPriceFixedValue { get; set; } = default;
     /// <summary>Added to the fixed feed-in price (<see cref="ExportPriceFixedEntity"/> or <see cref="ExportPriceFixedValue"/>),

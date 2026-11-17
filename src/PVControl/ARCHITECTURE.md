@@ -428,8 +428,8 @@ A "schedulable load" is anything that:
 SchedulableLoads:
   - Name: "EV Charger"
     Priority: 10                  # higher wins when slots compete
-    EnergyPerLevelUnitKwh: 0.6    # 60 kWh battery / 100% = 0.6 kWh per %
-    AvgPowerW: 1800               # fallback power before real measurement
+    EnergyPerLevelUnitKwhDefault: 0.6    # 60 kWh battery / 100% = 0.6 kWh per %
+    AvgPowerWDefault: 1800               # fallback power before real measurement
     MinActivePowerW: 500          # below this = standby / noise, ignored
     CurrentLevelEntity: sensor.byd_atto_2_ladezustand
     ActualPowerEntity: sensor.esp_ct8_carport   # optional: for running average
@@ -441,7 +441,7 @@ SchedulableLoads:
 Wraps the config with live state:
 - `Mode` — from YAML or HA select entity
 - `TargetLevel` / `CurrentLevel` — from YAML or HA sensor
-- `EffectivePowerW` — running average of actual power (or `AvgPowerW` as fallback)
+- `EffectivePowerW` — running average of actual power (or `AvgPowerWDefault` as fallback)
 - `EnergyNeededWh` / `DurationMinutes` — derived from level gap × kWh/unit
 - `ChargeNow` / `ChargeReason` / `PredictedEnd` — written by `FindLoadWindow`
 
@@ -606,13 +606,13 @@ stays and is simulated as is. The load's live safety checks live inside `FindLoa
 each of their inputs is a trigger. `last_plan` / `last_plan_reason` attributes show when and why.
 
 **Learned load characteristics** (`number.pv_control_<load>_energy_per_level`,
-`number.pv_control_<load>_charge_power`): both start from the YAML values (`EnergyPerLevelUnitKwh`,
-`AvgPowerW`), are learned while the load draws power (`ActualPowerEntity` above
+`number.pv_control_<load>_charge_power`): both start from the YAML values (`EnergyPerLevelUnitKwhDefault`,
+`AvgPowerWDefault`), are learned while the load draws power (`ActualPowerEntity` above
 `MinActivePowerW`), persisted in those entities, and can be set by hand (e.g. new wallbox).
 Energy per level is meter-side (charger losses included): `LevelEnergyLearner` measures kWh
 between observed whole level steps (≥ 3 levels) and blends it with the stored value weighted as
 20 levels. Charge power is a 10-minute time-constant average of the measured power and replaces
-`AvgPowerW` as the planning power when the load isn't running.
+`AvgPowerWDefault` as the planning power when the load isn't running.
 
 The min-on latch and the PriorityPlus scan read last cycle's session (`previousLoads`/
 `previousEnd`, captured at the start of `DecideLoadWindow`), never `load.ExtraLoads` mid-climb:
@@ -750,6 +750,21 @@ tank model update, at the latest every `ReplanIntervalMinutes` (15).
 | `../Planning/Simulator/LoadSchedulingDecision.cs` | Schmitt-trigger logic. `Decide()` is used only via unit tests (main flow uses the simulation oracle); `PrioritySoCGateOk()` is wired into `HouseEnergy.FindLoadWindow`'s live Priority/PriorityPlus SoC gate |
 
 ---
+
+## Configuration: samples in git, the real YAML local (2026-11-17)
+
+The tariff changed to Fair/Sonne through the selects while `PVControl.yaml` in git still said `ImportTariff: Market`
+— the file read like the running state but was only the start value. The real configs left git: the repo keeps
+`<App>.sample.yaml`, the real `<App>.yaml` is local (like `appsettings.json`) and deployed as before. Writing the YAML
+from the app was the other option, rejected: the deploy copies the file over it, NetDaemon reloads the app when its
+config changes, and two writers of one value is the confusion it was meant to end. A value that only seeds an HA
+entity is named `…Default` (`ImportTariffDefault`, `ExportTariffDefault`, `EnergyPerLevelUnitKwhDefault`,
+`AvgPowerWDefault`; `TargetLevelDefault` etc. already were); a tariff select differing from its default is logged at
+start (a health warning was declined: the difference is normal). What git no longer gives, the deploy does: it refuses
+without a local YAML (the stale-file cleanup would delete the live one), prints which configs changed and keeps the
+live one as `<App>.yaml.bak-<time>`. NetDaemon ignores a key no property takes, so a rename forgotten in the local
+file would run on the code's default silently — `ConfigKeys.Unmatched` (tests) walks sample and local file against
+the config class. A sample never reaches the output: NetDaemon reads every `*.yaml` under `./apps`.
 
 ## Price pipeline
 

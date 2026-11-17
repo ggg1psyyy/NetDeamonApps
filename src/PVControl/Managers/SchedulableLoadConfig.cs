@@ -73,15 +73,18 @@ namespace NetDeamon.apps.PVControl.Managers
     /// Energy consumed per unit of level change, in kWh.
     /// Examples: 0.6 kWh/% for a 60 kWh EV battery (60 kWh ÷ 100 %),
     ///           0.11 kWh/°C for a warm-water tank.
-    /// Energy needed = (TargetLevel − CurrentLevel) × EnergyPerLevelUnitKwh.
+    /// Energy needed = (TargetLevel − CurrentLevel) × energy per level. The start value of
+    /// number.pv_control_&lt;load&gt;_energy_per_level: once created, the entity (learned or set by hand) wins.
     /// </summary>
-    public float EnergyPerLevelUnitKwh { get; set; }
+    public float EnergyPerLevelUnitKwhDefault { get; set; }
 
     /// <summary>
     /// Nominal power draw in W used when actual power is not yet measurable
-    /// (e.g. car not yet plugged in, before MinActivePowerW is exceeded).
+    /// (e.g. car not yet plugged in, before MinActivePowerW is exceeded). The start value of
+    /// number.pv_control_&lt;load&gt;_charge_power (the entity, learned, wins afterwards); also the floor of the
+    /// metered energy's plausibility check (the expected charge power).
     /// </summary>
-    public int AvgPowerW { get; set; }
+    public int AvgPowerWDefault { get; set; }
 
     /// <summary>
     /// Minimum measured power in W to treat the load as actively running.
@@ -93,7 +96,7 @@ namespace NetDeamon.apps.PVControl.Managers
     /// Minimum viable window length in minutes required before a session is started.
     /// If the simulation finds a window shorter than this, ChargeNow is kept false.
     /// Prevents brief start/stop oscillation when the available window is marginal
-    /// (e.g. real power draw slightly exceeds AvgPowerW, eroding the simulated window).
+    /// (e.g. real power draw slightly exceeds AvgPowerWDefault, eroding the simulated window).
     /// Set to 0 to disable (default).
     /// </summary>
     public int MinWindowMinutes { get; set; } = 0;

@@ -21,9 +21,12 @@ python -m unittest discover deploy      # the script's tests
 - waits while the Supervisor runs a backup or restore (`ha jobs info` over SSH — `ssh` in `local.json`, default
   `root@<HA host>`, the SSH add-on), up to 15 min: during one it refuses to start an add-on, and a stopped NetDaemon
   stayed down; if the jobs can't be read it warns and goes on
+- refuses (before stopping anything) when a plugin has a sample (`src/<App>/<App>.sample.yaml`) but no local
+  `<App>.yaml` — the real configs aren't in git — or a sample got into the output; prints which configs differ from
+  the live ones and keeps each live one it replaces as `<App>.yaml.bak-<time>` (the newest 10)
 - restarts also during a force charge or a high import: PVControl seeds the running quarter's import from the
   meters' history and restores the import cap's state
-- stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json`, every DB and PVControl's `held_prices.json`;
+- stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json`, every DB, PVControl's `held_prices.json` and the config backups `<App>.yaml.bak-<time>`;
   files the build no longer has are removed from the plugin folders) and starts it again — also if the copy fails;
   never copies over the running add-on (it would rewrite the DLLs under the process); a refused start (a backup began after the check)
   is retried every 15 s for up to 10 min

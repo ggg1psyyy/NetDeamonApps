@@ -375,3 +375,7 @@ CLAUDE.local.md
 
 # deploy/deploy.py: machine details (add-on folder, slug)
 deploy/local.json
+
+# The apps' real YAML configs stay local (and on HA, deploy.py copies them); the repo has <App>.sample.yaml.
+/src/*/*.yaml
+!/src/*/*.sample.yaml

@@ -206,19 +206,33 @@ public class TariffScheduleTests
     Assert.Equal(TimeSpan.FromHours(hours), new PVConfig { TariffSwitchTime = value }.TariffSwitchTimeOfDay);
 
   [Fact]
-  public void Config_TariffsAsTodayAndNoOldKeys()
+  public void Config_TariffDefaultsAndNoOldKeys()
   {
-    var dir = new DirectoryInfo(AppContext.BaseDirectory);
-    while (dir != null && !File.Exists(Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml")))
-      dir = dir.Parent;
-    Assert.NotNull(dir);
-    string[] lines = File.ReadAllLines(Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml"))
-      .Select(l => l.Trim()).Where(l => !l.StartsWith('#')).ToArray();
-    Assert.Contains("ImportTariff: Market", lines);
-    Assert.Contains("ExportTariff: SameAsImport", lines);
-    Assert.Contains("TariffSwitchTime: \"00:00\"", lines);
-    foreach (var old in new[] { "ImportPriceFixed:", "ExportPriceSameAsImport:", "ExportPriceFixed:" })
-      Assert.DoesNotContain(lines, l => l.StartsWith(old));
+    // The sample's defaults are the code's (the market); the local config has the user's contract. Old keys in either
+    // would bind to nothing (NetDaemon ignores them): ImportTariff/ExportTariff became *Default on 2026-11-17.
+    foreach (var file in ConfigKeys.Files("PVControl"))
+    {
+      string[] lines = File.ReadAllLines(file).Select(l => l.Trim()).Where(l => !l.StartsWith('#')).ToArray();
+      Assert.Contains(lines, l => l.StartsWith("ImportTariffDefault: "));
+      Assert.Contains(lines, l => l.StartsWith("ExportTariffDefault: "));
+      Assert.Contains("TariffSwitchTime: \"00:00\"", lines);
+      foreach (var old in new[] { "ImportPriceFixed:", "ExportPriceSameAsImport:", "ExportPriceFixed:", "ImportTariff:", "ExportTariff:",
+                                  "EnergyPerLevelUnitKwh:", "AvgPowerW:" })
+        Assert.DoesNotContain(lines, l => l.StartsWith(old));
+      if (file.EndsWith(".sample.yaml"))
+      {
+        Assert.Contains("ImportTariffDefault: Market", lines);
+        Assert.Contains("ExportTariffDefault: SameAsImport", lines);
+      }
+    }
+  }
+
+  [Fact]
+  public void TariffDiffersFromDefault_ActiveOrChosen()
+  {
+    Assert.False(NetDeamon.apps.PVControl.PVControl.TariffDiffersFromDefault(ImportTariff.Fixed, ImportTariff.Fixed, ImportTariff.Fixed));
+    Assert.True(NetDeamon.apps.PVControl.PVControl.TariffDiffersFromDefault(ImportTariff.Fixed, ImportTariff.Fixed, ImportTariff.Market));
+    Assert.True(NetDeamon.apps.PVControl.PVControl.TariffDiffersFromDefault(ImportTariff.Market, ImportTariff.Fixed, ImportTariff.Market));   // pending
   }
 
   [Fact]

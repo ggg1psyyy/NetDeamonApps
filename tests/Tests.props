@@ -7,6 +7,11 @@
     <RootNamespace>NetDeamonApps.Tests</RootNamespace>
   </PropertyGroup>
 
+  <!-- The apps' YAML configs (sample in git, real one local): every key binds to its config class. -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)ConfigKeys.cs" Link="ConfigKeys.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

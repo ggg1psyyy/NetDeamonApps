@@ -415,15 +415,14 @@ public class ImportCapTests
   [Fact]
   public void Config_CapUnderWarningUnderTenKw()
   {
-    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
-    while (dir != null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml")))
-      dir = dir.Parent;
-    Assert.NotNull(dir);
-    string yaml = System.IO.File.ReadAllText(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "PVControl.yaml"));
-    int Value(string key) => int.Parse(System.Text.RegularExpressions.Regex.Match(yaml, $@"^\s*{key}:\s*(\d+)", System.Text.RegularExpressions.RegexOptions.Multiline).Groups[1].Value);
-    int cap = Value("MaxGridImportW"), warn = Value("ImportCapWarnW");
-    Assert.InRange(cap, 1, warn - 1);
-    Assert.InRange(warn, cap + 1, 9999);
+    foreach (var file in ConfigKeys.Files("PVControl"))   // the sample, and the local (live) config when present
+    {
+      string yaml = System.IO.File.ReadAllText(file);
+      int Value(string key) => int.Parse(System.Text.RegularExpressions.Regex.Match(yaml, $@"^\s*{key}:\s*(\d+)", System.Text.RegularExpressions.RegexOptions.Multiline).Groups[1].Value);
+      int cap = Value("MaxGridImportW"), warn = Value("ImportCapWarnW");
+      Assert.InRange(cap, 1, warn - 1);
+      Assert.InRange(warn, cap + 1, 9999);
+    }
   }
 
 }
@@ -441,7 +440,7 @@ public class RetiredEntitiesTests
       dir = dir.Parent;
     Assert.NotNull(dir);
     string src = System.IO.Path.Combine(dir.FullName, "src", "PVControl");
-    var files = System.IO.Directory.GetFiles(System.IO.Path.Combine(src, "HA"), "*.yaml").Append(System.IO.Path.Combine(src, "PVControl.yaml"));
+    var files = System.IO.Directory.GetFiles(System.IO.Path.Combine(src, "HA"), "*.yaml").Concat(ConfigKeys.Files("PVControl"));
     foreach (var file in files)
     {
       string text = System.IO.File.ReadAllText(file);

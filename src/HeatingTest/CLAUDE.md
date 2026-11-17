@@ -10,3 +10,4 @@ folder (`DBLocation`, `AppFiles.PathOf`).
 
 - **`HeatingTestTests`** — HeatingTest app: start/skip/alternation, end/abort/disarm (`HeatingTestLogic`), SQLite log and restart recovery (`HeatingTestDb` on a temp file)
 - **`AppFilesTests`** — the DB's default location in the plugin folder
+- **`ConfigFileTests`** — every key of `HeatingTest.sample.yaml` (and the local `HeatingTest.yaml` when present) binds to `HeatingTestConfig`

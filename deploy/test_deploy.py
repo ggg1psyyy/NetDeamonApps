@@ -30,6 +30,48 @@ class KeepTests(unittest.TestCase):
             self.assertTrue(keep(n), n)
         for n in ['NetDeamonApps.dll', 'PVControl.yaml', 'PVControl.deps.json']:
             self.assertFalse(keep(n), n)
+        for n in ['held_prices.json', 'PVControl.yaml.bak-20261117-120000']:
+            self.assertTrue(keep(n), n)
+
+
+class ConfigTests(unittest.TestCase):
+    """The real YAMLs aren't in git (src/<App>/<App>.sample.yaml is): the deploy checks, compares and backs them up."""
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.src, self.out, self.live = (os.path.join(self.tmp, d) for d in ('src', 'out', 'live'))
+        for d in (self.src + '/PVControl', self.out + '/PVControl', self.live + '/PVControl'): os.makedirs(d)
+        open(self.src + '/PVControl/PVControl.sample.yaml', 'w').write('x: 1')
+
+    def tearDown(self):
+        import shutil; shutil.rmtree(self.tmp)
+
+    def test_a_missing_config_refuses_the_deploy(self):
+        problems = deploy.config_problems(self.out, ['PVControl'], src=self.src)
+        self.assertEqual(1, len(problems)); self.assertIn('no PVControl.yaml', problems[0])
+
+    def test_a_sample_in_the_output_refuses_the_deploy(self):
+        open(self.out + '/PVControl/PVControl.yaml', 'w').write('x: 1')
+        open(self.out + '/PVControl/PVControl.sample.yaml', 'w').write('x: 1')
+        self.assertIn('PVControl: PVControl.sample.yaml in the output', deploy.config_problems(self.out, ['PVControl'], src=self.src))
+
+    def test_config_and_no_sample_is_fine_a_plugin_without_a_sample_needs_none(self):
+        open(self.out + '/PVControl/PVControl.yaml', 'w').write('x: 1')
+        os.makedirs(self.out + '/Other')
+        self.assertEqual([], deploy.config_problems(self.out, ['PVControl', 'Other'], src=self.src))
+
+    def test_changed_configs_new_or_different(self):
+        open(self.out + '/PVControl/PVControl.yaml', 'w').write('x: 2')
+        self.assertEqual(['PVControl'], deploy.changed_configs(self.out, self.live, ['PVControl']))   # no live one yet
+        open(self.live + '/PVControl/PVControl.yaml', 'w').write('x: 2')
+        self.assertEqual([], deploy.changed_configs(self.out, self.live, ['PVControl']))
+
+    def test_backup_keeps_the_newest(self):
+        open(self.live + '/PVControl/PVControl.yaml', 'w').write('x: 1')
+        for i in range(4): deploy.backup_config(self.live, 'PVControl', f'2026111{i}-120000', keep=2)
+        self.assertEqual(['PVControl.yaml', 'PVControl.yaml.bak-20261112-120000', 'PVControl.yaml.bak-20261113-120000'],
+                         sorted(os.listdir(self.live + '/PVControl')))
+        self.assertIsNone(deploy.backup_config(self.live, 'Missing', 'x'))
 
 
 

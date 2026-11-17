@@ -23,9 +23,13 @@
     <PackageReference Include="NetDaemon.HassModel" ExcludeAssets="runtime" />
   </ItemGroup>
 
-  <!-- The app's YAML config next to its assembly (deployed under ./apps, where NetDaemon reads app configs). -->
+  <!-- The app's YAML config (local, not in git: <App>.sample.yaml is) next to its assembly (deployed under ./apps,
+       where NetDaemon reads app configs). -->
   <ItemGroup>
     <None Update="**\*.yaml" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- The sample stays in the source: NetDaemon reads every *.yaml under ./apps, a sample next to the real config
+         would be loaded as a second config of the same app. -->
+    <None Update="**\*.sample.yaml" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
   <!-- The usings every NetDaemon app file expects (as the host's apps/GlobalUsings.cs). -->

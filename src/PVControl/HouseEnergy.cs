@@ -316,7 +316,7 @@ namespace NetDeamon.apps.PVControl
           continue;
         float diff = energy - schedLoad.LastEnergySum;
         // Clamp: a single delta larger than 2 h at the load's typical power is a sensor glitch.
-        float maxDiff = CostMeter.MaxStepKwh(Math.Max(schedLoad.Config.AvgPowerW, schedLoad.LearnedPowerW));
+        float maxDiff = CostMeter.MaxStepKwh(Math.Max(schedLoad.Config.AvgPowerWDefault, schedLoad.LearnedPowerW));
         if (diff > maxDiff)
         {
           PVCC_Logger.LogWarning("Ignoring implausibly large energy delta {Diff:F3} kWh (>{Max:F3}) for {Name} — likely sensor glitch",
@@ -716,7 +716,7 @@ namespace NetDeamon.apps.PVControl
 
         chargeRateW = load.EffectivePowerW;
         if (chargeRateW <= 0)
-        { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerW config", null); return; }
+        { SetResult([], false, "EffectivePowerW is 0 — check the Charge Power number / AvgPowerWDefault config", null); return; }
 
         energyNeededWh = load.EnergyNeededWh;
         durationMinutes = load.DurationMinutes; // chargeRateW = load.EffectivePowerW

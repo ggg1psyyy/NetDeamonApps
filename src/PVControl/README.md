@@ -219,7 +219,7 @@ The two tariff selects choose how prices are formed; the prices themselves come 
 | `Fixed` | `ExportPriceFixedEntity` (else `ExportPriceFixedValue`) + `ExportPriceFixedAddition` (negative: a deduction, e.g. a reference market value less the supplier's share), as paid |
 | `Market` | its own market price sources, `CurrentExportPriceEntities`, scaled as above |
 
-On import the network fee (incl. `ImportPriceNetworkPeriods`) and `ImportPriceTax` apply to both tariffs. The market price sources still give the time slots of a fixed price, and a fixed price gets no risk premium past the published data. `ImportTariff` / `ExportTariff` in `PVControl.yaml` are the start values; after that the selects keep the choice.
+On import the network fee (incl. `ImportPriceNetworkPeriods`) and `ImportPriceTax` apply to both tariffs. A fixed price needs no market price (its quarters cover today and tomorrow), and it gets no risk premium past the published data. `ImportTariffDefault` / `ExportTariffDefault` in `PVControl.yaml` only seed the selects; after that the selects keep the choice (a start with a select different from the default logs it).
 
 **While the fixed tariff is in force** the DP plans by three rules (`SimulationInput.FixedImportPeriods`): no holds (`grid_only`) where the fixed tariff runs to the plan's end — the grid costs the same later (before a switch to the market a hold may pay for a dearer morning) —, no preferred reserve (the battery runs down to the absolute minimum) unless `switch.pv_control_enforce_preferred_soc` is on (then the preferred minimum is the floor and holds keep it — only there: a hold only in a quarter where normal would take the battery under the floor, so normal runs down to it and then holds; in normal the inverter runs Self Use down to its own minimum), and so no grid charge either: mostly `normal`. A charge before a switch to the market still happens where tomorrow's market is dearer than today's fixed price. The EV planning uses the market prices also then (`HouseEnergy.LoadPlanningInput`): at a fixed price its timing costs nothing, so it sits where the market is cheap — where a switch wants it, and what the tariff advisor compares; the price limit is checked against the fixed price paid. Amounts in its `price_scan` and charge reason are then the market's, marked "(market prices; the fixed price is paid)". The warm water plans on the price paid (its standby loss is real). The greedy simulation is unchanged; the opportunistic export (greedy only) stays for a market feed-in.
 
@@ -323,7 +323,7 @@ Planned loads keep the house battery at the preferred minimum in every mode (the
 | `MinActivePowerW` | Power above which the load counts as running |
 | `AvailabilityEntity` | Optional: only plan while this is on (e.g. car at home) |
 | `HistoryDbColumn` | DataLogger column with this load's history, subtracted from the house load forecast |
-| `EnergyPerLevelUnitKwh`, `AvgPowerW` | Starting values for the learned energy per level and charge power |
+| `EnergyPerLevelUnitKwhDefault`, `AvgPowerWDefault` | Starting values for the learned energy per level and charge power (the numbers win once created); `AvgPowerWDefault` also bounds the metered energy check |
 | `MinWindowMinutes`, `MinOffMinutes` | Minimum on-time (also the shortest window worth starting) and minimum off-time |
 | `ReplanIntervalMinutes` | Max minutes between schedule searches (default 5) |
 | `Icon`, `ChargeNowDeviceClass`, `LevelUnit`, `TargetLevelMin/Max/Step/Default` | Display settings of the auto-created entities |

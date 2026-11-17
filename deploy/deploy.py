@@ -13,7 +13,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUBLISH = os.path.join(ROOT, 'src', 'Host', 'bin', 'Release', 'net10.0', 'publish')
 HA_FILES = os.path.join(ROOT, 'src', 'PVControl', 'HA')
 # Never overwritten in the add-on folder: the live settings and every app's data.
-KEEP = ['appsettings*.json', '*.db', '*.db-shm', '*.db-wal', '*.db.bak*', 'held_prices.json']
+KEEP = ['appsettings*.json', '*.db', '*.db-shm', '*.db-wal', '*.db.bak*', 'held_prices.json', '*.yaml.bak-*']
+# Live app configs kept per plugin before a deploy overwrites them (<App>.yaml.bak-<time>: not *.yaml, NetDaemon
+# doesn't read it); the real YAMLs aren't in git, these copies are their history.
+YAML_BACKUPS = 10
 # PVControl's automations in automations.yaml, by id: replaced, or appended when missing.
 AUTOMATIONS = {'1726401911432': 'Mode.yaml', '1792585055022': 'Health.yaml',
                '1793042000001': 'InverterSync.yaml', '1793042000002': 'PriceFetch.yaml'}
@@ -127,6 +130,37 @@ def stale_files(published, deployed):
     return sorted(f for f in deployed if f not in set(published) and not keep(f))
 
 
+def config_problems(plugins_dir, plugins, src=os.path.join(ROOT, 'src')):
+    """Why the publish output can't be deployed: a plugin with a sample (src/<App>/<App>.sample.yaml) but no
+    <App>.yaml of its own (a fresh clone: deploying would delete the live config with the stale files), or a sample in
+    the output (NetDaemon would load it as a second config)."""
+    problems = []
+    for name in plugins:
+        folder = os.path.join(plugins_dir, name)
+        if os.path.exists(os.path.join(src, name, name + '.sample.yaml')) and not os.path.exists(os.path.join(folder, name + '.yaml')):
+            problems.append(f'{name}: no {name}.yaml (copy src/{name}/{name}.sample.yaml to src/{name}/{name}.yaml and adapt it)')
+        problems += [f'{name}: {f} in the output' for f in files_in(folder) if f.endswith('.sample.yaml')]
+    return problems
+
+
+def changed_configs(plugins_dir, live_dir, plugins):
+    """Plugins whose <App>.yaml differs from the live one (or is new) — git no longer shows config changes."""
+    def read(path): return open(path, 'rb').read() if os.path.exists(path) else None
+    return [n for n in plugins if os.path.exists(os.path.join(plugins_dir, n, n + '.yaml'))
+            and read(os.path.join(plugins_dir, n, n + '.yaml')) != read(os.path.join(live_dir, n, n + '.yaml'))]
+
+
+def backup_config(live_dir, name, stamp, keep=YAML_BACKUPS):
+    """Copies the live <App>.yaml to <App>.yaml.bak-<stamp> before it's overwritten; keeps the newest `keep`."""
+    folder, live = os.path.join(live_dir, name), os.path.join(live_dir, name, name + '.yaml')
+    if not os.path.exists(live): return None
+    target = live + '.bak-' + stamp
+    shutil.copy2(live, target)
+    for old in sorted(f for f in os.listdir(folder) if f.startswith(name + '.yaml.bak-'))[:-keep]:
+        os.remove(os.path.join(folder, old))
+    return target
+
+
 def install(stop, copy, start):
     """Stops the add-on, copies, starts it again — also if the copy fails. Copying over a running add-on rewrote its
     DLLs under the process: .NET loads a method's code from the mapped file when it first runs, and on 2026-11-07 the
@@ -156,6 +190,11 @@ def apps(cfg, dry_run):
     if r.returncode: sys.exit(r.stdout[-3000:] + r.stderr[-2000:])
     plugins = sorted(os.listdir(os.path.join(PUBLISH, 'apps', 'plugins')))
     print('plugins:', ', '.join(plugins))
+    problems = config_problems(os.path.join(PUBLISH, 'apps', 'plugins'), plugins)
+    if problems: sys.exit('not deployed:\n  ' + '\n  '.join(problems))
+    live_plugins = os.path.join(cfg['addon_folder'], 'apps', 'plugins')
+    changed = changed_configs(os.path.join(PUBLISH, 'apps', 'plugins'), live_plugins, plugins)
+    print('config changed:', ', '.join(f'{n}.yaml' for n in changed) if changed else 'none')
     if dry_run:
         print('dry run: nothing copied, no restart'); return
 
@@ -169,6 +208,9 @@ def apps(cfg, dry_run):
     target = cfg['addon_folder']
 
     def copy():
+        stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        for name in changed:
+            if (b := backup_config(live_plugins, name, stamp)): print(now(), 'kept the live config as', os.path.basename(b))
         ignore = lambda d, names: [n for n in names if any(fnmatch.fnmatch(n, p) for p in KEEP)]
         shutil.copytree(PUBLISH, target, dirs_exist_ok=True, ignore=ignore)
         print(now(), 'copied to', target)

@@ -1,3 +1,5 @@
+# Sample of DataLogger.yaml — copy it to DataLogger.yaml (not in git: the real config stays local and on HA, deploy.py copies it)
+# and adapt it. A new or renamed key goes into both files.
 PVControl.DataLoggerConfig:
   DBLocation: "energy_history.db"   # relative: in this plugin's folder (next to this YAML); PVControl reads it there
   TemperatureOutsideEntity: sensor.temperature_outside

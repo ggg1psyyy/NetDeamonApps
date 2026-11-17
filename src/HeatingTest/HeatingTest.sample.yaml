@@ -1,3 +1,5 @@
+# Sample of HeatingTest.yaml — copy it to HeatingTest.yaml (not in git: the real config stays local and on HA, deploy.py copies it)
+# and adapt it. A new or renamed key goes into both files.
 NetDeamon.apps.HeatingTest.HeatingTestConfig:
   # false: the app does nothing at all (no entities, no timer, no log). Independent of PVControl.
   Enabled: true

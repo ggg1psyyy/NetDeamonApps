@@ -47,7 +47,7 @@ One test project per project lives at `tests/<Project>.Tests/` (shared settings 
 ### App Structure Pattern
 Each app consists of:
 - `AppName.cs` — main class implementing `IAsyncInitializable`
-- `AppName.yaml` — configuration (entity IDs, parameters); copied to output dir at build
+- `AppName.yaml` — configuration (entity IDs, parameters); copied to output dir at build. **Not in git** (`.gitignore`): the repo has `AppName.sample.yaml`, never copied to the output (NetDaemon would load it as a second config). **A new or renamed key goes into both the sample and the local file** (`ConfigKeys` tests: every key binds to the config class). A value that only seeds an HA entity (the entity wins afterwards) is named `…Default`. Never commit the local `AppName.yaml`.
 - Config model class deserialized via `IAppConfig<T>` DI
 - Files the app keeps (DBs): a relative location via `AppFiles.PathOf` lies in the plugin's folder, next to its YAML
 - **Namespaces stay as they are:** YAML config keys and NetDaemon app ids are full type names (DataLogger's class lives in namespace `PVControl`) — renaming one silently breaks its config
