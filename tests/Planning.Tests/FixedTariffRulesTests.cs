@@ -90,6 +90,33 @@ public class FixedTariffRulesTests
     Assert.False(BatteryDpPlanner.HoldOnlyAtFloor((Snap("2026-11-17_0730") with { EnforcePreferredSoc = false }).ToInput(), live.StartTime));   // banned there (HoldAllowed)
   }
 
+  [Theory]
+  [InlineData(45, InverterModes.normal)]         // the snapshot
+  [InlineData(46, InverterModes.normal)]         // a minute later, after +1 %
+  [InlineData(46, InverterModes.force_charge)]   // and while the pulled charge ran
+  public void Fixed_ATieChargeTomorrowNight_IsNotPulledToNow(int socPct, InverterModes running)
+  {
+    // Live 2026-11-17 18:00 (Fair, enforced 20 %, 45 %): the plan's charge at tomorrow 23:30 lay in the same "price block"
+    // (the whole fixed horizon) and the charge-now rule started it at once — +1 % in a minute, normal, again (40 starts by
+    // 19:25). The rule looks 4 h ahead only.
+    var snap = Snap("2026-11-17_1800");
+    Assert.True(snap.EnforcePreferredSoc);
+    var input = (snap with { StartSocPercent = socPct, CurrentMode = running }).ToInput();
+    var plan = BatteryDpPlanner.Plan(input);
+    Assert.All(plan.Slots.Where(s => s.Time < input.StartTime.AddHours(4)),
+      s => Assert.NotEqual(InverterModes.force_charge, s.Mode));
+  }
+
+  [Fact]
+  public void Fixed_ATieChargeTomorrowNight_WithoutTheLimit_StartsNow()
+  {
+    // The snapshot's own flip: looking over the whole horizon, the charge-now rule started tomorrow's 23:30 charge at once.
+    var input = Live("2026-11-17_1800");
+    var plan = BatteryDpPlanner.Plan(input, new DpOptions(ChargeNowWithinQuarters: 1000));
+    Assert.Equal(InverterModes.force_charge, plan.Slots[0].Mode);
+    Assert.Contains(BatteryDpPlanner.Plan(input).Slots, s => s.Mode == InverterModes.force_charge && s.Time >= input.StartTime.AddHours(24));
+  }
+
   [Fact]
   public void MarketToday_FixedFromMidnight_HoldsOnlyBeforeTheSwitch()
   {

@@ -22,6 +22,10 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// <param name="ChargeNowEur">A grid charge the plan has later in the current price block starts (or keeps running) now
 /// while that costs no more than this, € — within one price block the start is a tie, and the minute's replans moved it
 /// (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).</param>
+/// <param name="ChargeNowWithinQuarters">How far ahead the charge-now rule looks, quarters: a later charge further away
+/// than this stays where the plan put it, even within one price block (16 = 4 h). Under a fixed tariff the whole horizon
+/// is one block — a tie charge at tomorrow 23:30 was pulled to now, +1 % in a minute, then normal, and again every 1–3 min
+/// (live 2026-11-17 18:00–19:25: 40 starts, 45 → 59 % bought at 0.2654).</param>
 /// <param name="ChargeStartEur">Cost of starting a grid charge after a quarter without one, €: one long charge beats a
 /// block plus top-ups in quarters a fraction of a cent dearer (2026-11-07: 11:00 bulk, then five VPP top-ups at
 /// +0.1 ct/kWh). A running charge (the current mode) continues without it. It also drops a whole charge that saves less
@@ -42,6 +46,7 @@ public sealed record DpOptions(
   float TieEur = 0.0001f,
   float KeepModeEur = 0.01f,
   float ChargeNowEur = 0.01f,
+  int ChargeNowWithinQuarters = 16,
   float ChargeStartEur = 0.01f,
   float DeviationEurPerKwh = 0.01f,
   bool PruneEqualCharges = true);
@@ -468,13 +473,14 @@ public static class BatteryDpPlanner
 
     var plan = Forward(null);
     var cost = CostOf(plan);
-    // A charge the plan has later in the current price block starts — or keeps running — now: within one block its start
-    // is a tie the minute's replans kept moving (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).
+    // A charge the plan has later in the current price block (within ChargeNowWithinQuarters) starts — or keeps running —
+    // now: within one block its start is a tie the minute's replans kept moving (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).
     if (plan.Slots[0].Mode != InverterModes.force_charge)
     {
       float price0 = input.ImportPrices.GetPriceOrMean(times[0]);
       int blockEnd = 1;
-      while (blockEnd < n && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
+      int lookEnd = Math.Min(n, o.ChargeNowWithinQuarters);
+      while (blockEnd < lookEnd && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
       if (plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
       {
         bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };

@@ -1548,6 +1548,13 @@ just over the 1-% tolerance, so 2–3 EEPROM writes for ~115 Wh. The tolerance i
 the cheap block is cheaper than a bulk charge for a sliver of it. (Bulk doesn't overshoot to 100 %: PVControl ends the
 charge with the plan's energy.)
 
+The rule looks 4 h ahead at most (`DpOptions.ChargeNowWithinQuarters`, 16). 2026-11-17 18:00–19:25, Fixed tariff (one
+price for the whole horizon, so one "block" to tomorrow's midnight): the plan's tie charge at tomorrow 23:30 (the end
+rule's half-step margin above the enforced 20 %, the battery held at the floor before it) was started at once — the
+first quarter's smallest target, +1 % in a minute, then normal, replanned, again: 40 starts, 45 → 59 % bought at 0.2654,
+each under the 1 ct. The late charge itself stays (dropping the end margin would change the cost model the comparison
+and the tariff advisor use); 30 h away it is never run — the horizon moves on.
+
 ### The battery value in the graph (`DpSlot.BatteryValue`)
 
 2026-11-05: the plan held at 40 % through the night (0.45–0.47) and ran the battery in the morning (0.50–0.56) —
