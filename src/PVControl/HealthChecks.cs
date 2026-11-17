@@ -37,17 +37,23 @@ public static class HealthChecks
         $"Inverter data unavailable: {string.Join(", ", unavailableEntities)}", InverterDataErrorAfter);
   }
 
-  /// <summary>Import prices: none for now = error; a source without data or tomorrow missing after <see cref="TomorrowPricesBy"/> = degraded.</summary>
+  /// <summary>Import prices: none for now = error (the mode falls back to normal); only held ones (every source without
+  /// data, <see cref="PriceList.MergeHeld"/>), a source without data or tomorrow missing after <see cref="TomorrowPricesBy"/> = degraded.</summary>
   /// <param name="now">Current time.</param>
   /// <param name="withoutData">Configured price entities without any data.</param>
   /// <param name="used">The one in use (data reaching furthest); null if none has data.</param>
-  /// <param name="pricesEnd">End of the last price slot in use.</param>
+  /// <param name="pricesEnd">End of the last price slot in use (fresh or held).</param>
   /// <returns>The issues.</returns>
   public static IEnumerable<HealthIssue> ImportPrices(DateTime now, IReadOnlyList<string> withoutData, string? used, DateTime? pricesEnd)
   {
-    if (used is null || pricesEnd is not { } end || end <= now)
+    if (pricesEnd is not { } end || end <= now)
     {
-      yield return new HealthIssue("prices", HealthLevel.error, "No import price for now");
+      yield return new HealthIssue("prices", HealthLevel.error, "No import price for now (mode normal)");
+      yield break;
+    }
+    if (used is null)
+    {
+      yield return new HealthIssue("prices", HealthLevel.degraded, $"No price source has data; using the last known prices (until {end:dd.MM. HH:mm}, estimated after)");
       yield break;
     }
     // All sources are equal (the furthest wins), so which one is used isn't an issue — one

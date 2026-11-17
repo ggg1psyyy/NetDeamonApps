@@ -75,6 +75,9 @@ namespace NetDeamon.apps
     FeedInFirst,
     /// <summary>DP: grid charge for the battery top-up — without it the target would be missed at the deadline.</summary>
     TopUp,
+    /// <summary>No price for now at all (every source without data, nothing held): plain normal — a plan priced at 0 €
+    /// would charge from the grid as if it were free.</summary>
+    NoPrices,
   }
 
   public enum PriceResolution

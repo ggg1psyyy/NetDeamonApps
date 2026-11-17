@@ -19,18 +19,43 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Maximum import price (€/kWh) at which force-charging is permitted.</summary>
     public float ForceChargeMaxPrice { get; set; }
 
-    /// <summary>Fetches the netto prices again.</summary>
+    /// <summary>Where the held lists are kept (<see cref="HeldPriceFile"/>); null = not kept.</summary>
+    private string? _heldFile;
+
+    /// <summary>Takes up the lists held before a restart (<see cref="HeldPriceFile"/>) and keeps them there from now on.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="now">Current time.</param>
+    public void RestoreHeld(string path, System.DateTime now)
+    {
+      _heldFile = path;
+      var (import, export) = HeldPriceFile.Load(path);
+      _priceListCache = PriceList.MergeHeld(PriceListNetto, import, now.Date);
+      _independentExportPriceListCache = PriceList.MergeHeld(PriceListNettoIndependentExport, export, now.Date);
+    }
+
+    /// <summary>Fetches the netto prices again; the quarters no source gives any more are held
+    /// (<see cref="PriceList.MergeHeld"/> — a source failing never empties the list).</summary>
+    /// <param name="now">Current time.</param>
     /// <returns>True if they differ from the ones held so far (the price entities change state every quarter and with
     /// every fetch; a replan is only worth a real change).</returns>
-    public bool UpdatePriceList()
+    public bool UpdatePriceList(System.DateTime now)
     {
-      var import = FetchNettoPriceList(PVCC_Config.CurrentImportPriceEntity);
-      var export = FetchNettoPriceList(PVCC_Config.CurrentExportPriceEntity);
+      var import = PriceList.MergeHeld(FetchNettoPriceList(PVCC_Config.CurrentImportPriceEntity), _priceListCache, now.Date);
+      var export = PriceList.MergeHeld(FetchNettoPriceList(PVCC_Config.CurrentExportPriceEntity), _independentExportPriceListCache, now.Date);
       bool changed = !import.SameAs(_priceListCache) || !export.SameAs(_independentExportPriceListCache);
       _priceListCache = import;
       _independentExportPriceListCache = export;
+      if (changed && _heldFile is not null && import.Count > 0)
+      {
+        try { HeldPriceFile.Save(_heldFile, import, export); }
+        catch (System.Exception ex) { PVCC_Logger.LogWarning("Held prices not saved: {Message}", ex.Message); }
+      }
       return changed;
     }
+
+    /// <summary>Whether an import price covers a time (fresh, held or a fixed price).</summary>
+    /// <param name="t">The time.</param>
+    public bool HasImportPriceAt(System.DateTime t) => PriceListImport.TryGetPrice(t, out _);
 
     /// <summary>Netto prices from a price entity's "data" attribute (ha_epex_spot format), quarter-hourly.</summary>
     /// <param name="sourceEntity">Price entity; null gives an empty list.</param>
@@ -134,7 +159,7 @@ namespace NetDeamon.apps.PVControl
     {
       if (tariff != ImportTariff.Fixed) return PriceListNetto.WithResolution(PVCC_Config.ImportPriceResolution);
       float price = FixedImportNetto;   // read once per list
-      return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)));
+      return FixedSlots(price);
     }
 
     /// <summary>Brutto import prices of one tariff, everywhere.</summary>
@@ -162,8 +187,15 @@ namespace NetDeamon.apps.PVControl
       if (tariff != ExportTariff.Fixed)
         return new(NettoExportFor(tariff).Select(p => new PriceTableEntry(p.StartTime, p.EndTime, ExportPrice(p.Price, null, true))));
       float price = FixedExportPrice;   // read once per list
-      return new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)));
+      return FixedSlots(price);
     }
+
+    /// <summary>A fixed price in the market list's slots (so it reconciles with the market's quarters), or — without
+    /// any market price — in today's and tomorrow's quarters: a fixed price needs no market (<see cref="PriceList.Quarters"/>).</summary>
+    /// <param name="price">The fixed price.</param>
+    private PriceList FixedSlots(float price) =>
+      PriceListNetto.Count > 0 ? new(PriceListNetto.Select(p => new PriceTableEntry(p.StartTime, p.EndTime, price)))
+      : PriceList.Quarters(System.DateTime.Today, System.DateTime.Today.AddDays(2), price);
 
     /// <summary>Netto prices actually used to compute <see cref="PriceListImport"/>, each quarter by its tariff.</summary>
     public PriceList PriceListNettoImport => ImportTariffs.Prices(NettoImportFor);

@@ -146,6 +146,7 @@ namespace NetDeamon.apps.PVControl
           await PVCC_EntityManager.RemoveAsync(id);
       }
       _house = new HouseEnergy();
+      _house.Prices.RestoreHeld(AppFiles.PathOf(HeldPriceFile.FileName, typeof(PVConfig).Assembly), DateTime.Now);
       if (PVCC_Config.DpShadow is { Enabled: true } dpConfig)
         _dpShadow = new Optimizer.DpShadow(dpConfig, AppFiles.PathOf(dpConfig.DBLocation, typeof(PVConfig).Assembly));
       CreatePvForecast();

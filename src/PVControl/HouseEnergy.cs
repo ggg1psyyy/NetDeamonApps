@@ -263,7 +263,7 @@ namespace NetDeamon.apps.PVControl
       {
         // The price entities change state every quarter and with every fetch; only prices that really
         // differ (a new day published, a provider failover) are worth every load's full rescan.
-        if (Prices.UpdatePriceList())
+        if (Prices.UpdatePriceList(DateTime.Now))
           RequestReplan("prices updated");
       }
       if (entity.EntityId == PVCC_Config.CurrentBatteryPowerEntity?.EntityId && PVCC_Config.CurrentBatteryPowerEntity.TryGetStateValue(out int bat))
@@ -1354,6 +1354,13 @@ namespace NetDeamon.apps.PVControl
       return (timeline.FirstOrDefault(s => s.Time == now.RoundToNearestQuarterHour()) ?? timeline[0]).State;
     }
 
+    /// <summary>The plan's state, or plain normal when no import price covers now (every source without data and nothing
+    /// held, <see cref="PriceList.MergeHeld"/>): the plan then priced the grid at 0 € and would charge from it.</summary>
+    /// <param name="planned">The plan's state.</param>
+    /// <param name="priceNow">Whether an import price covers now.</param>
+    public static InverterState WithoutPrices(InverterState planned, bool priceNow) =>
+      priceNow ? planned : new InverterState(InverterModes.normal, ForceChargeReasons.NoPrices);
+
     /// <summary>Inverter command now: the simulation's running slot, or the user override. Neither the override nor
     /// the bug-fix kick below changes the plan's own state (<see cref="_planMode"/>): the simulation always continues
     /// from what it decided itself.</summary>
@@ -1371,6 +1378,9 @@ namespace NetDeamon.apps.PVControl
         // Only affects the command sent to the inverter right now.
         if (OverrideMode != InverterModes.automatic)
           return new InverterState(OverrideMode, ForceChargeReasons.UserMode);
+
+        // ── No price at all: plain normal, never a plan priced at 0 € (it would charge as if the grid were free) ──
+        planned = WithoutPrices(planned, Prices.HasImportPriceAt(now));
 
         // ── Battery held for a load from the grid: only while it really draws (live 2026-11-02 06:06) ──
         planned = LoadSchedulingDecision.LiveLoadHold(planned,

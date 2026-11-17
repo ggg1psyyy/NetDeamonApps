@@ -753,6 +753,17 @@ tank model update, at the latest every `ReplanIntervalMinutes` (15).
 
 ## Price pipeline
 
+**Prices are held, never emptied (2026-11-17).** Two EPEX sources were removed and the other two renamed in HA at
+09:14; every configured name was gone. `UpdatePriceList` replaced the list with the empty one the sources gave,
+`WithEstimatedPrices` has nothing to estimate from, `TryGetPrice` gives 0 — and the DP, seeing a free grid, force
+charged at 7.2 kW until the deploy at 09:26 (`AbsoluteMinimum`, price 0). Even under the fixed tariff: the fixed price
+was laid into the market list's slots, and there were none. Since then `PriceList.MergeHeld`: fresh prices win, the
+quarters no source gives any more keep their last price (day-ahead prices are final once published: a held quarter is
+the real price, not a guess; from today's midnight, what a source gives too), saved to `held_prices.json` for
+restarts; a fixed price gets its own quarters without a market list (`PriceList.Quarters`); and if nothing covers now,
+the mode is plain normal (`HouseEnergy.WithoutPrices`, reason `NoPrices`) — keeping the inverter's current mode was the
+alternative, but it would keep a running grid charge going. Health: only held prices = degraded, none = error.
+
 **Network price periods have years** (`NetworkPricePeriod.StartYear`/`EndYear`): the WiNAP was configured
 from October 2026, 22–04, after a press article on the draft; the ordinance (SNE-G-V, BGBl. II 299/2026)
 sets 23–05 (§ 7 Abs. 4) and first applies it from 1 Oct 2027 (§ 32 Abs. 4). From 2026-10-01 to 10-29 the

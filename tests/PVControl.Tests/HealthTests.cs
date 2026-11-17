@@ -129,8 +129,20 @@ public class HealthTests
     Assert.Empty(HealthChecks.ImportPrices(T0, [], "sensor.epex_spot_data_market_price_4", new DateTime(2026, 10, 23, 0, 0, 0)));
 
   [Fact]
-  public void Prices_NoneForNow_Error() =>
+  public void Prices_NoneForNow_Error()
+  {
     Assert.Equal(HealthLevel.error, HealthChecks.ImportPrices(T0, [], Used, T0.Date.AddHours(13)).Single().Level);
+    Assert.Equal(HealthLevel.error, HealthChecks.ImportPrices(T0, ["a", "b"], null, null).Single().Level);
+  }
+
+  [Fact]
+  public void Prices_NoSourceButHeldCoverNow_DegradedNotError()
+  {
+    // 2026-11-17 09:14: both sources renamed in HA, the day's prices held until midnight.
+    var issue = HealthChecks.ImportPrices(T0, ["a", "b"], null, T0.Date.AddDays(1)).Single();
+    Assert.Equal(HealthLevel.degraded, issue.Level);
+    Assert.Contains("last known prices", issue.Message);
+  }
 
   [Fact]
   public void Prices_TomorrowMissingAfter16()

@@ -23,7 +23,7 @@ python -m unittest discover deploy      # the script's tests
   stayed down; if the jobs can't be read it warns and goes on
 - restarts also during a force charge or a high import: PVControl seeds the running quarter's import from the
   meters' history and restores the import cap's state
-- stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json` and every DB;
+- stops the add-on, copies the publish output into its folder (keeping the live `appsettings*.json`, every DB and PVControl's `held_prices.json`;
   files the build no longer has are removed from the plugin folders) and starts it again — also if the copy fails;
   never copies over the running add-on (it would rewrite the DLLs under the process); a refused start (a backup began after the check)
   is retried every 15 s for up to 10 min

@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUBLISH = os.path.join(ROOT, 'src', 'Host', 'bin', 'Release', 'net10.0', 'publish')
 HA_FILES = os.path.join(ROOT, 'src', 'PVControl', 'HA')
 # Never overwritten in the add-on folder: the live settings and every app's data.
-KEEP = ['appsettings*.json', '*.db', '*.db-shm', '*.db-wal', '*.db.bak*']
+KEEP = ['appsettings*.json', '*.db', '*.db-shm', '*.db-wal', '*.db.bak*', 'held_prices.json']
 # PVControl's automations in automations.yaml, by id: replaced, or appended when missing.
 AUTOMATIONS = {'1726401911432': 'Mode.yaml', '1792585055022': 'Health.yaml',
                '1793042000001': 'InverterSync.yaml', '1793042000002': 'PriceFetch.yaml'}

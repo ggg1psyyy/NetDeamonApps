@@ -35,6 +35,32 @@ namespace NetDeamon.apps.PVControl
       _entries.Count == other._entries.Count
       && _entries.Zip(other._entries).All(p => p.First.StartTime == p.Second.StartTime && p.First.EndTime == p.Second.EndTime && p.First.Price == p.Second.Price);
 
+    /// <summary>The prices to use: the fresh ones, the held ones filling every quarter the fresh don't have (from
+    /// <paramref name="keepFrom"/>). Day-ahead prices are final once published — a held quarter is the real price, not
+    /// a guess —, so a source failing (all of them: renamed in HA, 2026-11-17) never empties the list.</summary>
+    /// <param name="fresh">What the sources give now (may be empty).</param>
+    /// <param name="held">The list used so far.</param>
+    /// <param name="keepFrom">Held quarters before this are dropped (today's midnight: what a source gives too).</param>
+    /// <returns>A new quarter-hourly list in time order.</returns>
+    public static PriceList MergeHeld(PriceList fresh, PriceList held, DateTime keepFrom)
+    {
+      var byStart = new SortedDictionary<DateTime, PriceTableEntry>();
+      foreach (var p in held.NormalizeToQuarterHourly()) if (p.StartTime >= keepFrom) byStart[p.StartTime] = p;
+      foreach (var p in fresh.NormalizeToQuarterHourly()) byStart[p.StartTime] = p;
+      return new PriceList(byStart.Values);
+    }
+
+    /// <summary>Quarters at one price — the slots of a fixed price when no market list gives them.</summary>
+    /// <param name="from">First quarter's start.</param>
+    /// <param name="to">End (exclusive).</param>
+    /// <param name="price">€/kWh.</param>
+    public static PriceList Quarters(DateTime from, DateTime to, float price)
+    {
+      var result = new List<PriceTableEntry>();
+      for (var t = from; t < to; t = t.AddMinutes(15)) result.Add(new PriceTableEntry(t, t.AddMinutes(15), price));
+      return new PriceList(result);
+    }
+
     // ── Resolution handling ──────────────────────────────────────────────────────────────────
 
     /// <summary>Splits every entry into 15-min entries at the same price.</summary>

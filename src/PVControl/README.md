@@ -119,7 +119,7 @@ computes, logs and publishes it; the planners keep planning with the raw Open-Me
 |---|---|---|
 | Battery SoC | unknown, last value used (≤ 2 min) | unavailable > 2 min → inverter in normal mode |
 | Inverter data (run mode, battery/grid/PV power, house load) | unknown | unknown > 2 min |
-| Import prices | first configured source has no data / tomorrow's prices missing after 16:00 | no price for now |
+| Import prices | a configured source has no data / no source has data, the last known prices in use / tomorrow's prices missing after 16:00 | no price for now, not even a held one (mode `normal`, reason `NoPrices`) |
 | PV forecast, load prediction | a PV forecast source unavailable | prediction invalid |
 | 15-s cycle | one failed | 3+ failed in a row |
 | Warm water | heat pump entities unavailable (control paused) | — |
@@ -199,6 +199,8 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | `sensor.pv_control_price_publication` | When tomorrow's prices arrived today (`HH:mm`, `pending`, or `published` after a restart); attributes `prices_until` and `days` (the last 14 days' publication times, each with `sources`: when every price entity first had tomorrow) |
 
 Price sources (`CurrentImportPriceEntities`, ha_epex_spot sensors) are all equal: PVControl uses the one whose price data reaches furthest, so whichever publishes tomorrow first wins (on a tie the earlier one in the list). `ImportPriceResolution` applies to every source — with `Hourly`, a 15-min source gives the same hourly prices as an hourly one. A configured source without any data shows up as `price_source` in the health sensor.
+
+Prices are **held**: a quarter no source gives any more keeps the last price PVControl had (day-ahead prices are final once published), from today's midnight on; past the held list's end the usual estimate (the same quarter a day earlier, +`EstimatedPricePremium`) takes over. The held lists are kept in `held_prices.json` in the plugin's folder (kept by the deploy), so a restart while every source is down plans with them too. A fixed tariff needs no market price at all (its quarters come from the market list when there is one, else today and tomorrow). Only with no price for now at all — no source, nothing held, no fixed price — the mode is plain `normal` (reason `NoPrices`), never a plan priced at 0 €.
 
 The sources are the integration's **market price** sensors (raw EPEX price; its surcharge and tax stay 0 — PVControl adds markup, network fee and tax itself). The integration polls its sources on its own schedule; [`HA/PriceFetch.yaml`](HA/PriceFetch.yaml) calls `epex_spot.fetch_data` every 5 min from 12:45 until one source reaches the end of tomorrow, so the prices arrive minutes after the auction results instead of in the afternoon.
 

@@ -320,4 +320,81 @@ public class PriceListTests
     Assert.Equal(4, b.Count);
     for (int i = 0; i < 4; i++) Assert.Equal(a[i], b[i], 5);
   }
+
+  // ── Held prices (2026-11-17: every EPEX source renamed in HA, the list went empty, the plan priced the grid at 0 €) ──
+
+  static readonly DateTime Day = new(2026, 11, 17);
+
+  [Fact]
+  public void MergeHeld_NothingFresh_KeepsTheHeldList()
+  {
+    var held = PriceList.Quarters(Day, Day.AddDays(1), 0.25f);
+    var merged = PriceList.MergeHeld(new PriceList(), held, Day);
+    Assert.Equal(96, merged.Count);
+    Assert.Equal(0.25f, merged.GetPrice(Day.AddHours(9.25)));
+  }
+
+  [Fact]
+  public void MergeHeld_FreshWins_HeldFillsTheTail_OldDaysDropped()
+  {
+    // Held: yesterday and today and tomorrow at 0.30; a source comes back with today only (0.20).
+    var held = PriceList.Quarters(Day.AddDays(-1), Day.AddDays(2), 0.30f);
+    var fresh = PriceList.Quarters(Day, Day.AddDays(1), 0.20f);
+    var merged = PriceList.MergeHeld(fresh, held, Day);
+    Assert.Equal(Day, merged.First().StartTime);                    // yesterday gone
+    Assert.Equal(0.20f, merged.GetPrice(Day.AddHours(12)));          // fresh wins
+    Assert.Equal(0.30f, merged.GetPrice(Day.AddDays(1).AddHours(8))); // tomorrow still held
+    Assert.Equal(Day.AddDays(2), merged.End);
+    Assert.Equal(192, merged.Count);
+  }
+
+  [Fact]
+  public void MergeHeld_HourlyFresh_SplitIntoQuarters_NoDoubles()
+  {
+    var fresh = new PriceList([new PriceTableEntry(Day, Day.AddHours(1), 0.1f)]);
+    var held = PriceList.Quarters(Day, Day.AddHours(2), 0.3f);
+    var merged = PriceList.MergeHeld(fresh, held, Day);
+    Assert.Equal(8, merged.Count);
+    Assert.Equal([0.1f, 0.1f, 0.1f, 0.1f, 0.3f, 0.3f, 0.3f, 0.3f], merged.Select(p => p.Price).ToArray());
+  }
+
+  [Fact]
+  public void Quarters_FromTo_OnePrice()
+  {
+    var q = PriceList.Quarters(Day, Day.AddHours(1), 0.14f);
+    Assert.Equal(4, q.Count);
+    Assert.All(q, p => Assert.Equal(15, (p.EndTime - p.StartTime).TotalMinutes));
+    Assert.Equal(Day.AddHours(1), q.End);
+  }
+
+  [Fact]
+  public void HeldPriceFile_RoundTrip_MissingOrCorruptIsEmpty()
+  {
+    string dir = Path.Combine(Path.GetTempPath(), "heldprices-" + Guid.NewGuid());
+    Directory.CreateDirectory(dir);
+    try
+    {
+      string path = Path.Combine(dir, HeldPriceFile.FileName);
+      Assert.Equal(0, HeldPriceFile.Load(path).Import.Count);           // missing
+      var import = PriceList.Quarters(Day, Day.AddDays(1), 0.2654f);
+      HeldPriceFile.Save(path, import, new PriceList());
+      var (i, e) = HeldPriceFile.Load(path);
+      Assert.True(i.SameAs(import));
+      Assert.Equal(0, e.Count);
+      Assert.False(File.Exists(path + ".tmp"));
+      File.WriteAllText(path, "{ not json");
+      Assert.Equal(0, HeldPriceFile.Load(path).Import.Count);           // corrupt
+    }
+    finally { Directory.Delete(dir, true); }
+  }
+
+  [Fact]
+  public void WithoutPrices_NormalWithReason_ElseThePlan()
+  {
+    var charge = new InverterState(InverterModes.force_charge, ForceChargeReasons.AbsoluteMinimum);
+    Assert.Equal(charge, HouseEnergy.WithoutPrices(charge, priceNow: true));
+    var fallback = HouseEnergy.WithoutPrices(charge, priceNow: false);
+    Assert.Equal(InverterModes.normal, fallback.Mode);
+    Assert.Equal(ForceChargeReasons.NoPrices, fallback.ModeReason);
+  }
 }
