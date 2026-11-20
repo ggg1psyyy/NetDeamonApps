@@ -703,6 +703,18 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   the whole last slot". Per slot: off, or heat for 1/10 … 10/10 of it (so a run can stop between
   slot boundaries). Cost = heating energy × slot price + `RunStartCostEur` per run start + 10 €/K
   per slot below a comfort window's minimum (so a window is only missed when it can't be met).
+- **The start hysteresis (2026-11-20).** A boost to 47 °C at 44.3 °C — the tank just heated to 45 °C — went "active"
+  at once but heated only from 10:50 at 41.9 °C, two hours later. The heat pump starts a one-time heating only when the
+  tank is ~5 K below the setpoint: over 15 starts since 11-06 refused at 2.7 and 4.8 K, taken at 5.1–5.2 K and above
+  (the 1–5 minutes to the compressor); the time since the last run doesn't matter (starts 83 min apart were taken). No
+  such parameter is known on the heat pump. `OneTimeHysteresisK` 5.5 (exactly 5 lies on the wrong side). The DP has a
+  third phase, "heating that may not stop yet", with the run's start temperature on the path: a run may only end once it
+  rose that much (the old plans had runs of 3–5 K — 41.1 → 44.1 °C — that the heat pump wouldn't have started); a set
+  target that isn't heating yet waits for the tank to cool; the control switches off its own start that went active
+  but never heated while the tank is above setpoint − hysteresis (it would start whenever the tank cools — outside the
+  plan and the import-cap check) without the off-time; a start that is merely slow, one armed by hand and a boost stay
+  armed. One start doesn't fit: 11-14 21:42 a setpoint 4.8 K up was refused and heating
+  began at 23:00:01 at 4.3 K, the setpoint unchanged — probably the heat pump's own time program; open.
   Each state keeps its path's exact temperature, so bucket rounding never accumulates. A run that
   can't be stopped is first heated to its target (`ForcedTarget`, see below). Heating early only wins
   when the price difference beats the extra standby loss at the higher temperature.

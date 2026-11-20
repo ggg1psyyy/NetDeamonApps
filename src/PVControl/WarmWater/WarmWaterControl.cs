@@ -34,11 +34,45 @@ public enum WarmWaterMode
 /// <param name="LastStop">When a one-time heating last stopped (minimum off-time).</param>
 /// <param name="ImportHeadroomW">Grid import left under the import cap, W; null = no cap.</param>
 /// <param name="StartPowerW">Heat pump power of a heating, W (checked against the headroom).</param>
+/// <param name="RunSawHeating">The heat pump heated (warm water) since the one-time heating went active.</param>
+/// <param name="StartHysteresisK">The heat pump starts only this far below the setpoint, K (<see cref="WarmWaterConfig.OneTimeHysteresisK"/>).</param>
+/// <param name="OwnStart">The active one-time heating is PVControl's own start (not armed by hand or at the heat pump).</param>
 public readonly record struct ControlInput(
   DateTime Now, double Temp, bool SwitchOn, bool OneTimeActive, double? Setpoint, DateTime? LastCommand, DateTime? LastStart,
   WarmWaterMode Mode, IReadOnlyList<PlannedRun> Runs, double MaxTemp,
   bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes,
-  DateTime? LastStop = null, int? ImportHeadroomW = null, int StartPowerW = 0);
+  DateTime? LastStop = null, int? ImportHeadroomW = null, int StartPowerW = 0, bool RunSawHeating = true, double StartHysteresisK = 0, bool OwnStart = false);
+
+/// <summary>
+/// The controller's bookkeeping of a one-time heating, cycle by cycle (pure, so it is tested): whether it is active,
+/// whether it heated since it went active (else it is armed, waiting), whether it is PVControl's own start, and when a
+/// heating that heated last ended (the minimum off-time — not a start the heat pump never heated).
+/// </summary>
+/// <param name="WasActive">The one-time heating was active in the last cycle.</param>
+/// <param name="RunSawHeating">It heated since it went active.</param>
+/// <param name="OwnStart">It is PVControl's own start.</param>
+/// <param name="LastStop">When a one-time heating that heated last ended.</param>
+public readonly record struct RunTrack(bool WasActive, bool RunSawHeating, bool OwnStart, DateTime? LastStop)
+{
+  /// <summary>This cycle's observation.</summary>
+  /// <param name="now">Current time.</param>
+  /// <param name="oneTimeActive">The one-time heating is active.</param>
+  /// <param name="heating">The heat pump heats warm water.</param>
+  public RunTrack Observe(DateTime now, bool oneTimeActive, bool heating)
+  {
+    bool ended = WasActive && !oneTimeActive;
+    return new(oneTimeActive, oneTimeActive && (RunSawHeating || heating), !ended && OwnStart, ended && RunSawHeating ? now : LastStop);
+  }
+
+  /// <summary>After a command: a start is PVControl's own, a stop ends that (also a start that never went active).</summary>
+  /// <param name="command">The command sent.</param>
+  public RunTrack After(ControlCommand command) => command switch
+  {
+    ControlCommand.Start => this with { OwnStart = true },
+    ControlCommand.Stop => this with { OwnStart = false },
+    _ => this,
+  };
+}
 
 /// <summary>What to do with the heat pump.</summary>
 public enum ControlCommand
@@ -67,8 +101,9 @@ public readonly record struct ControlDecision(ControlCommand Command, double? Ta
 /// <summary>
 /// What to do with the heat pump this cycle. A running heating is never stopped (compressor starts
 /// wear it): it continues to its setpoint, which may only be raised. The switch goes off only after
-/// the heat pump stopped by itself or a start wasn't taken. New planned runs need ≥ <see cref="MinRunK"/>
-/// rise and <see cref="MinOffTime"/> since the last; planned runs only in Auto, a boost in any mode.
+/// the heat pump stopped by itself or a start wasn't taken. New planned runs need ≥ <see cref="MinRunK"/> (and the
+/// start hysteresis, <see cref="ControlInput.StartHysteresisK"/>) rise and <see cref="MinOffTime"/> since the last; planned
+/// runs only in Auto, a boost in any mode.
 /// </summary>
 public static class WarmWaterControl
 {
@@ -108,11 +143,28 @@ public static class WarmWaterControl
 
     ControlDecision With(ControlDecision d) => d with { EndBoost = endBoost, Reason = endBoost is null ? d.Reason : $"Boost over ({endBoost}); {d.Reason}" };
 
-    // Heating runs: never stopped, the setpoint may only go up.
+    // A one-time heating is active: never stopped, the setpoint may only go up (also while it is armed — a boost raised
+    // over an armed start).
     if (c.SwitchOn && c.OneTimeActive)
     {
       if (controlling && target is { } up && (c.Setpoint is not { } sp || up >= sp + 0.25) && cooledDown)
         return With(new(ControlCommand.SetSetpoint, up, null, $"{who}: setpoint {c.Setpoint:F1} → {up:F1} °C"));
+      // Armed but not heating: the heat pump took the switch ("active") but waits — the tank isn't the hysteresis below
+      // the setpoint (live 2026-11-20: active from 08:43, heating from 10:50). PVControl's own start that isn't heating
+      // after the acknowledge time is switched off (no compressor start lost; it would otherwise start whenever the tank
+      // cools, outside the plan and the import-cap check); a boost stays armed and says when it will start; one armed by
+      // hand or at the heat pump is left alone.
+      // Only where the hysteresis explains the wait (tank above setpoint − hysteresis); below it a start that is merely
+      // slow (after a standstill, a defrost) stays armed — the heat pump will take it.
+      if (!c.RunSawHeating && c.StartHysteresisK > 0 && c.Setpoint is { } armed && c.Temp > armed - c.StartHysteresisK)
+      {
+        string waits = $" (starts at ≤ {armed - c.StartHysteresisK:F1} °C)";
+        if (boosting)
+          return With(ControlDecision.Wait($"Boost: waiting for the heat pump{waits}"));
+        if (c.OwnStart && c.LastStart is { } armedAt && c.Now - armedAt >= StartAckTimeout && cooledDown)
+          return With(new(ControlCommand.Stop, null, null, $"Start not taken{waits} — switch off"));
+        return With(ControlDecision.Wait($"Armed, waiting for the heat pump{waits}"));
+      }
       return With(ControlDecision.Wait($"Heating to {c.Setpoint:F1} °C"));
     }
 
@@ -143,8 +195,9 @@ public static class WarmWaterControl
       var next = c.Runs.FirstOrDefault(r => r.Start > c.Now);
       return With(ControlDecision.Wait(next == default ? "No heating planned" : $"Next heating {next.Start:HH:mm} → {next.TargetTemp:F1} °C"));
     }
-    if (c.Temp > run.TargetTemp - MinRunK)
-      return With(ControlDecision.Wait($"Planned run too small ({c.Temp:F1} → {run.TargetTemp:F1} °C, < {MinRunK:F0} K)"));
+    double minRun = Math.Max(MinRunK, c.StartHysteresisK);
+    if (c.Temp > run.TargetTemp - minRun)
+      return With(ControlDecision.Wait($"Planned run too small ({c.Temp:F1} → {run.TargetTemp:F1} °C, < {minRun:F1} K)"));
     if (c.LastStop is { } stopped && c.Now - stopped < MinOffTime)
       return With(ControlDecision.Wait($"Off-time: no start before {stopped + MinOffTime:HH:mm}"));
     if (capFull is not null)

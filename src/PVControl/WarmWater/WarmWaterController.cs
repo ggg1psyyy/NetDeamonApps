@@ -43,6 +43,12 @@ public sealed class WarmWaterController
   string? _replanRequest;
   bool _lastHeating;
   DateTime? _lastCommand, _lastStart, _lastStop, _boostSince;
+  /// <summary>The heat pump heated since the one-time heating went active (an active one-time heating that never heats
+  /// is armed, waiting for the tank to cool below the setpoint − <see cref="WarmWaterConfig.OneTimeHysteresisK"/>).</summary>
+  bool _runSawHeating;
+  /// <summary>The active (or armed) one-time heating is PVControl's own start — only that one is switched off when the
+  /// heat pump never heats it; one armed by hand or at the heat pump is left alone.</summary>
+  bool _ownStart;
   bool _wasActive;
   bool _boostSawRunning;
 
@@ -69,14 +75,14 @@ public sealed class WarmWaterController
   public bool BoostOn => _boostSince is not null;
 
   /// <summary>The control's timers and the boost — what a restart would lose (<see cref="WarmWaterControlState"/>).</summary>
-  public WarmWaterControlState ControlState => new(_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning);
+  public WarmWaterControlState ControlState => new(_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning, _runSawHeating, _ownStart);
 
   /// <summary>Continues from the control state published before a restart.</summary>
   /// <param name="state">The state.</param>
   public void RestoreControl(WarmWaterControlState state)
   {
-    (_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning) =
-      (state.LastCommand, state.LastStart, state.LastStop, state.WasActive, state.BoostSince, state.BoostSawRunning);
+    (_lastCommand, _lastStart, _lastStop, _wasActive, _boostSince, _boostSawRunning, _runSawHeating, _ownStart) =
+      (state.LastCommand, state.LastStart, state.LastStop, state.WasActive, state.BoostSince, state.BoostSawRunning, state.RunSawHeating, state.OwnStart);
   }
   double? Temperature => Config.TemperatureEntity.TryGetStateValue(out float t, numericalGetBaseValue: false) ? t : null;
   bool IsOn(Entity e) => e.State?.Equals("on", StringComparison.OrdinalIgnoreCase) ?? false;
@@ -173,7 +179,8 @@ public sealed class WarmWaterController
     else if (oneTime && OneTimeSetpoint is { } oneTimeSetpoint) forced = oneTimeSetpoint;
     else if (Heating && !oneTime && AutomaticSetpoint is { } auto) forced = auto;
 
-    var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur);
+    var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur,
+      Config.OneTimeHysteresisK, Heating || _runSawHeating);   // a pause in a running heating (11-14 23:11) isn't a wait
     Plan = WarmWaterPlanner.Plan(request);
     Automatic = AutomaticSetpoint is { } setpoint
       ? WarmWaterPlanner.PredictAutomatic(request, setpoint, Config.AutomaticHysteresisK, Heating)
@@ -245,11 +252,11 @@ public sealed class WarmWaterController
     HeatPumpAvailable = true;
     if (BoostOn)
       _boostSawRunning |= oneTimeActive;
-    if (_wasActive && !oneTimeActive) _lastStop = now;
-    _wasActive = oneTimeActive;
+    var track = new RunTrack(_wasActive, _runSawHeating, _ownStart, _lastStop).Observe(now, oneTimeActive, Heating);
+    (_wasActive, _runSawHeating, _ownStart, _lastStop) = (track.WasActive, track.RunSawHeating, track.OwnStart, track.LastStop);
     var decision = WarmWaterControl.Decide(new ControlInput(now, temp, switchOn, oneTimeActive, OneTimeSetpoint, _lastCommand, _lastStart,
       Mode, Plan.Runs, Config.MaxTemp, BoostOn, BoostTemp, _boostSince, _boostSawRunning, Config.BoostTimeoutMinutes, _lastStop,
-      ImportHeadroomW, (int)Math.Round(Model.PowerW(temp))));
+      ImportHeadroomW, (int)Math.Round(Model.PowerW(temp)), _runSawHeating, Config.OneTimeHysteresisK, _ownStart));
     ControlReason = decision.Reason;
 
     if (decision.EndBoost is { } why)
@@ -263,6 +270,7 @@ public sealed class WarmWaterController
 
     PVCC_Logger.LogInformation("{name}: {command} {target} at {temp} °C ({reason})", Config.Name, decision.Command, decision.Target, temp, decision.Reason);
     _lastCommand = now;
+    _ownStart = track.After(decision.Command).OwnStart;
     switch (decision.Command)
     {
       case ControlCommand.Start:

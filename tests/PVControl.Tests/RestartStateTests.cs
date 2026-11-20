@@ -141,6 +141,20 @@ public class RestartStateTests
   }
 
   [Fact]
+  public void WarmWaterControl_AnOlderState_RunSawHeatingTrue_NotOurStart()
+  {
+    // Saved before the start hysteresis: a running heating isn't read as armed (no "not taken" switch-off), and nothing
+    // counts as our own start.
+    var withNew = new WarmWaterControlState(Now.AddMinutes(-4), Now.AddMinutes(-4), null, true, null, false, false, true);
+    Assert.Equal(withNew, RestoreState.FromJson<WarmWaterControlState>(RestoreState.ToJson(withNew)));
+    var json = RestoreState.ToJson(withNew).Replace(",\"RunSawHeating\":false", "").Replace(",\"OwnStart\":true", "");
+    Assert.DoesNotContain("OwnStart", json);
+    var old = RestoreState.FromJson<WarmWaterControlState>(json)!;
+    Assert.True(old.RunSawHeating);
+    Assert.False(old.OwnStart);
+  }
+
+  [Fact]
   public void ImportQuarter_SeededFromHistory_KnowsWhatItImported()
   {
     // Restart at 23:27:30 during the charge: the meter read 1000.000 kWh at 23:15 (history), 1001.62 now.

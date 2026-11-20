@@ -39,6 +39,10 @@ public sealed record WarmWaterPlan(IReadOnlyList<PlannedRun> Runs, IReadOnlyList
 /// <param name="MaxTemp">Highest tank temperature, °C.</param>
 /// <param name="ForcedTarget">A running heating or a boost continues to this temperature; null = none.</param>
 /// <param name="RunStartCostEur">Added per run start, €, so one longer run beats several short ones.</param>
+/// <param name="StartHysteresisK">The heat pump starts a one-time heating only when the tank is at least this far below
+/// its setpoint (<see cref="WarmWaterConfig.OneTimeHysteresisK"/>): a planned run rises at least this much, and a forced
+/// target that isn't heating yet waits until the tank has cooled to it minus this. 0 = starts at once.</param>
+/// <param name="HeatingNow">The heat pump heats warm water now (a forced target then continues without waiting).</param>
 public sealed record PlanRequest(
   DateTime Now,
   double StartTemp,
@@ -48,7 +52,9 @@ public sealed record PlanRequest(
   IReadOnlyList<ComfortWindow> Comfort,
   double MaxTemp,
   double? ForcedTarget = null,
-  float RunStartCostEur = 0.02f);
+  float RunStartCostEur = 0.02f,
+  double StartHysteresisK = 0,
+  bool HeatingNow = false);
 
 /// <summary>
 /// Plans warm-water heating at the lowest cost that keeps the comfort windows warm: a dynamic
@@ -116,12 +122,17 @@ public static class WarmWaterPlanner
     int n = r.Slots.Count;
     if (n == 0) return WarmWaterPlan.Empty;
 
-    // A run that is already going isn't stopped: heat until its target first, then optimize.
+    // A run that is already going isn't stopped: heat until its target first, then optimize. One that is set but not
+    // heating yet starts only once the tank has cooled to its target minus the hysteresis (the heat pump waits; live
+    // 2026-11-20: a boost to 47 °C at 44.3 °C started at 41.9 °C, two hours later).
     var actions = new double[n];
     int first = 0;
     double temp = r.StartTemp;
     if (r.ForcedTarget is { } forced && temp < forced - Resolution / 2)
     {
+      if (!r.HeatingNow)
+        while (first < n && temp > forced - r.StartHysteresisK + 1e-9)
+          temp = Step(r, first++, temp, 0, out _, out _, out _);
       var capped = r with { MaxTemp = Math.Min(r.MaxTemp, forced) };
       while (first < n)
       {
@@ -133,23 +144,30 @@ public static class WarmWaterPlanner
     bool heating = first > 0 && actions[first - 1] >= 1 - 1e-9;
 
     int buckets = Bucket(r.MaxTemp) + 2;
-    // State = (temperature bucket, heated in the previous slot). Each state keeps the cheapest
-    // path reaching it and that path's exact temperature, so rounding never accumulates.
-    var cost = new double[2 * buckets];
-    var exact = new double[2 * buckets];
+    // State = (temperature bucket, phase): 0 off, 1 heating and free to stop, 2 heating that may not stop yet — a run
+    // must rise at least StartHysteresisK above its start (the heat pump doesn't start a smaller one). Each state keeps the
+    // cheapest path reaching it, that path's exact temperature and, in phase 2, its run's start temperature; a path that
+    // may stop is never displaced by one that may not (separate phases). A run already going (forced) is free.
+    double h = Math.Max(0, r.StartHysteresisK);
+    bool CanStop(double t, double runStart) => t >= runStart + h - 1e-9 || t >= r.MaxTemp - Resolution / 2;
+    int Idx(int bucket, int phase) => Math.Min(bucket, buckets - 1) + phase * buckets;
+    var cost = new double[3 * buckets];
+    var exact = new double[3 * buckets];
+    var runStart = new double[3 * buckets];
     var back = new int[n][];
     var level = new byte[n][];
     Array.Fill(cost, double.PositiveInfinity);
-    int s0 = State(Bucket(temp), heating, buckets);
+    int s0 = Idx(Bucket(temp), heating ? 1 : 0);
     cost[s0] = 0;
     exact[s0] = temp;
 
     for (int i = first; i < n; i++)
     {
-      var nextCost = new double[2 * buckets];
-      var nextExact = new double[2 * buckets];
-      var prev = back[i] = new int[2 * buckets];
-      var lvl = level[i] = new byte[2 * buckets];
+      var nextCost = new double[3 * buckets];
+      var nextExact = new double[3 * buckets];
+      var nextRunStart = new double[3 * buckets];
+      var prev = back[i] = new int[3 * buckets];
+      var lvl = level[i] = new byte[3 * buckets];
       Array.Fill(nextCost, double.PositiveInfinity);
       var slotTime = SlotStart(r, i);
       double hours = SlotHours(r, i);
@@ -158,21 +176,29 @@ public static class WarmWaterPlanner
       {
         if (double.IsPositiveInfinity(cost[s])) continue;
         double t = exact[s];
-        bool wasHeating = s >= buckets;
+        int phase = s / buckets;
+        bool wasHeating = phase > 0;
         double baseCost = cost[s] + Penalty(r.Comfort, slotTime, t);
         for (int a = 0; a <= HeatLevels; a++)
         {
           bool heat = a > 0;
+          if (!heat && phase == 2 && !CanStop(t, runStart[s])) continue;   // a run too small to stop
           if (heat && t >= r.MaxTemp - Resolution / 2) break;
+          if (heat && !wasHeating && t > r.MaxTemp - h + 1e-9) break;      // no target the hysteresis lets start
           double next = Step(r, i, t, (double)a / HeatLevels, out double heatCost, out double heated, out _);
-          double c = baseCost + heatCost + (heat && !wasHeating ? r.RunStartCostEur : 0);
+          double rs = !heat ? 0 : wasHeating && phase == 2 ? runStart[s] : wasHeating ? double.NegativeInfinity : t;
           // Still running at the slot's end only when it heated the whole slot — a run that
           // stopped within it is over, and heating again is a new start.
-          int ns = State(Bucket(next), heated >= hours - 1e-9, buckets);
+          bool running = heated >= hours - 1e-9;
+          if (heat && !running && !CanStop(next, rs)) continue;           // stopping within the slot below the rise
+          int nextPhase = !heat || !running ? 0 : CanStop(next, rs) ? 1 : 2;
+          double c = baseCost + heatCost + (heat && !wasHeating ? r.RunStartCostEur : 0);
+          int ns = Idx(Bucket(next), nextPhase);
           if (c < nextCost[ns] - 1e-12 || (Math.Abs(c - nextCost[ns]) <= 1e-12 && next > nextExact[ns]))
           {
             nextCost[ns] = c;
             nextExact[ns] = next;
+            nextRunStart[ns] = rs;
             prev[ns] = s;
             lvl[ns] = (byte)a;
           }
@@ -180,9 +206,10 @@ public static class WarmWaterPlanner
       }
       cost = nextCost;
       exact = nextExact;
+      runStart = nextRunStart;
     }
 
-    // Cheapest end state, then walk back to read off the actions.
+    // Cheapest end state (a run may still be going at the horizon's end), then walk back to read off the actions.
     int best = 0;
     for (int s = 1; s < cost.Length; s++)
       if (cost[s] < cost[best]) best = s;
@@ -315,9 +342,4 @@ public static class WarmWaterPlanner
   /// <summary>Temperature bucket of the dynamic program.</summary>
   /// <param name="temp">Temperature, °C.</param>
   static int Bucket(double temp) => Math.Max(0, (int)Math.Round(temp / Resolution));
-  /// <summary>State index of the dynamic program: bucket, plus <paramref name="buckets"/> if the slot before heated.</summary>
-  /// <param name="bucket">Temperature bucket.</param>
-  /// <param name="heated">The slot before heated.</param>
-  /// <param name="buckets">Number of buckets.</param>
-  static int State(int bucket, bool heated, int buckets) => Math.Min(bucket, buckets - 1) + (heated ? buckets : 0);
 }

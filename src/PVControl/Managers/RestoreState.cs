@@ -95,6 +95,10 @@ namespace NetDeamon.apps.PVControl.Managers
   /// <param name="WasActive">A one-time heating ran in the last cycle.</param>
   /// <param name="BoostSince">Boost pressed; null = none.</param>
   /// <param name="BoostSawRunning">The boost's heating has run.</param>
+  /// <param name="RunSawHeating">The active one-time heating has heated (else it is armed, waiting); true when an older
+  /// state lacks it (as before: a running heating isn't switched off).</param>
+  /// <param name="OwnStart">The one-time heating is PVControl's own start; false when an older state lacks it (nothing
+  /// is switched off as "not taken").</param>
   public sealed record WarmWaterControlState(DateTime? LastCommand, DateTime? LastStart, DateTime? LastStop, bool WasActive,
-    DateTime? BoostSince, bool BoostSawRunning);
+    DateTime? BoostSince, bool BoostSawRunning, bool RunSawHeating = true, bool OwnStart = false);
 }

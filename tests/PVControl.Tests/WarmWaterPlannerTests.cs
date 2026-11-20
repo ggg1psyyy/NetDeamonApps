@@ -94,6 +94,57 @@ public class WarmWaterPlannerTests : TestBase
     Assert.All(plan.Runs, r => Assert.True(r.TargetTemp <= 57));
   }
 
+  // ── The heat pump's start hysteresis (OneTimeHysteresisK) ──────────────────────────────────
+
+  const double H = 5.5;
+
+  [Theory]
+  [InlineData(30)]
+  [InlineData(38)]
+  [InlineData(41)]
+  [InlineData(44)]
+  [InlineData(48)]
+  public void Hysteresis_EveryRunRisesAtLeastIt(double temp)
+  {
+    // The heat pump doesn't start a one-time heating less than ~5 K below its setpoint (live 2026-11-06…20).
+    var prices = new Func<DateTime, float>[] { _ => 0.30f, t => t.Hour is 12 or 13 ? 0.10f : 0.40f, t => t < Start.AddHours(1) ? 0f : 2f };
+    var comforts = new[] { EveningWindow, new List<ComfortWindow>([new(Evening, Evening.AddHours(1), 43), new(Evening.AddHours(3), Evening.AddHours(4), 46)]) };
+    foreach (var price in prices)
+      foreach (var comfort in comforts)
+      {
+        var plan = WarmWaterPlanner.Plan(Request(temp, price, comfort) with { StartHysteresisK = H });
+        var horizonEnd = Start.AddMinutes(15 * 56);
+        Assert.All(plan.Runs.Where(r => r.End < horizonEnd), r => Assert.True(r.TargetTemp >= r.StartTemp + H - 0.05 || r.TargetTemp >= 57 - 0.1,
+          $"{r.Start:HH:mm} {r.StartTemp:F1} → {r.TargetTemp:F1} °C"));
+        Assert.All(plan.Runs, r => Assert.True(r.StartTemp <= 57 - H + 0.05, $"{r.Start:HH:mm} starts at {r.StartTemp:F1} °C"));
+      }
+  }
+
+  [Fact]
+  public void Hysteresis_Zero_ThePlanAsBefore_ARunRisingMoreUnchanged()
+  {
+    static float Price(DateTime t) => t.Hour is 12 or 13 ? 0.10f : 0.40f;
+    var r = Request(38, Price, EveningWindow);
+    var before = WarmWaterPlanner.Plan(r);
+    Assert.Equal(before.Runs, WarmWaterPlanner.Plan(r with { StartHysteresisK = 0 }).Runs);
+    Assert.All(before.Runs, run => Assert.True(run.TargetTemp - run.StartTemp >= H));   // rises more than the hysteresis anyway
+    Assert.Equal(before.Runs, WarmWaterPlanner.Plan(r with { StartHysteresisK = H }).Runs);
+  }
+
+  [Fact]
+  public void Hysteresis_ASetTargetNotHeatingYet_StartsOnceTheTankHasCooled()
+  {
+    // Live 2026-11-20: a boost to 47 °C at 44.3 °C, the heat pump active but waiting; it heated from 41.9 °C.
+    var waiting = WarmWaterPlanner.Plan(Request(44.3, _ => 0.30f, [], forced: 47) with { StartHysteresisK = H });
+    var run = waiting.Runs.First();
+    Assert.True(run.Start > Start, $"starts {run.Start:HH:mm}");
+    Assert.True(run.StartTemp <= 47 - H + 0.05, $"at {run.StartTemp:F1} °C");
+    Assert.True(run.TargetTemp >= 47 - WarmWaterPlanner.Resolution);
+    // a heating that already runs doesn't wait
+    var running = WarmWaterPlanner.Plan(Request(44.3, _ => 0.30f, [], forced: 47) with { StartHysteresisK = H, HeatingNow = true });
+    Assert.Equal(Start, running.Runs.First().Start);
+  }
+
   [Fact]
   public void RunInProgress_ContinuesToItsTarget()
   {

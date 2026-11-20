@@ -23,6 +23,75 @@ public class WarmWaterControlTests : TestBase
 
   static ControlDecision Decide(ControlInput c) => WarmWaterControl.Decide(c);
 
+  // ── The heat pump's start hysteresis ─────────────────────────────────────────────────────────
+
+  [Fact]
+  public void Hysteresis_APlannedRunUnderIt_NotStarted()
+  {
+    // Run 38 → 44.3 °C: 6.3 K starts; at 39.5 °C only 4.8 K — the heat pump wouldn't take it.
+    Assert.Equal(ControlCommand.Start, Decide(Input() with { StartHysteresisK = 5.5 }).Command);
+    var d = Decide(Input(temp: 39.5) with { StartHysteresisK = 5.5 });
+    Assert.Equal(ControlCommand.None, d.Command);
+    Assert.Contains("too small", d.Reason);
+  }
+
+  [Fact]
+  public void Hysteresis_AnArmedPlannedStartThatNeverHeats_SwitchedOffAfterTheAckTime()
+  {
+    var armed = Input(temp: 44, switchOn: true, active: true, setpoint: 47) with { RunSawHeating = false, StartHysteresisK = 5.5, OwnStart = true };
+    Assert.Equal(ControlCommand.None, Decide(armed with { LastStart = Now.AddMinutes(-5), LastCommand = Now.AddMinutes(-5) }).Command);
+    var d = Decide(armed with { LastStart = Now.AddMinutes(-11), LastCommand = Now.AddMinutes(-11) });
+    Assert.Equal(ControlCommand.Stop, d.Command);
+    Assert.Contains("starts at ≤ 41.5", d.Reason);
+    // a start that is merely slow (the tank well below setpoint − hysteresis): stays armed, no "starts at"
+    var slow = Decide(armed with { Temp = 31, Setpoint = 45, LastStart = Now.AddMinutes(-11), LastCommand = Now.AddMinutes(-11) });
+    Assert.Equal(ControlCommand.None, slow.Command);
+    Assert.DoesNotContain("starts at", slow.Reason);
+    // armed by hand or at the heat pump (not our start), or not in Auto: left alone — however old the last start
+    Assert.Equal(ControlCommand.None, Decide(armed with { OwnStart = false, LastStart = Now.AddHours(-5), LastCommand = Now.AddHours(-5) }).Command);
+    Assert.Equal(ControlCommand.None, Decide(armed with { OwnStart = false, Mode = WarmWaterMode.PlanOnly, LastStart = Now.AddMinutes(-11), LastCommand = Now.AddMinutes(-11) }).Command);
+    // our own (boost) start left armed when the boost is over: switched off in any mode
+    Assert.Equal(ControlCommand.Stop, Decide(armed with { Mode = WarmWaterMode.PlanOnly, LastStart = Now.AddMinutes(-11), LastCommand = Now.AddMinutes(-11) }).Command);
+    // one that heated is never stopped (a pause in a running heating isn't "not taken")
+    Assert.Equal(ControlCommand.None, Decide(armed with { RunSawHeating = true, LastStart = Now.AddMinutes(-30), LastCommand = Now.AddMinutes(-30) }).Command);
+  }
+
+  [Fact]
+  public void Hysteresis_AnArmedBoost_StaysAndSaysWhenItStarts()
+  {
+    var d = Decide(Input(temp: 44.3, switchOn: true, active: true, setpoint: 47, boost: true, boostSince: Now.AddMinutes(-30),
+      lastStart: Now.AddMinutes(-30)) with { BoostTemp = 47, RunSawHeating = false, StartHysteresisK = 5.5 });
+    Assert.Equal(ControlCommand.None, d.Command);
+    Assert.Contains("Boost: waiting for the heat pump (starts at ≤ 41.5 °C)", d.Reason);
+  }
+
+  [Fact]
+  public void Hysteresis_ABoostRaisedOverAnArmedStart_RaisesTheSetpoint()
+  {
+    var d = Decide(Input(temp: 44, switchOn: true, active: true, setpoint: 47, boost: true, boostSince: Now.AddMinutes(-10),
+      lastStart: Now.AddMinutes(-10)) with { BoostTemp = 50, RunSawHeating = false, StartHysteresisK = 5.5, OwnStart = true });
+    Assert.Equal((ControlCommand.SetSetpoint, (double?)50), (d.Command, d.Target));
+  }
+
+  [Fact]
+  public void RunTrack_OwnStartAndHeated_TheOffTimeOnlyAfterAHeatingThatHeated()
+  {
+    var t0 = Now;
+    var track = new RunTrack(false, false, false, null).After(ControlCommand.Start);
+    Assert.True(track.OwnStart);
+    track = track.Observe(t0, oneTimeActive: true, heating: false);           // armed, waiting
+    Assert.Equal((true, false, true), (track.WasActive, track.RunSawHeating, track.OwnStart));
+    var notTaken = track.After(ControlCommand.Stop).Observe(t0.AddMinutes(11), false, false);
+    Assert.Equal((false, (DateTime?)null), (notTaken.OwnStart, notTaken.LastStop));   // no off-time from a start never heated
+    var heated = track.Observe(t0.AddMinutes(20), true, true).Observe(t0.AddMinutes(25), true, false);   // a pause stays "heated"
+    Assert.True(heated.RunSawHeating);
+    var ended = heated.Observe(t0.AddMinutes(40), false, false);
+    Assert.Equal((false, false, (DateTime?)t0.AddMinutes(40)), (ended.OwnStart, ended.RunSawHeating, ended.LastStop));
+    // a start that never went active: our stop clears the flag, the next hand-armed heating isn't ours
+    var never = new RunTrack(false, false, false, null).After(ControlCommand.Start).Observe(t0, false, false).After(ControlCommand.Stop);
+    Assert.False(never.Observe(t0.AddMinutes(30), true, false).OwnStart);
+  }
+
   // ── Planned runs (Auto) ────────────────────────────────────────────────────────────────────
 
   [Fact]

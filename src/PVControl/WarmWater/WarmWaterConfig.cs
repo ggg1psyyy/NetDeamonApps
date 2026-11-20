@@ -48,6 +48,13 @@ namespace NetDeamon.apps.PVControl.WarmWater
     public int BoostTimeoutMinutes { get; set; } = 180;
     /// <summary>The heat pump's automatic starts this far below its setpoint (measured: 45 → 39.9 °C).</summary>
     public double AutomaticHysteresisK { get; set; } = 5;
+    /// <summary>
+    /// The heat pump starts a one-time heating only when the tank is at least this far below the one-time setpoint
+    /// (measured 2026-11-06…20: refused at 2.7 and 4.8 K, taken at 5.1–5.2 K and above; no parameter known on the heat
+    /// pump): planned runs rise at least this much, and a setpoint that isn't heating yet waits for the tank to cool.
+    /// 5.5 rather than 5: exactly 5 is on the wrong side of the measurements. 0 = starts at once.
+    /// </summary>
+    public double OneTimeHysteresisK { get; set; } = 5.5;
     /// <summary>Cost added per run start in the plan, so it prefers one longer run over several short ones.</summary>
     public float RunStartCostEur { get; set; } = 0.02f;
     /// <summary>

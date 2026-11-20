@@ -251,6 +251,7 @@ NetDeamon.apps.PVControl.PVConfig:
     ComfortTempDefault: 42
     ComfortMarginK: 1
     BoostTempDefault: 45
+    OneTimeHysteresisK: 5.5   # the heat pump starts a one-time heating only ≥ this far below its setpoint (measured: refused at 4.8 K, taken at 5.1 K)
     # Heat pump efficiency vs outside temperature (from LoadForecast.WeatherEntity): electrical
     # energy −3 % per K warmer (measured COP 3.9 → 6.3 over 15 K). 0 = off.
     EfficiencyChangePerK: 0.03
