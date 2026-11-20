@@ -57,12 +57,35 @@ public class WarmWaterControlTests : TestBase
   }
 
   [Fact]
-  public void Hysteresis_AnArmedBoost_StaysAndSaysWhenItStarts()
+  public void Hysteresis_ABoostAtTheMaximum_StaysArmedAndSaysWhenItStarts()
   {
-    var d = Decide(Input(temp: 44.3, switchOn: true, active: true, setpoint: 47, boost: true, boostSince: Now.AddMinutes(-30),
-      lastStart: Now.AddMinutes(-30)) with { BoostTemp = 47, RunSawHeating = false, StartHysteresisK = 5.5 });
+    // Tank 52 °C, boost 54 °C: tank + 5.5 K is over the 57 °C maximum — the setpoint can't make the heat pump start.
+    var d = Decide(Input(temp: 52, switchOn: true, active: true, setpoint: 57, boost: true, boostSince: Now.AddMinutes(-30),
+      lastStart: Now.AddMinutes(-30)) with { BoostTemp = 54, RunSawHeating = false, StartHysteresisK = 5.5, OwnStart = true });
     Assert.Equal(ControlCommand.None, d.Command);
-    Assert.Contains("Boost: waiting for the heat pump (starts at ≤ 41.5 °C)", d.Reason);
+    Assert.Contains("Boost: waiting for the heat pump (starts at ≤ 51.5 °C)", d.Reason);
+  }
+
+  [Theory]
+  [InlineData(44.3, 47, false, 49.8)]   // live 2026-11-20: 47 at 44.3 °C waited 2 h — tank + 5.5
+  [InlineData(38, 47, false, 47)]       // far enough below: the boost temperature
+  [InlineData(53, 54, false, 57)]       // capped at the maximum
+  [InlineData(44.3, 47, true, 47)]      // a running heating isn't raised further
+  public void BoostTarget_AtLeastTheTankPlusTheHysteresis_BeforeItRuns(double temp, double boost, bool heating, double expected) =>
+    Assert.Equal(expected, WarmWaterControl.BoostTarget(boost, temp, 5.5, 57, heating), 6);
+
+  [Fact]
+  public void Hysteresis_ABoostCloseToTheTank_StartsAtTankPlusTheHysteresis()
+  {
+    var start = Decide(Input(temp: 44.3, boost: true, boostSince: Now.AddMinutes(-1)) with { BoostTemp = 47, StartHysteresisK = 5.5 });
+    Assert.Equal((ControlCommand.Start, (double?)50), (start.Command, start.Target));   // 49.8, the heat pump's 0.5-K steps up
+    // armed at 47 before (an older version, or the boost raised later): raised so it starts
+    var armed = Decide(Input(temp: 44.3, switchOn: true, active: true, setpoint: 47, boost: true, boostSince: Now.AddMinutes(-10),
+      lastStart: Now.AddMinutes(-10)) with { BoostTemp = 47, RunSawHeating = false, StartHysteresisK = 5.5, OwnStart = true });
+    Assert.Equal((ControlCommand.SetSetpoint, (double?)50), (armed.Command, armed.Target));
+    // once it heats, the setpoint stays
+    Assert.Equal(ControlCommand.None, Decide(Input(temp: 45, switchOn: true, active: true, setpoint: 50, boost: true, boostSince: Now.AddMinutes(-10),
+      lastStart: Now.AddMinutes(-10)) with { BoostTemp = 47, RunSawHeating = true, StartHysteresisK = 5.5, OwnStart = true }).Command);
   }
 
   [Fact]

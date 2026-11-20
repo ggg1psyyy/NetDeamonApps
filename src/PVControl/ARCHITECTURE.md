@@ -715,6 +715,10 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   plan and the import-cap check) without the off-time; a start that is merely slow, one armed by hand and a boost stay
   armed. One start doesn't fit: 11-14 21:42 a setpoint 4.8 K up was refused and heating
   began at 23:00:01 at 4.3 K, the setpoint unchanged — probably the heat pump's own time program; open.
+  The boost then sets at least tank + 5.5 K (`WarmWaterControl.BoostTarget`, at most `MaxTemp`) before its heating
+  runs: the same morning a setpoint of 54 °C at 47.5 °C (6.5 K) heated within 7 minutes — it is the gap to the tank
+  that counts, not to the last run. The tank then gets a few K more than the boost asked for; waiting hours for the
+  boost was the worse choice.
   Each state keeps its path's exact temperature, so bucket rounding never accumulates. A run that
   can't be stopped is first heated to its target (`ForcedTarget`, see below). Heating early only wins
   when the price difference beats the extra standby loss at the higher temperature.

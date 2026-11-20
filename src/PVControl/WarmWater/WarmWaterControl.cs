@@ -136,7 +136,8 @@ public static class WarmWaterControl
 
     // What the heating should reach now: the boost, or the planned run (Auto).
     var run = c.Mode == WarmWaterMode.Auto ? c.Runs.FirstOrDefault(r => r.Start <= c.Now && r.End > c.Now) : default;
-    double? target = boosting ? SetpointFor(c.BoostTemp, c.MaxTemp)
+    bool heats = c.SwitchOn && c.OneTimeActive && c.RunSawHeating;
+    double? target = boosting ? SetpointFor(BoostTarget(c.BoostTemp, c.Temp, c.StartHysteresisK, c.MaxTemp, heats), c.MaxTemp)
       : run != default ? SetpointFor(run.TargetTemp, c.MaxTemp)
       : null;
     string who = boosting ? "Boost" : "Plan";
@@ -152,8 +153,8 @@ public static class WarmWaterControl
       // Armed but not heating: the heat pump took the switch ("active") but waits — the tank isn't the hysteresis below
       // the setpoint (live 2026-11-20: active from 08:43, heating from 10:50). PVControl's own start that isn't heating
       // after the acknowledge time is switched off (no compressor start lost; it would otherwise start whenever the tank
-      // cools, outside the plan and the import-cap check); a boost stays armed and says when it will start; one armed by
-      // hand or at the heat pump is left alone.
+      // cools, outside the plan and the import-cap check); a boost that can't start (tank + hysteresis over the maximum,
+      // BoostTarget) stays armed and says when it will start; one armed by hand or at the heat pump is left alone.
       // Only where the hysteresis explains the wait (tank above setpoint − hysteresis); below it a start that is merely
       // slow (after a standstill, a defrost) stays armed — the heat pump will take it.
       if (!c.RunSawHeating && c.StartHysteresisK > 0 && c.Setpoint is { } armed && c.Temp > armed - c.StartHysteresisK)
@@ -230,6 +231,21 @@ public static class WarmWaterControl
       }
     return windows.OrderBy(w => w.Start).ToList();
   }
+
+  /// <summary>
+  /// The boost's setpoint: the boost temperature, or — before the heating runs — at least the tank plus the start
+  /// hysteresis, so the heat pump starts at once (live 2026-11-20: at 47.5 °C a setpoint of 54 °C heated within 7 min,
+  /// 47 °C at 44.3 °C two hours later); at most the maximum (above it the boost waits armed). A running heating isn't
+  /// raised further.
+  /// </summary>
+  /// <param name="boostTemp">Boost temperature, °C.</param>
+  /// <param name="temp">Tank temperature, °C.</param>
+  /// <param name="hysteresisK">Start hysteresis, K.</param>
+  /// <param name="maxTemp">Highest setpoint, °C.</param>
+  /// <param name="heating">The boost's heating already runs.</param>
+  /// <returns>°C.</returns>
+  public static double BoostTarget(double boostTemp, double temp, double hysteresisK, double maxTemp, bool heating) =>
+    heating ? boostTemp : Math.Min(maxTemp, Math.Max(boostTemp, temp + hysteresisK));
 
   /// <summary>Heat pump setpoint for a target: rounded up to its 0.5 K steps, at most the maximum.</summary>
   /// <param name="target">Planned temperature, °C.</param>

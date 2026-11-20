@@ -175,7 +175,9 @@ public sealed class WarmWaterController
     // first: the boost, the one-time setpoint, or the heat pump's automatic setpoint.
     bool oneTime = IsOn(Config.OneTimeActiveEntity);
     double? forced = null;
-    if (BoostOn && temp < BoostTemp) forced = Math.Max(BoostTemp, oneTime && OneTimeSetpoint is { } s ? s : 0);
+    if (BoostOn && temp < BoostTemp)
+      forced = Math.Max(WarmWaterControl.BoostTarget(BoostTemp, temp, Config.OneTimeHysteresisK, Config.MaxTemp, Heating || _runSawHeating),
+        oneTime && OneTimeSetpoint is { } s ? s : 0);
     else if (oneTime && OneTimeSetpoint is { } oneTimeSetpoint) forced = oneTimeSetpoint;
     else if (Heating && !oneTime && AutomaticSetpoint is { } auto) forced = auto;
 
@@ -460,7 +462,8 @@ public sealed class WarmWaterController
   {
     var current = Plan.Runs.FirstOrDefault(r => TimeRange.Contains(r.Start, r.End, now));
     var next = Plan.Runs.FirstOrDefault(r => r.Start > now);
-    string state = BoostOn ? $"boost to {BoostTemp:F1} °C"
+    // A boost sets at least tank + hysteresis before its heating runs (WarmWaterControl.BoostTarget): show that setpoint.
+    string state = BoostOn ? $"boost to {BoostTemp:F1} °C" + (IsOn(Config.OneTimeActiveEntity) && OneTimeSetpoint is { } sp && sp > BoostTemp + 0.25 ? $" (setpoint {sp:F1} °C)" : "")
       : current != default ? $"heating to {current.TargetTemp:F1} °C"
       : next != default ? $"{next.Start:HH:mm} → {next.TargetTemp:F1} °C"
       : "no heating planned";

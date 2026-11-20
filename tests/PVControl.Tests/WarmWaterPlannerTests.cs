@@ -140,6 +140,9 @@ public class WarmWaterPlannerTests : TestBase
     Assert.True(run.Start > Start, $"starts {run.Start:HH:mm}");
     Assert.True(run.StartTemp <= 47 - H + 0.05, $"at {run.StartTemp:F1} °C");
     Assert.True(run.TargetTemp >= 47 - WarmWaterPlanner.Resolution);
+    // the boost's setpoint (tank + hysteresis, WarmWaterControl.BoostTarget) is exactly what the plan doesn't wait for
+    var boost = WarmWaterControl.BoostTarget(47, 44.3, H, 57, false);
+    Assert.Equal(Start, WarmWaterPlanner.Plan(Request(44.3, _ => 0.30f, [], forced: boost) with { StartHysteresisK = H }).Runs.First().Start);
     // a heating that already runs doesn't wait
     var running = WarmWaterPlanner.Plan(Request(44.3, _ => 0.30f, [], forced: 47) with { StartHysteresisK = H, HeatingNow = true });
     Assert.Equal(Start, running.Runs.First().Start);
