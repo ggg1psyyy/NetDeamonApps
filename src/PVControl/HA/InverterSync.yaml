@@ -6,7 +6,7 @@ description: |-
   - applied: input_number.pv_control_applied_seq (script.pv_control_apply_mode)
   - actual: binary_sensor.pv_control_inverter_in_sync (the one definition of the expected state)
 
-  Applies when PV Control published a new version and when the inverter left the commanded state, and refreshes the mode-8 run time (and the feedin_priority loop's autorepeat) before it ends: both run 1200 s, refreshed after 600 s.
+  Applies when PV Control published a new version and when the inverter left the commanded state, and refreshes the mode-8 run time (and a mode-8 loop's autorepeat: feedin_priority, grid_only) before it ends: both run 1200 s, refreshed after 600 s.
   Not while PV Control is down (its last cycle older than 2 min): then the mode-8 run time lapses and the inverter returns to its base work mode by itself. Manual Mode (bulk charge) has no run time, so after 5 min without PV Control the inverter is put back to Self Use here.
   More than 5 re-applies of the same version: stop, flag, notify (PV Control health → error).
 mode: queued
@@ -47,13 +47,13 @@ variables:
   charge_enabled: "{{ state_attr('sensor.pv_control_mode', 'charge_enabled') != false }}"
   export_allowed: "{{ state_attr('sensor.pv_control_mode', 'export_allowed') != false }}"
   applied_seq: "{{ states('input_number.pv_control_applied_seq') | int(-1) }}"
-  vpp: "{{ not (mode == 'force_charge' and bulk) and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
+  vpp: "{{ not (mode == 'force_charge' and bulk) and (mode in ['force_charge', 'force_charge_grid_only', 'force_discharge'] or (mode == 'grid_only' and not export_allowed)) }}"
   applied_age_s: >-
     {% set at = states('input_datetime.pv_control_applied_at') %}
     {{ (now() - as_datetime(at) | as_local).total_seconds() | int if at not in ['unknown', 'unavailable', ''] else 999999 }}
   new_version: "{{ command_ok and seq != applied_seq }}"
   fell_back: "{{ command_ok and seq == applied_seq and is_state('binary_sensor.pv_control_inverter_in_sync', 'off') }}"
-  loop: "{{ mode in ['normal', 'feedin_priority'] and (mode == 'feedin_priority' or not charge_enabled or not export_allowed) }}"
+  loop: "{{ (mode == 'grid_only' and export_allowed) or (mode in ['normal', 'feedin_priority'] and (mode == 'feedin_priority' or not charge_enabled or not export_allowed)) }}"
   refresh_due: "{{ command_ok and seq == applied_seq and (vpp or loop) and not fell_back and applied_age_s > 600 }}"
 actions:
   - choose:

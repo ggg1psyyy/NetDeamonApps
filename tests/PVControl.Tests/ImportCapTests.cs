@@ -484,6 +484,30 @@ public class HaFilesTests
   }
 
   [Fact]
+  public void TheModeMapping_IsTheSameInTheScriptTheSyncAndTheInSyncSensor()
+  {
+    // Which mode runs as VPP and which as a mode-8 loop is written three times (the script applies it, the sync
+    // refreshes it, the in-sync sensor checks it); a mode changed in one only flips the sync (live 2026-11-20: grid_only
+    // moved from VPP push 0 — PV curtailed to the house load — to the loop "Enabled No Discharge").
+    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA")))
+      dir = dir.Parent;
+    Assert.NotNull(dir);
+    string Read(string f) => System.IO.File.ReadAllText(System.IO.Path.Combine(dir!.FullName, "src", "PVControl", "HA", f));
+    var (apply, helpers, sync) = (Read("ApplyMode.yaml"), Read("InverterHelpers.yaml"), Read("InverterSync.yaml"));
+    const string vppModes = "(mode in ['force_charge', 'force_charge_grid_only', 'force_discharge'] or (mode == 'grid_only' and not export_allowed))";
+    Assert.All(new[] { apply, helpers, sync }, f => Assert.Contains(vppModes, f));
+    const string loop = "'Enabled No Discharge' if mode == 'grid_only' and export_allowed else ('Negative Injection Price' if not export_allowed else 'Enabled Feedin Priority' if mode == 'feedin_priority' or not charge_enabled else 'Disabled') if mode in ['normal', 'feedin_priority'] else 'Disabled'";
+    Assert.Contains(loop, apply);
+    Assert.Contains(loop, helpers);
+    Assert.Contains("(mode == 'grid_only' and export_allowed) or (mode in ['normal', 'feedin_priority']", sync);
+    // export_allowed is defined before the line that uses it (HA evaluates the variables in order)
+    Assert.True(apply.IndexOf("      export_allowed:", StringComparison.Ordinal) < apply.IndexOf(vppModes, StringComparison.Ordinal));
+    Assert.True(helpers.IndexOf("{% set export_allowed", StringComparison.Ordinal) < helpers.IndexOf(vppModes, StringComparison.Ordinal));
+    Assert.True(sync.IndexOf("  export_allowed:", StringComparison.Ordinal) < sync.IndexOf(vppModes, StringComparison.Ordinal));
+  }
+
+  [Fact]
   public void NoHaFile_ReadsAPriceSensorAsZeroWhenUnknown()
   {
     // A PVControl price sensor is unknown when there is no valid price (PVControlCommon.UnknownState); `| float(0)`

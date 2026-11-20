@@ -5,7 +5,8 @@ description: |-
   SolaX X3-Hybrid G4 (DSP 1.50 / ARM 1.47):
   - VPP mode 8 ("Individual Setting – Duration Mode", registers 0xA0–0xA7) through the integration's *_direct entities: the numbers are only stored locally, selecting the mode on select.solax_remote_control_power_control_mode_direct writes the whole block (RAM, no EEPROM). VPP charges the battery with at most ~5 kW (20–21 A) on this firmware — measured 2026-10-26 in modes 8 and 4, and in every negative-price charge since spring.
   - Bulk grid charges (PV Control's `bulk`) therefore run as Manual Mode + Force Charge at the battery charge current (number.solax_battery_charge_max_current): 30 A, or the import cap's limit in whole amps — set first (the limit applies from the first second), then VPP off, then Manual Mode + Force Charge; back to the maximum (0 A with charging disabled) once Manual Mode is left, so the full current never runs as a force charge. Work mode and charge current are EEPROM, so they're only written when they change.
-  - normal/feedin_priority with a flag off run as one of the solax-modbus integration's mode-8 loops (select.solax_remotecontrol_power_control_mode + button.solax_powercontrolmode8_trigger, autorepeat; every fast poll the integration recomputes and writes the mode-8 block — RAM, no EEPROM; when the autorepeat ends it switches mode 8 off itself, back to Self Use):
+  - grid_only and normal/feedin_priority with a flag off run as one of the solax-modbus integration's mode-8 loops (select.solax_remotecontrol_power_control_mode + button.solax_powercontrolmode8_trigger, autorepeat; every fast poll the integration recomputes and writes the mode-8 block — RAM, no EEPROM; when the autorepeat ends it switches mode 8 off itself, back to Self Use):
+    - grid_only (export allowed) → "Enabled No Discharge": the battery never discharges (a deficit comes from the grid); a PV surplus charges it (charge share 100 %, 0 % with charging off), the rest is exported. As VPP with a fixed push of 0 W the inverter curtailed PV to the house load instead (live 2026-11-20: PV = load to the watt, the battery idle at the floor). grid_only with export not allowed stays VPP push 0 (curtailing is wanted then).
     - feedin_priority, or normal with charging off → "Enabled Feedin Priority": battery 0 W while PV covers the house, else the deficit (down to the loop's minimum SoC); the surplus is exported.
     - export not allowed → "Negative Injection Price": PV feeds the house and charges the battery (target SoC 100 %; charge share 100 % of the BMS charge power, 0 % with charging off or feedin_priority: then PV only covers the house and the rest is curtailed), the PV limit is lowered so nothing is exported; a deficit comes from the battery.
     - Loop minimum SoC = PV Control's hard floor (the larger of this and selfuse_discharge_min_soc applies); import shaving (battery discharge) only above PV Control's import cap.
@@ -39,10 +40,10 @@ fields:
 sequence:
   - variables:
       manual: "{{ mode == 'force_charge' and (bulk | default(false)) | bool }}"
-      vpp: "{{ not manual and mode in ['force_charge', 'force_charge_grid_only', 'grid_only', 'force_discharge'] }}"
       charge_enabled: "{{ charge_enabled | default(true) | bool }}"
       export_allowed: "{{ export_allowed | default(true) | bool }}"
-      loop: "{{ ('Negative Injection Price' if not export_allowed else 'Enabled Feedin Priority' if mode == 'feedin_priority' or not charge_enabled else 'Disabled') if mode in ['normal', 'feedin_priority'] else 'Disabled' }}"
+      vpp: "{{ not manual and (mode in ['force_charge', 'force_charge_grid_only', 'force_discharge'] or (mode == 'grid_only' and not export_allowed)) }}"
+      loop: "{{ 'Enabled No Discharge' if mode == 'grid_only' and export_allowed else ('Negative Injection Price' if not export_allowed else 'Enabled Feedin Priority' if mode == 'feedin_priority' or not charge_enabled else 'Disabled') if mode in ['normal', 'feedin_priority'] else 'Disabled' }}"
       base: "{{ 'Manual Mode' if manual else 'Self Use Mode' }}"
       push_w: "{{ -((power_w | int(0) / 100) | int * 100) }}"
       pv_limit_w: "{{ 0 if mode == 'force_charge_grid_only' else 30000 }}"
@@ -146,7 +147,7 @@ sequence:
             target:
               entity_id: number.solax_inverter_export_first_battery_charge_limit_mode_8_9
             data:
-              value: "{{ 100 if charge_enabled and mode == 'normal' else 0 }}"
+              value: "{{ 100 if charge_enabled and mode in ['normal', 'grid_only'] else 0 }}"
           - action: number.set_value
             target:
               entity_id: number.solax_remotecontrol_autorepeat_duration
