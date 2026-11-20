@@ -30,8 +30,16 @@ namespace NetDeamon.apps.PVControl
     private readonly RunningIntAverage _houseLoadAverage = new(TimeSpan.FromMinutes(1));
     public Prediction Prediction_Load
     { get; private set; }
+    /// <summary>The PV forecast the planners use (<see cref="SteeredPvPrediction"/>: the steering forecast where there is
+    /// one, else <see cref="Prediction_PVRaw"/>).</summary>
     public Prediction Prediction_PV
     { get; private set; }
+    /// <summary>The raw Open-Meteo forecast (the entities): what the steered one falls back to, and the PV forecast
+    /// shadow's Open-Meteo source — it must never see the steered values (it would score another source as its own).</summary>
+    public Prediction Prediction_PVRaw
+    { get; private set; }
+    /// <summary>The PV forecast's steering forecast (<see cref="PvForecast.PvForecastShadow.Steering"/>); null: none.</summary>
+    public Func<PvForecast.SteeringForecast?> PvSteering { get; set; } = () => null;
     public Prediction Prediction_NetEnergy
     { get; private set; }
     public Prediction Prediction_BatterySoC
@@ -89,7 +97,8 @@ namespace NetDeamon.apps.PVControl
 
       if (PVCC_Config.ForecastPVEnergyTodayEntities is null || PVCC_Config.ForecastPVEnergyTomorrowEntities is null)
         throw new NullReferenceException("PV Forecast entities are not available");
-      Prediction_PV = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
+      Prediction_PVRaw = new OpenMeteoSolarForecastPrediction(PVCC_Config.ForecastPVEnergyTodayEntities, PVCC_Config.ForecastPVEnergyTomorrowEntities);
+      Prediction_PV = new SteeredPvPrediction(Prediction_PVRaw, () => PvSteering());
 
       Prediction_NetEnergy = new NetEnergyPrediction(Prediction_PV, Prediction_Load, _loadRunningAverage, _pvRunningAverage, true, ActualPVEnergyTodayWh);
 

@@ -18,12 +18,15 @@ namespace NetDeamon.apps.PVControl.PvForecast
     Off,
     /// <summary>Computed, logged and published (sensor.pv_control_pv_forecast); the planners keep the raw forecast.</summary>
     Shadow,
+    /// <summary>As <see cref="Shadow"/>, and the planners use the first usable source's corrected forecast
+    /// (<see cref="PvSteering"/>; none usable: the raw Open-Meteo forecast).</summary>
+    Steer,
   }
 
   /// <summary>YAML (<c>PvForecast:</c>): the sources compared, the evening snapshot, the learned correction.</summary>
   public sealed class PvForecastConfig
   {
-    /// <summary>Off or Shadow.</summary>
+    /// <summary>Off, Shadow or Steer.</summary>
     public PvForecastMode Mode { get; set; } = PvForecastMode.Shadow;
     /// <summary>The log (relative: in this plugin's folder).</summary>
     public string DBLocation { get; set; } = "pv_forecast.db";
@@ -37,7 +40,10 @@ namespace NetDeamon.apps.PVControl.PvForecast
     public double TemperatureSlopePerK { get; set; } = 0.035;
     /// <summary>Percentile of the scored ratios for the cautious value (sources without their own band).</summary>
     public double CautiousPercentile { get; set; } = 0.25;
-    /// <summary>The forecast sources, compared side by side; the first is the one the sensor's state shows.</summary>
+    /// <summary>Steer: a source whose last fetch is older than this doesn't steer (the next one in the list does), hours.</summary>
+    public double SteerMaxAgeHours { get; set; } = 6;
+    /// <summary>The forecast sources, compared side by side; the first is the one the sensor's state shows (and steers
+    /// under <see cref="PvForecastMode.Steer"/>, the others in their order when it can't).</summary>
     public List<PvForecastSourceConfig> Sources { get; set; } = [];
   }
 

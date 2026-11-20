@@ -286,7 +286,7 @@ subtracted from the house load (`avg_house_load_now` down to −1.2 kW) until th
 
 ---
 
-### PV forecast correction (`PvForecast/`, shadow)
+### PV forecast correction (`PvForecast/`, shadow; steering)
 
 **Why — the forecast was 2× too high every day of 2026-11-01…09** (Open-Meteo, noted the evening before: 6.0–14.0
 kWh, actual 2.1–11.2; the forecast at 06:00 was no better). Scribe's TimescaleDB holds the forecast entities since
@@ -324,6 +324,19 @@ decision which source (or mix) the planners use — and the cautious value for t
 No HA integration exposes the ensemble's percentiles; the source calls the data hub itself (240 requests/h allowed,
 it needs ~16 a day). A value is taken as the mean of the hour ending at its timestamp (consistent with its sunshine
 parameter; unconfirmed) — the daily totals don't depend on it.
+
+**Steering by GeoSphere (2026-11-20).** The first 9 days both sources were noted the evening before (11-11…19, fog and
+inversion days): daily MAE GeoSphere 1.23 kWh (bias +0.95), Open-Meteo raw 2.25 (what the planners used), Open-Meteo
+corrected 1.85; hourly 07–17 h 168 vs 276 Wh; GeoSphere closer on 7 of 9 days. Its ensemble band held the actual on
+4 of 9 days only (11-14: 10.18–10.34 kWh, actual 8.8) — too narrow for the DP's cautious value yet, unused. The hour
+alignment (a value = the hour ending at its timestamp) is confirmed: shifted by ±1 h the hourly MAE rises from 141 to
+231/264 Wh. So `Mode: Steer`, GeoSphere first, corrected (its factor removes the overestimate and follows the season).
+Two things the shadow didn't need: a GeoSphere run starts at its own time — the 06Z run read at 13:12 had today at
+2.98 kWh, the hours before gone — so a source's runs are merged (a new run wins, the older hours stay; after a restart
+the next source fills them, corrected — the day ratio divides today's PV by the forecast since midnight, a hole there
+would skew the rest of the day); and its fetches fail now and then (timeouts, 503: ~5 in two days), so a stale source
+(6 h, two missed runs) hands over to the next one. The shadow's Open-Meteo source must keep reading the raw entities,
+or it would score GeoSphere's numbers as its own and the fallback would learn from them.
 
 **Exchangeable sources:** `IPvForecastSource` (forecast in Wh per slot, optionally a band) and
 `IPvObservationSource` (measured days); every source gets the same dimensionless correction (actual ÷ its Wh), so

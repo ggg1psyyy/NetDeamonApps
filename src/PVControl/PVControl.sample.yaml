@@ -265,11 +265,13 @@ NetDeamon.apps.PVControl.PVConfig:
   # noted at SnapshotHour, scored against the measured day (DataLogger) and corrected by the median actual ÷ forecast
   # of the last WindowDays scored days, shifted by TemperatureSlopePerK per K the day is forecast warmer than those
   # days were (fog/inversion days are cold; 0.035 fitted on measured temperatures 2024-09…2025-08). Cautious value:
-  # the source's band (GeoSphere's ensemble p10) corrected, else the CautiousPercentile of the ratios. Published only —
-  # the planners keep the raw Open-Meteo forecast. Sources (Type): OpenMeteoEntities (ForecastPVEnergy…Entities above),
-  # GeoSphere (the data hub's 1-km forecast and ensemble at zone.home; KwhPerKwhM2: PV per global radiation;
-  # ValleyStation/HillStations: klima station ids whose measured day is logged — sunshine on the hills above a
-  # fogged valley is the inversion signal). The first source is the sensor's state.
+  # the source's band (GeoSphere's ensemble p10) corrected, else the CautiousPercentile of the ratios. Mode: Shadow
+  # publishes only (the planners keep the raw Open-Meteo forecast); Steer: the planners use the first source's
+  # corrected forecast — the next one in the list (corrected too) while it is older than SteerMaxAgeHours, hasn't
+  # learned a correction or doesn't cover tomorrow; none usable: raw Open-Meteo. Sources (Type): OpenMeteoEntities
+  # (ForecastPVEnergy…Entities above), GeoSphere (Austria only: the data hub's 1-km forecast and ensemble at zone.home;
+  # KwhPerKwhM2: PV per global radiation; ValleyStation/HillStations: klima station ids whose measured day is logged —
+  # sunshine on the hills above a fogged valley is the inversion signal). The first source is the sensor's state.
   PvForecast:
     Mode: Shadow
     DBLocation: "pv_forecast.db"
@@ -278,6 +280,7 @@ NetDeamon.apps.PVControl.PVConfig:
     MinScoredDays: 7
     TemperatureSlopePerK: 0.035
     CautiousPercentile: 0.25
+    SteerMaxAgeHours: 6
     Sources:
       - Type: OpenMeteoEntities
         Name: OpenMeteo

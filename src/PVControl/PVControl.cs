@@ -685,7 +685,7 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Creates the PV forecast shadow from <c>PvForecast:</c> (none when off or without a source).</summary>
     private void CreatePvForecast()
     {
-      if (PVCC_Config.PvForecast is not { Mode: PvForecast.PvForecastMode.Shadow } config) return;
+      if (PVCC_Config.PvForecast is not { Mode: PvForecast.PvForecastMode.Shadow or PvForecast.PvForecastMode.Steer } config) return;
       try
       {
         (double, double)? home = null;
@@ -700,6 +700,8 @@ namespace NetDeamon.apps.PVControl
         _pvForecast = new PvForecast.PvForecastShadow(config, sources, log,
           day => PvForecast.PvActual.FromDataLogger(dataLogger, day),
           day => _house.Weather is { } w ? LoadModel.WeatherForecast.MeanTemperature(w.Hours, day.Date.AddHours(9), day.Date.AddHours(15)) : null);
+        var shadow = _pvForecast;
+        _house.PvSteering = () => shadow.Steering;
       }
       catch (Exception ex)
       {
@@ -709,18 +711,21 @@ namespace NetDeamon.apps.PVControl
 
     /// <summary>Starts a run of the PV forecast shadow in the background (the cycle doesn't wait for the sources' HTTP calls).</summary>
     /// <param name="now">Current time.</param>
-    private void StartPvForecast(DateTime now)
+    /// <returns>The run; null if none was started (not due, or one is running).</returns>
+    private Task? StartPvForecast(DateTime now)
     {
       if (_pvForecast is not { } shadow || now - _pvForecastStarted < TimeSpan.FromMinutes(PvForecastEveryMinutes)
           || Interlocked.CompareExchange(ref _pvForecastRunning, 1, 0) != 0)
-        return;
+        return null;
       _pvForecastStarted = now;
-      _pvForecastInput = new Dictionary<DateTime, int>(_house.Prediction_PV.TodayAndTomorrow);
-      _ = Task.Run(async () =>
+      // The raw forecast, never the steered one: the Open-Meteo source scores what Open-Meteo said.
+      _pvForecastInput = new Dictionary<DateTime, int>(_house.Prediction_PVRaw.TodayAndTomorrow);
+      return Task.Run(async () =>
       {
         try
         {
           await shadow.RunAsync(now, CancellationToken.None);
+          LogPvSteering(shadow.Steering);
           await PublishPvForecastAsync(shadow);
         }
         catch (Exception ex)
@@ -734,6 +739,38 @@ namespace NetDeamon.apps.PVControl
       });
     }
 
+    private string? _pvSteeringLogged;
+
+    /// <summary>One log line when the source that steers the planners' PV changes (or none can).</summary>
+    /// <param name="s">The steering forecast after a run.</param>
+    private void LogPvSteering(PvForecast.SteeringForecast? s)
+    {
+      if (PVCC_Config.PvForecast?.Mode != PvForecast.PvForecastMode.Steer) return;
+      string now = s is null ? "none (raw Open-Meteo)" : s.Fallback ? $"{s.Source} ({s.Reason})" : s.Source;
+      if (now == _pvSteeringLogged) return;
+      _pvSteeringLogged = now;
+      PVCC_Logger.LogInformation("PV forecast steering: {Source}", now);
+    }
+
+    /// <summary>Under <see cref="PvForecast.PvForecastMode.Steer"/> the first cycle after a start waits (once, at most
+    /// <see cref="FirstPvSteeringWait"/>) for the shadow's first run, so the first plans use the steering forecast — not
+    /// one minute of raw Open-Meteo (~1.5× too high in November) and a replan when it arrives.</summary>
+    /// <param name="now">Current time.</param>
+    private async Task WaitForFirstPvSteeringAsync(DateTime now)
+    {
+      if (_waitedForFirstPvSteering || PVCC_Config.PvForecast?.Mode != PvForecast.PvForecastMode.Steer || _pvForecast is null) return;
+      _waitedForFirstPvSteering = true;
+      _house.Prediction_PVRaw.UpdateData(now);   // the Open-Meteo source reads it
+      if (StartPvForecast(now) is not { } run) return;
+      var sw = System.Diagnostics.Stopwatch.StartNew();
+      bool done = await Task.WhenAny(run, Task.Delay(FirstPvSteeringWait)) == run;
+      PVCC_Logger.LogInformation("First PV forecast after start: {Result} after {Ms} ms",
+        done && _pvForecast.Steering is { } st ? $"steered by {st.Source}" : "not ready, raw Open-Meteo meanwhile", sw.ElapsedMilliseconds);
+    }
+    private bool _waitedForFirstPvSteering;
+    /// <summary>How long the first cycle waits for the PV forecast's first run (a source's HTTP timeout is 60 s).</summary>
+    private static readonly TimeSpan FirstPvSteeringWait = TimeSpan.FromSeconds(75);
+
     /// <summary>Publishes sensor.pv_control_pv_forecast: the main source's corrected forecast for tomorrow; every source raw,
     /// corrected and cautious; the recent scored days; the newest measured day.</summary>
     /// <param name="shadow">The shadow after its run.</param>
@@ -745,8 +782,11 @@ namespace NetDeamon.apps.PVControl
         main.TomorrowCorrected is { } t ? t.ToString(CultureInfo.InvariantCulture) : "unknown");
       await PVCC_EntityManager.SetAttributesAsync(_pvForecastEntity.EntityId, new
       {
-        used_by_pvcontrol = false,
+        used_by_pvcontrol = shadow.Steering is not null,
         main_source = main.Source,
+        steering_source = shadow.Steering?.Source,
+        steering_run = shadow.Steering?.Run,
+        steering_fallback = shadow.Steering?.Reason,
         sources = shadow.Last.Select(r => new
         {
           source = r.Source,
@@ -1207,6 +1247,8 @@ namespace NetDeamon.apps.PVControl
       issues.AddRange(HealthChecks.Forecasts(_house.Prediction_Load.DataOK, _house.Prediction_PV.DataOK,
         PVCC_Config.ForecastPVEnergyTodayEntities.Concat(PVCC_Config.ForecastPVEnergyTomorrowEntities)
           .Where(e => !e.TryGetStateValue(out float _)).Select(e => e.EntityId).ToList()));
+      issues.AddRange(HealthChecks.PvSteering(PVCC_Config.PvForecast?.Mode == PvForecast.PvForecastMode.Steer,
+        _pvForecast?.Last.Count > 0, _pvForecast?.Steering));
 
       issues.AddRange(HealthChecks.Cycle(_cycleFailures, _lastCycleError));
       var sync = PVCC_Config.InverterSyncEntity;
@@ -1321,6 +1363,7 @@ namespace NetDeamon.apps.PVControl
       PVCC_Logger.LogTrace("Updating Predictions");
       // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
       _house.LoadMargin = LoadModel.NightForecastTracker.LoadMargin(_nightTracker.Nights) ?? PVCC_Config.LoadMarginPct / 100;
+      await WaitForFirstPvSteeringAsync(now);
       _house.UpdatePredictions();
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
@@ -1335,7 +1378,7 @@ namespace NetDeamon.apps.PVControl
       _house.RunningState = _steeredState;
       (_effectivePlanner, _dpStale) = (effective, dpStale);
       await PublishLoadForecastAsync(now);
-      StartPvForecast(now);
+      _ = StartPvForecast(now);
       await ExpireTopUpAsync(now);
       await PublishPricePublicationAsync(now);
       // Every cycle, not only on a price entity's change: a renamed or dead source sends no event, and the held list

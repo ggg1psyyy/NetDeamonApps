@@ -27,8 +27,9 @@ namespace NetDeamon.apps.PVControl.PvForecast
   /// <summary>
   /// The PV forecast shadow: reads every configured source, notes each one's forecast for tomorrow once in the evening
   /// (<see cref="PvForecastConfig.SnapshotHour"/>), scores the ended days against the measured PV, logs weather services'
-  /// measured days, and corrects each source by what it learned (<see cref="PvForecastCorrection"/>). Published only —
-  /// the planners keep the raw forecast.
+  /// measured days, and corrects each source by what it learned (<see cref="PvForecastCorrection"/>). Published; under
+  /// <see cref="PvForecastMode.Steer"/> also the planners' forecast (<see cref="Steering"/>), else they keep the raw one.
+  /// A source's runs are merged (<see cref="PvSteering.Merge"/>): a run that starts during the day keeps the hours before.
   /// </summary>
   /// <param name="config">Configuration.</param>
   /// <param name="sources">The sources (the first is the main one).</param>
@@ -54,6 +55,11 @@ namespace NetDeamon.apps.PVControl.PvForecast
     /// <summary>The main source's backtest (day, forecast, corrected, actual — kWh), the newest last.</summary>
     public IReadOnlyList<(DateTime Day, double Forecast, double Corrected, double Actual)> Recent { get; private set; } = [];
 
+    /// <summary>Under <see cref="PvForecastMode.Steer"/> the forecast the planners use, rebuilt by every run (replaced in
+    /// one assignment: the cycle reads it while a run works); null in Shadow mode, before the first run, or when no
+    /// source can steer.</summary>
+    public SteeringForecast? Steering { get; private set; }
+
     /// <summary>The newest measured values of a weather service (day and values).</summary>
     public (DateTime Day, IReadOnlyDictionary<string, double> Values)? LastObservation { get; private set; }
 
@@ -72,7 +78,8 @@ namespace NetDeamon.apps.PVControl.PvForecast
     public async Task RunAsync(DateTime now, CancellationToken ct)
     {
       foreach (var s in sources)
-        if (await s.GetAsync(now, ct) is { } f) _latest[s.Name] = f;
+        if (await s.GetAsync(now, ct) is { } f)
+          _latest[s.Name] = PvSteering.Merge(_latest.GetValueOrDefault(s.Name), f, now.Date);
 
       if (InSnapshotHour(now, config.SnapshotHour))
         await SnapshotAsync(now);
@@ -117,17 +124,25 @@ namespace NetDeamon.apps.PVControl.PvForecast
     private async Task ReportAsync(DateTime now)
     {
       var reports = new List<SourceReport>();
+      var candidates = new List<PvSteering.Candidate>();
       foreach (var s in sources)
       {
         var history = await log.ScoredAsync(s.Name, now.Date.AddDays(-HistoryDays));
         _latest.TryGetValue(s.Name, out var f);
         var report = Report(s.Name, f, history, now, tempForecast, config);
         reports.Add(report);
+        // The factor of each day the window can hold until the next run: today, tomorrow and the day after (tomorrow
+        // after midnight).
+        var factors = Enumerable.Range(0, 3).Select(i => now.Date.AddDays(i))
+          .ToDictionary(d => d, d => PvForecastCorrection.For(history, d, tempForecast(d), config));
+        candidates.Add(new PvSteering.Candidate(s.Name, f,
+          d => factors.TryGetValue(d.Date, out var c) && c.Learned ? c.Factor : null));
         if (s == sources[0])
           Recent = PvForecastCorrection.Backtest(history, config).TakeLast(Math.Max(1, config.WindowDays))
             .Select(b => (b.Day, Kwh(b.Forecast), Kwh(b.Corrected), Kwh(b.Actual))).ToList();
       }
       Last = reports;
+      Steering = config.Mode == PvForecastMode.Steer ? PvSteering.Build(candidates, now, config) : null;
     }
 
     /// <summary>A source's report: today and tomorrow raw and corrected, the cautious value, the backtest's errors.</summary>

@@ -5,7 +5,7 @@ Every 15 seconds the app runs a forward simulation in 15-minute slots (now → e
 
 **How it works:**
 - Forecasts house load from historical SQLite data (weighted average)
-- Fetches PV forecast from OpenMeteo HA entities, corrected by today's actual PV (day ratio) and, for the next hour, by the live PV relative to what the forecast expected in the last 15 min (`tools/PVNearTermBacktest`)
+- Plans with the PV forecast of the first usable source (`PvForecast: Mode: Steer` — GeoSphere, else Open-Meteo, both with their learned correction; [PV forecast](#pv-forecast)), corrected by today's actual PV (day ratio) and, for the next hour, by the live PV relative to what the forecast expected in the last 15 min (`tools/PVNearTermBacktest`)
 - Runs a slot-by-slot simulation (`EnergySimulator`) to find when the battery will drop below the minimum SoC
 - If grid charging is needed, charges just enough to clear the coming trough, in the cheapest quarter-hour plus the cheapest quarters under the max force-charge price — so a larger need moves earlier into a cheap band instead of spilling into expensive slots after it
 - Optionally discharges to the grid opportunistically during high-price periods
@@ -88,7 +88,8 @@ The house load forecast is the hour-of-day average of the last days (recent days
 ## PV forecast
 
 `PvForecast:` in `PVControl.yaml` compares PV forecast sources and learns a correction for each of them. `Mode: Shadow`
-computes, logs and publishes it; the planners keep planning with the raw Open-Meteo forecast.
+computes, logs and publishes it, the planners keep the raw Open-Meteo forecast; `Mode: Steer` (live: GeoSphere first)
+also gives the planners the PV they plan with — see **Steering** below.
 
 - **Sources** (`Sources:`, by `Type`; each one a class behind `IPvForecastSource`, so a source can be added or removed
   in the YAML alone):
@@ -106,8 +107,19 @@ computes, logs and publishes it; the planners keep planning with the raw Open-Me
   otherwise none), shifted by `TemperatureSlopePerK` per K the day is forecast warmer than those days were. The
   cautious value is the source's band low end corrected, or the `CautiousPercentile` of the ratios for a source
   without a band.
-- **`sensor.pv_control_pv_forecast`**: state = the main (first) source's corrected forecast for tomorrow; `sources`
-  (per source: today and tomorrow raw and corrected, tomorrow cautious and high, factor, scored days, temperature
+- **Steering** (`Mode: Steer`): the planners' PV (`Prediction_PV`, today and tomorrow per quarter) is the first
+  usable source's forecast × its learned factor for the slot's day; hourly values are split evenly into their quarters.
+  A source is usable while its last fetch is at most `SteerMaxAgeHours` (6) old, it has learned a correction
+  (`MinScoredDays`) and it covers tomorrow's afternoon; otherwise the next source in the list steers (corrected too),
+  with none usable the raw Open-Meteo forecast. A source's runs are merged — a GeoSphere run starts at its own time,
+  the hours before it stay from the earlier runs; quarters the steering source doesn't have come from the next usable
+  source. The running-average correction (today's measured PV) applies on top as before. The first cycle after a start
+  waits for the first run (at most 75 s). Health: degraded while another source than the first steers or none can;
+  a change of the steering source is logged (`PV forecast steering: …`). The shadow's Open-Meteo source always reads
+  the raw entities (`Prediction_PVRaw`).
+- **`sensor.pv_control_pv_forecast`**: state = the main (first) source's corrected forecast for tomorrow;
+  `used_by_pvcontrol`, `steering_source`, `steering_run`, `steering_fallback` (why the first source doesn't steer); `sources`
+  (per source: today — the merged runs, the whole day — and tomorrow raw and corrected, tomorrow cautious and high, factor, scored days, temperature
   anomaly, the mean absolute error raw vs corrected over the backtest window), `recent` (the main source's scored
   days: forecast, corrected, actual), `measured_day`/`measured` (the newest measured day), `attribution`.
 

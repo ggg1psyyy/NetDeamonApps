@@ -1,5 +1,6 @@
 using System.Text.Json;
 using NetDeamon.apps;
+using NetDeamon.apps.PVControl;
 using NetDeamon.apps.PVControl.LoadModel;
 using NetDeamon.apps.PVControl.PvForecast;
 using Xunit;
@@ -258,5 +259,167 @@ public class PvForecastTests : TestBase
       Assert.Equal(8, shadow.Recent.Count);
     }
     finally { File.Delete(path); }
+  }
+
+  // ── Steering (Mode: Steer) ──────────────────────────────────────────
+
+  static readonly PvForecastConfig SteerConfig = new() { Mode = PvForecastMode.Steer };
+
+  /// <summary>An hourly forecast from <paramref name="from"/> to the end of the day after: 1000 Wh 08–16 h.</summary>
+  static SourceForecast Hourly(DateTime fetched, DateTime from, double wh = 1000, string run = "run") =>
+    new(fetched, run, Enumerable.Range(0, (int)(from.Date.AddDays(2) - from).TotalHours)
+      .Select(h => from.AddHours(h)).ToDictionary(t => t, t => t.Hour is >= 8 and < 16 ? wh : 0.0));
+
+  static PvSteering.Candidate Cand(string name, SourceForecast? f, double? factor = 0.5) => new(name, f, _ => factor);
+
+  [Fact]
+  public void Steering_Merge_ANewRunKeepsTheHoursBefore_NewWins_YesterdayDropped()
+  {
+    var day = new DateTime(2026, 11, 18);
+    var held = Hourly(day.AddDays(-1).AddHours(23), day.AddDays(-1).AddHours(20), 900, "18Z");
+    var fresh = Hourly(day.AddHours(13), day.AddHours(13), 1000, "06Z");   // GeoSphere: a run starts at its time
+    var m = PvSteering.Merge(held, fresh, day);
+    Assert.Equal(900, m.Wh[day.AddHours(10)]);     // the morning from the older run
+    Assert.Equal(1000, m.Wh[day.AddHours(14)]);    // the new run wins
+    Assert.DoesNotContain(m.Wh.Keys, t => t < day);
+    Assert.Equal("06Z", m.Run);
+    Assert.Same(fresh, PvSteering.Merge(null, fresh, day));
+  }
+
+  [Fact]
+  public void Steering_Quarters_HourlySplitEvenly_QuartersKept()
+  {
+    var t = new DateTime(2026, 11, 18, 10, 0, 0);
+    var q = PvSteering.Quarters(new Dictionary<DateTime, double> { [t] = 1000, [t.AddHours(1)] = 400 });
+    Assert.Equal(8, q.Count);
+    Assert.Equal(250, q[t.AddMinutes(45)]);
+    Assert.Equal(100, q[t.AddHours(1).AddMinutes(15)]);
+    var quarters = PvSteering.Quarters(new Dictionary<DateTime, double> { [t] = 100, [t.AddMinutes(15)] = 200 });
+    Assert.Equal((2, 100.0, 200.0), (quarters.Count, quarters[t], quarters[t.AddMinutes(15)]));
+  }
+
+  [Fact]
+  public void Steering_TheFirstUsableSourceCorrected_FallbackWhenStale_BackWhenFresh()
+  {
+    var now = new DateTime(2026, 11, 20, 10, 0, 0);
+    var gs = Hourly(now.AddHours(-1), now.Date);
+    var om = Hourly(now, now.Date, 2000);
+    var s = PvSteering.Build([Cand("GeoSphere", gs, 0.85), Cand("OpenMeteo", om, 0.66)], now, SteerConfig)!;
+    Assert.Equal(("GeoSphere", false, (string?)null), (s.Source, s.Fallback, s.Reason));
+    Assert.Equal(212, s.Wh[now.Date.AddDays(1).AddHours(9)]);   // 1000 / 4 × 0.85 = 212.5, to even
+    Assert.Equal(192, s.Wh.Count);                               // today 00:00 → the end of tomorrow
+
+    var stale = PvSteering.Build([Cand("GeoSphere", gs with { FetchedAt = now.AddHours(-7) }), Cand("OpenMeteo", om, 0.66)], now, SteerConfig)!;
+    Assert.Equal(("OpenMeteo", true), (stale.Source, stale.Fallback));
+    Assert.Contains("GeoSphere: last fetch", stale.Reason);
+    Assert.Equal(330, stale.Wh[now.Date.AddDays(1).AddHours(9)]);   // 2000 / 4 × 0.66 — corrected, never raw
+
+    Assert.Equal("GeoSphere", PvSteering.Build([Cand("GeoSphere", gs with { FetchedAt = now }), Cand("OpenMeteo", om)], now, SteerConfig)!.Source);
+  }
+
+  [Fact]
+  public void Steering_UnlearnedOrShort_TheNext_NoneUsable_Null()
+  {
+    var now = new DateTime(2026, 11, 20, 10, 0, 0);
+    var om = Hourly(now, now.Date, 2000);
+    var unlearned = PvSteering.Build([Cand("GeoSphere", Hourly(now, now.Date), null), Cand("OpenMeteo", om)], now, SteerConfig)!;
+    Assert.Equal("OpenMeteo", unlearned.Source);
+    Assert.Contains("no learned correction", unlearned.Reason);
+    var shortRun = Hourly(now, now.Date) with { Wh = Hourly(now, now.Date).Wh.Where(kv => kv.Key < now.Date.AddDays(1).AddHours(12)).ToDictionary() };
+    Assert.Contains("tomorrow not covered", PvSteering.Build([Cand("GeoSphere", shortRun), Cand("OpenMeteo", om)], now, SteerConfig)!.Reason);
+    Assert.Null(PvSteering.Build([Cand("GeoSphere", null), Cand("OpenMeteo", om, null)], now, SteerConfig));
+  }
+
+  [Fact]
+  public void Steering_ARunFromMidday_TheMorningFromTheNextSourceCorrected()
+  {
+    // After a restart GeoSphere's first run starts at its time: today's elapsed hours from the next source, corrected
+    // (the day ratio divides today's PV by the forecast since midnight — a hole there would skew the rest of the day).
+    var now = new DateTime(2026, 11, 20, 13, 30, 0);
+    var gs = Hourly(now, now.Date.AddHours(13));
+    var om = Hourly(now, now.Date, 2000);
+    var s = PvSteering.Build([Cand("GeoSphere", gs, 0.85), Cand("OpenMeteo", om, 0.66)], now, SteerConfig)!;
+    Assert.Equal("GeoSphere", s.Source);
+    Assert.Equal(330, s.Wh[now.Date.AddHours(10)]);   // OpenMeteo × 0.66
+    Assert.Equal(212, s.Wh[now.Date.AddHours(14)]);   // GeoSphere × 0.85
+  }
+
+  [Fact]
+  public void Steering_EachDayItsOwnFactor_AlsoAfterMidnight()
+  {
+    var now = new DateTime(2026, 11, 21, 0, 2, 0);
+    var gs = Hourly(now.AddHours(-1), now.Date);   // fetched before midnight, today and tomorrow covered
+    var factors = new Dictionary<DateTime, double> { [now.Date] = 0.8, [now.Date.AddDays(1)] = 0.6 };
+    var s = PvSteering.Build([new PvSteering.Candidate("GeoSphere", gs, d => factors.TryGetValue(d.Date, out var f) ? f : null)], now, SteerConfig)!;
+    Assert.Equal(200, s.Wh[now.Date.AddHours(9)]);
+    Assert.Equal(150, s.Wh[now.Date.AddDays(1).AddHours(9)]);
+  }
+
+  [Fact]
+  public void SteeredPrediction_Overlay_TheRawWindowKept_SteeredQuartersReplaced()
+  {
+    var day = new DateTime(2026, 11, 20);
+    var raw = Enumerable.Range(0, 192).ToDictionary(i => day.AddMinutes(15 * i), _ => 500);
+    var steer = new Dictionary<DateTime, int> { [day.AddHours(10)] = 120, [day.AddDays(3)] = 999 };
+    var o = NetDeamon.apps.PVControl.Predictions.SteeredPvPrediction.Overlay(raw, steer);
+    Assert.Equal(192, o.Count);
+    Assert.Equal((120, 500), (o[day.AddHours(10)], o[day.AddHours(11)]));
+    Assert.Equal(raw, NetDeamon.apps.PVControl.Predictions.SteeredPvPrediction.Overlay(raw, null));
+  }
+
+  sealed class FixedPrediction(int wh) : NetDeamon.apps.PVControl.Predictions.Prediction
+  {
+    protected override Dictionary<DateTime, int> PopulateData(DateTime now) =>
+      Enumerable.Range(0, 192).ToDictionary(i => now.Date.AddMinutes(15 * i), _ => wh);
+  }
+
+  [Fact]
+  public void SteeredPrediction_TheRawOneKeepsTheRawValues()
+  {
+    // The shadow's Open-Meteo source reads the raw prediction: steered values there would be scored as Open-Meteo's.
+    var raw = new FixedPrediction(500);
+    var now = new DateTime(2026, 11, 20, 10, 0, 0);
+    var steer = new SteeringForecast("GeoSphere", null, now, new Dictionary<DateTime, int> { [now] = 120 }, false, null);
+    var steered = new NetDeamon.apps.PVControl.Predictions.SteeredPvPrediction(raw, () => steer);
+    steered.UpdateData(now);
+    Assert.True(steered.DataOK);
+    Assert.Equal(120, steered.TodayAndTomorrow[now]);
+    Assert.Equal(500, raw.TodayAndTomorrow[now]);
+  }
+
+  [Fact]
+  public void Health_PvSteering_DegradedOnFallbackOrNone_NothingBeforeTheFirstRun()
+  {
+    var s = new SteeringForecast("OpenMeteo", null, DateTime.Now, new Dictionary<DateTime, int>(), true, "GeoSphere: last fetch 20.11 01:00");
+    Assert.Empty(HealthChecks.PvSteering(true, false, null));
+    Assert.Empty(HealthChecks.PvSteering(false, true, null));
+    Assert.Equal(HealthLevel.degraded, Assert.Single(HealthChecks.PvSteering(true, true, null)).Level);
+    Assert.Contains("GeoSphere: last fetch", Assert.Single(HealthChecks.PvSteering(true, true, s)).Message);
+    Assert.Empty(HealthChecks.PvSteering(true, true, s with { Fallback = false, Reason = null }));
+  }
+
+  [Fact]
+  public async Task Run_Steer_TheFirstSourceSteersOnceLearned_ShadowNever()
+  {
+    foreach (var mode in new[] { PvForecastMode.Shadow, PvForecastMode.Steer })
+    {
+      var path = TempDb();
+      try
+      {
+        var config = new PvForecastConfig { Mode = mode };
+        var gs = new FakeSource("GeoSphere", now => Flat(now, 800));
+        var om = new FakeSource("OpenMeteo", now => Flat(now, 1000));
+        var shadow = new PvForecastShadow(config, [gs, om], new PvForecastLog(path), _ => (4000, 5), _ => 5);
+        var start = new DateTime(2026, 10, 20, 21, 5, 0);
+        await shadow.RunAsync(start, CancellationToken.None);
+        Assert.Null(shadow.Steering);                     // nothing learned yet: no source can steer
+        for (int d = 1; d < 10; d++) await shadow.RunAsync(start.AddDays(d), CancellationToken.None);
+        if (mode == PvForecastMode.Shadow) { Assert.Null(shadow.Steering); continue; }
+        var s = shadow.Steering!;
+        Assert.Equal(("GeoSphere", false), (s.Source, s.Fallback));
+        Assert.Equal(125, s.Wh[start.Date.AddDays(10).AddHours(10)]);   // 800 / 4 × 0.625 (learned: 4000 / 6400)
+      }
+      finally { File.Delete(path); }
+    }
   }
 }

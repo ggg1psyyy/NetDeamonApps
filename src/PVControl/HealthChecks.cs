@@ -79,6 +79,20 @@ public static class HealthChecks
       yield return new HealthIssue("pv_forecast_source", HealthLevel.degraded, $"PV forecast source unavailable: {string.Join(", ", unavailableSources)}");
   }
 
+  /// <summary>The PV forecast's steering (<see cref="PvForecast.PvForecastMode.Steer"/>): degraded while another source than
+  /// the first steers, or none can (the raw Open-Meteo forecast then); nothing before the shadow's first run.</summary>
+  /// <param name="steer">Steer mode.</param>
+  /// <param name="ran">The shadow finished a run.</param>
+  /// <param name="steering">The steering forecast; null: none.</param>
+  public static IEnumerable<HealthIssue> PvSteering(bool steer, bool ran, PvForecast.SteeringForecast? steering)
+  {
+    if (!steer || !ran) yield break;
+    if (steering is null)
+      yield return new HealthIssue("pv_forecast_steering", HealthLevel.degraded, "PV forecast: no source can steer, raw Open-Meteo used");
+    else if (steering.Fallback)
+      yield return new HealthIssue("pv_forecast_steering", HealthLevel.degraded, $"PV forecast steered by {steering.Source} — {steering.Reason}");
+  }
+
   /// <summary>Failed 15-s cycles in a row: one = degraded, three or more = error.</summary>
   /// <param name="consecutiveFailures">Failures in a row.</param>
   /// <param name="lastError">Message of the last failure.</param>
