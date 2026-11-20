@@ -29,7 +29,7 @@ namespace NetDeamon.apps.PVControl.PvForecast
     private SourceForecast? _last;
     private DateTime? _lastSuccess, _lastAttempt;
     private bool _lastFailed;
-    private string? _lastError;
+    private string? _lastError, _bandError;
 
     /// <summary>Creates the source.</summary>
     /// <param name="name">Name.</param>
@@ -61,11 +61,12 @@ namespace NetDeamon.apps.PVControl.PvForecast
       _lastAttempt = now;
       try
       {
-        var nwp = await GetJsonAsync($"/timeseries/forecast/nwp-v2-1h-1km?parameters=ssrd&lat_lon={_latLon}", ct);
-        var ens = await GetJsonAsync($"/timeseries/forecast/ensemble-v2-1h-1km?parameters=ssrd_p10&parameters=ssrd_p90&lat_lon={_latLon}", ct);
-        _last = new SourceForecast(now, nwp.TryGetProperty("reference_time", out var rt) ? rt.GetString() : null,
-          Hourly(nwp, "ssrd", _config.KwhPerKwhM2), Hourly(ens, "ssrd_p10", _config.KwhPerKwhM2), Hourly(ens, "ssrd_p90", _config.KwhPerKwhM2));
+        var (forecast, bandError) = await FetchAsync(path => GetJsonAsync(path, ct), _latLon, _config.KwhPerKwhM2, now);
+        _last = forecast;
         (_lastSuccess, _lastFailed, _lastError) = (now, false, null);
+        if (bandError != _bandError && bandError is not null)
+          PVCC_Logger?.LogWarning("PV forecast {Name}: ensemble band unavailable ({Message}), the forecast without it", Name, bandError);
+        _bandError = bandError;
       }
       catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
       {
@@ -104,6 +105,36 @@ namespace NetDeamon.apps.PVControl.PvForecast
         PVCC_Logger?.LogWarning("PV forecast {Name}: measured day {Day:yyyy-MM-dd} not read ({Message})", Name, day, ex.Message);
       }
       return values;
+    }
+
+    /// <summary>
+    /// One fetch: the control run (the forecast) and the ensemble's band. The band is optional — the forecast counts
+    /// without it (live 2026-11-20: the ensemble dataset answered 503 "failure to get a peer from the ring-balancer"
+    /// for hours while the control run was served; fetched together, the working forecast was thrown away too and
+    /// GeoSphere couldn't steer).
+    /// </summary>
+    /// <param name="get">Reads a path of the data hub as JSON (throws on an HTTP error).</param>
+    /// <param name="latLon">The point, "lat,lon".</param>
+    /// <param name="kwhPerKwhM2">PV per global radiation.</param>
+    /// <param name="now">Time of the fetch.</param>
+    /// <returns>The forecast (its band null if the ensemble failed), and the ensemble's error; throws if the control run fails.</returns>
+    public static async Task<(SourceForecast Forecast, string? BandError)> FetchAsync(Func<string, Task<JsonElement>> get,
+      string latLon, double kwhPerKwhM2, DateTime now)
+    {
+      var nwp = await get($"/timeseries/forecast/nwp-v2-1h-1km?parameters=ssrd&lat_lon={latLon}");
+      IReadOnlyDictionary<DateTime, double>? low = null, high = null;
+      string? bandError = null;
+      try
+      {
+        var ens = await get($"/timeseries/forecast/ensemble-v2-1h-1km?parameters=ssrd_p10&parameters=ssrd_p90&lat_lon={latLon}");
+        (low, high) = (Hourly(ens, "ssrd_p10", kwhPerKwhM2), Hourly(ens, "ssrd_p90", kwhPerKwhM2));
+      }
+      catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+      {
+        bandError = ex.Message;
+      }
+      return (new SourceForecast(now, nwp.TryGetProperty("reference_time", out var rt) ? rt.GetString() : null,
+        Hourly(nwp, "ssrd", kwhPerKwhM2), low, high), bandError);
     }
 
     private static async Task<JsonElement> GetJsonAsync(string path, CancellationToken ct)

@@ -21,6 +21,10 @@ namespace NetDeamon.apps.PVControl
     private PVControlCommon() { }
     private static readonly PVControlCommon _instance = new();
     public static PVControlCommon PVCCInstance => _instance;
+    /// <summary>The MQTT state payload HA reads as "unknown" (<c>None</c>): a numeric sensor (a unit or a device class)
+    /// rejects the text "unknown" — HA logs a value error, keeps the last number and drops the attributes sent with it
+    /// (live 2026-11-20: sensor.pv_control_pv_forecast stuck at 09:33).</summary>
+    public const string UnknownState = "None";
     public static IHaContext PVCC_HaContext { get; private set; } = null!;
     /// <summary>The settled context behind <see cref="PVCC_HaContext"/> (its <see cref="SettledHaContext.Settle"/>).</summary>
     public static SettledHaContext PVCC_States { get; private set; } = null!;

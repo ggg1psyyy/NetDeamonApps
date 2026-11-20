@@ -106,6 +106,26 @@ public class PvForecastTests : TestBase
   }
 
   [Fact]
+  public async Task GeoSphere_TheEnsembleDown_TheForecastWithoutItsBand()
+  {
+    // Live 2026-11-20 09:36–: the ensemble dataset answered 503 while the control run was served.
+    var nwp = Fixture("geosphere_nwp2_2026-11-10.json");
+    var ens = Fixture("geosphere_ens2_2026-11-10.json");
+    var now = new DateTime(2026, 11, 10, 9, 0, 0);
+    var (f, err) = await GeoSphereSource.FetchAsync(p => p.Contains("ensemble")
+      ? throw new HttpRequestException("Response status code does not indicate success: 503 (Service Temporarily Unavailable).")
+      : Task.FromResult(nwp), "48.2,16.37", 4.9, now);
+    Assert.Contains("503", err);
+    Assert.Null(f.LowWh);
+    Assert.Equal(1462.4 * 4.9, SourceForecast.DayTotal(f.Wh, new DateTime(2026, 11, 11))!.Value, 0);
+    var (both, none) = await GeoSphereSource.FetchAsync(p => Task.FromResult(p.Contains("ensemble") ? ens : nwp), "48.2,16.37", 4.9, now);
+    Assert.Null(none);
+    Assert.NotNull(both.LowWh);
+    await Assert.ThrowsAsync<HttpRequestException>(() => GeoSphereSource.FetchAsync(
+      _ => throw new HttpRequestException("503"), "48.2,16.37", 4.9, now));   // without the control run: no forecast
+  }
+
+  [Fact]
   public void GeoSphere_MeasuredDays_StationAndInca()
   {
     var (id, kwh, sun) = Assert.Single(GeoSphereSource.Stations(Fixture("geosphere_station23_2026-11-01_09.json")));
@@ -353,6 +373,15 @@ public class PvForecastTests : TestBase
     var s = PvSteering.Build([new PvSteering.Candidate("GeoSphere", gs, d => factors.TryGetValue(d.Date, out var f) ? f : null)], now, SteerConfig)!;
     Assert.Equal(200, s.Wh[now.Date.AddHours(9)]);
     Assert.Equal(150, s.Wh[now.Date.AddDays(1).AddHours(9)]);
+  }
+
+  [Fact]
+  public void Steering_DayKwh_TheSensorsState_WhatThePlannersUse()
+  {
+    var now = new DateTime(2026, 11, 20, 10, 0, 0);
+    var s = PvSteering.Build([Cand("GeoSphere", null), Cand("OpenMeteo", Hourly(now, now.Date, 2000), 0.66)], now, SteerConfig)!;
+    Assert.Equal(10.56, PvSteering.DayKwh(s, now.Date.AddDays(1)));   // 8 h × 2000 × 0.66, from the fallback
+    Assert.Null(PvSteering.DayKwh(s, now.Date.AddDays(5)));
   }
 
   [Fact]

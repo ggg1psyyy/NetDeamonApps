@@ -338,6 +338,15 @@ would skew the rest of the day); and its fetches fail now and then (timeouts, 50
 (6 h, two missed runs) hands over to the next one. The shadow's Open-Meteo source must keep reading the raw entities,
 or it would score GeoSphere's numbers as its own and the fallback would learn from them.
 
+**The first morning on Steer (2026-11-20 09:36).** GeoSphere's ensemble dataset answered 503 ("failure to get a peer
+from the ring-balancer") while the control run was served; both were fetched in one try, so the working forecast was
+dropped too and Open-Meteo steered (the fallback did its job). The band is optional now. The same morning showed that a
+numeric MQTT sensor must never get the text "unknown": HA rejects it with a value error, keeps the last number and
+drops the attributes sent with it — the PV forecast sensor stuck at 09:33, and the price sensors would have kept an
+outdated price for the DataLogger to log. The payload `None` is HA's unknown (`PVControlCommon.UnknownState`). Only
+valid values are shown: no price = unknown (a stale price must not look valid), no PV forecast from any source = unknown
+(both failing for a day is a fault to fix, not to paper over).
+
 **Exchangeable sources:** `IPvForecastSource` (forecast in Wh per slot, optionally a band) and
 `IPvObservationSource` (measured days); every source gets the same dimensionless correction (actual ÷ its Wh), so
 GeoSphere's `KwhPerKwhM2` is only a first scale the learned factor corrects.

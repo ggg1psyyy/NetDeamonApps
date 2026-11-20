@@ -98,7 +98,8 @@ also gives the planners the PV they plan with — see **Steering** below.
     the expected value and the ensemble's 10th/90th percentile as a band, times `KwhPerKwhM2` (PV per kWh/m²), fetched
     every `RefreshMinutes`. It also logs each ended day's measured radiation (INCA at the home zone, the configured
     stations) and sunshine (`ValleyStation`, `HillStations`: the hills' sunshine minus the valley's is the inversion
-    signal of a foggy day). Data: GeoSphere Austria, CC BY 4.0.
+    signal of a foggy day). The band is optional: if the ensemble fails, the control run counts alone (logged once).
+    Data: GeoSphere Austria, CC BY 4.0.
 - **Log** (`DBLocation`, SQLite in the plugin's folder): at `SnapshotHour` every source's forecast for tomorrow is
   noted once (`dayahead`: total, band, hourly, the day's forecast temperature 09–14 h); after the day ends its
   measured PV and temperature come from DataLogger's hours (`actual`); the weather service's measured days go to
@@ -117,7 +118,8 @@ also gives the planners the PV they plan with — see **Steering** below.
   waits for the first run (at most 75 s). Health: degraded while another source than the first steers or none can;
   a change of the steering source is logged (`PV forecast steering: …`). The shadow's Open-Meteo source always reads
   the raw entities (`Prediction_PVRaw`).
-- **`sensor.pv_control_pv_forecast`**: state = the main (first) source's corrected forecast for tomorrow;
+- **`sensor.pv_control_pv_forecast`**: state = tomorrow's PV the planners use (Steer: the steering forecast's total;
+  Shadow: the main source's corrected forecast), unknown when there is none;
   `used_by_pvcontrol`, `steering_source`, `steering_run`, `steering_fallback` (why the first source doesn't steer); `sources`
   (per source: today — the merged runs, the whole day — and tomorrow raw and corrected, tomorrow cautious and high, factor, scored days, temperature
   anomaly, the mean absolute error raw vs corrected over the backtest window), `recent` (the main source's scored

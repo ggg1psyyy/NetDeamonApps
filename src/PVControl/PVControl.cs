@@ -778,8 +778,10 @@ namespace NetDeamon.apps.PVControl
     {
       if (_pvForecastEntity is null || shadow.Last.Count == 0) return;
       var main = shadow.Last[0];
+      // The state: what the planners plan with for tomorrow (Steer), else the main source's corrected forecast.
+      double? tomorrow = shadow.Steering is { } st ? PvForecast.PvSteering.DayKwh(st, DateTime.Now.Date.AddDays(1)) : main.TomorrowCorrected;
       await PVCC_EntityManager.SetStateAsync(_pvForecastEntity.EntityId,
-        main.TomorrowCorrected is { } t ? t.ToString(CultureInfo.InvariantCulture) : "unknown");
+        tomorrow is { } t ? t.ToString(CultureInfo.InvariantCulture) : UnknownState);
       await PVCC_EntityManager.SetAttributesAsync(_pvForecastEntity.EntityId, new
       {
         used_by_pvcontrol = shadow.Steering is not null,
@@ -2161,7 +2163,7 @@ namespace NetDeamon.apps.PVControl
         {
           unit_of_measurement = "€/kWh",
         },
-        defaultValue: "unknown",
+        defaultValue: UnknownState,
         reRegister: reset);
 
       _activeNetworkPricePeriodEntity = await RegisterSensor("sensor.pv_control_active_network_price_period", "Active network price period", null, "mdi:calendar-clock",

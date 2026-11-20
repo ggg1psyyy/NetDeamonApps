@@ -282,7 +282,7 @@ public class EnergyCostTests : TestBase
     var t = new DateTime(2026, 11, 17, 9, 0, 0);
     var list = new PriceList([new PriceTableEntry(t, t.AddMinutes(15), 0.27797f)]);
     Assert.Equal("0.27797", PriceManager.SensorState(list, t.AddMinutes(5)));
-    Assert.Equal("unknown", PriceManager.SensorState(list, t.AddMinutes(20)));
-    Assert.Equal("unknown", PriceManager.SensorState(new PriceList(), t));
+    Assert.Equal("None", PriceManager.SensorState(list, t.AddMinutes(20)));   // MQTT: unknown in HA (the text "unknown" is rejected)
+    Assert.Equal("None", PriceManager.SensorState(new PriceList(), t));
   }
 }

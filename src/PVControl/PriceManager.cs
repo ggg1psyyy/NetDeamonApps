@@ -102,7 +102,7 @@ namespace NetDeamon.apps.PVControl
     /// <param name="list">The prices.</param>
     /// <param name="t">The time.</param>
     public static string SensorState(PriceList list, System.DateTime t) =>
-      list.TryGetPrice(t, out float price) ? price.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+      list.TryGetPrice(t, out float price) ? price.ToString(System.Globalization.CultureInfo.InvariantCulture) : PVControlCommon.UnknownState;
 
     /// <summary>Raw EPEX Spot netto import prices (€/kWh), lazily fetched and cached.</summary>
     public PriceList PriceListNetto

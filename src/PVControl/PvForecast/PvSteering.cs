@@ -83,6 +83,15 @@ namespace NetDeamon.apps.PVControl.PvForecast
       return null;
     }
 
+    /// <summary>A day's total of the steering forecast, kWh (2 decimals); null if it has no quarter of the day.</summary>
+    /// <param name="s">The steering forecast.</param>
+    /// <param name="day">The day.</param>
+    public static double? DayKwh(SteeringForecast s, DateTime day)
+    {
+      var of = s.Wh.Where(kv => kv.Key.Date == day.Date).ToList();
+      return of.Count == 0 ? null : Math.Round(of.Sum(kv => kv.Value) / 1000.0, 2);
+    }
+
     /// <summary>The steering forecast; null if no source can steer.</summary>
     /// <param name="candidates">The sources in the configured order.</param>
     /// <param name="now">Current time.</param>
