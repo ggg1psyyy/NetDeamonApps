@@ -307,7 +307,7 @@ public class PvForecastTests : TestBase
     var s = PvSteering.Build([Cand("GeoSphere", gs, 0.85), Cand("OpenMeteo", om, 0.66)], now, SteerConfig)!;
     Assert.Equal(("GeoSphere", false, (string?)null), (s.Source, s.Fallback, s.Reason));
     Assert.Equal(212, s.Wh[now.Date.AddDays(1).AddHours(9)]);   // 1000 / 4 × 0.85 = 212.5, to even
-    Assert.Equal(192, s.Wh.Count);                               // today 00:00 → the end of tomorrow
+    Assert.Equal(192, s.Wh.Count(kv => kv.Key < now.Date.AddDays(2)));   // today 00:00 → the end of tomorrow, all steered
 
     var stale = PvSteering.Build([Cand("GeoSphere", gs with { FetchedAt = now.AddHours(-7) }), Cand("OpenMeteo", om, 0.66)], now, SteerConfig)!;
     Assert.Equal(("OpenMeteo", true), (stale.Source, stale.Fallback));
@@ -353,6 +353,22 @@ public class PvForecastTests : TestBase
     var s = PvSteering.Build([new PvSteering.Candidate("GeoSphere", gs, d => factors.TryGetValue(d.Date, out var f) ? f : null)], now, SteerConfig)!;
     Assert.Equal(200, s.Wh[now.Date.AddHours(9)]);
     Assert.Equal(150, s.Wh[now.Date.AddDays(1).AddHours(9)]);
+  }
+
+  [Fact]
+  public void Steering_BuiltBeforeMidnight_TheNextDaysWindowSteered()
+  {
+    // Built at 23:57, read by the cycle at 00:00 (the next run up to 5 min later): the new window — tomorrow and the
+    // day after — is steered in every quarter the source covers, none falls back to raw.
+    var now = new DateTime(2026, 11, 20, 23, 57, 0);
+    var gs = new SourceForecast(now, "15Z", Enumerable.Range(0, 72).Select(h => now.Date.AddHours(h))
+      .ToDictionary(t => t, t => t.Hour is >= 8 and < 16 ? 1000.0 : 0.0));
+    var s = PvSteering.Build([Cand("GeoSphere", gs, 0.8)], now, SteerConfig)!;
+    var next = now.Date.AddDays(1);
+    var raw = Enumerable.Range(0, 192).ToDictionary(i => next.AddMinutes(15 * i), _ => 999);
+    var o = NetDeamon.apps.PVControl.Predictions.SteeredPvPrediction.Overlay(raw, s.Wh);
+    Assert.DoesNotContain(o.Values, v => v == 999);
+    Assert.Equal(200, o[next.AddDays(1).AddHours(10)]);   // the day after: 1000 / 4 × 0.8
   }
 
   [Fact]

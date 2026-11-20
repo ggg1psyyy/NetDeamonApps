@@ -6,7 +6,8 @@ namespace NetDeamon.apps.PVControl.PvForecast
 {
   /// <summary>
   /// The PV forecast the planners use under <see cref="PvForecastMode.Steer"/>: Wh per 15-min slot, today 00:00 → the end
-  /// of tomorrow, each source's own Wh times its learned factor for the slot's day.
+  /// of tomorrow (and the day after, as far as a source covers it: the window after midnight), each source's own Wh times
+  /// its learned factor for the slot's day.
   /// </summary>
   /// <param name="Source">The source that steers (the first usable one in the configured order).</param>
   /// <param name="Run">Its forecast run, if it names one.</param>
@@ -93,7 +94,9 @@ namespace NetDeamon.apps.PVControl.PvForecast
       var lead = usable[0];
       var quarters = usable.Select(c => (c, Q: Quarters(c.Forecast!.Wh))).ToList();
       var wh = new Dictionary<DateTime, int>();
-      for (var t = now.Date; t < now.Date.AddDays(2); t = t.AddMinutes(TimeRange.SlotMinutes))
+      // Through the day after tomorrow: from 00:00 the planners' window is tomorrow and the day after, and the next run
+      // can be up to 5 minutes away — without it the new tomorrow would be raw Open-Meteo (~1.5×) until then.
+      for (var t = now.Date; t < now.Date.AddDays(3); t = t.AddMinutes(TimeRange.SlotMinutes))
         foreach (var (c, q) in quarters)
           if (q.TryGetValue(t, out double v) && c.FactorOf(t.Date) is { } factor)
           {
