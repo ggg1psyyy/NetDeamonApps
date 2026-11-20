@@ -107,6 +107,22 @@ public class FixedTariffRulesTests
       s => Assert.NotEqual(InverterModes.force_charge, s.Mode));
   }
 
+  [Theory]
+  [InlineData(0)]
+  [InlineData(6)]
+  [InlineData(9)]
+  [InlineData(14)]
+  public void Fixed_Enforced_AHoldAtTheFloor_StaysForTheWholeQuarter(int minutesIn)
+  {
+    // Live 2026-11-19 19:30 (Fair, enforced 20 %, ~1 % above the floor after a top-up): grid_only at each quarter's start,
+    // normal 6–7 minutes in — the floor check judged the quarter's rest, which no longer reached the floor (9 switches by
+    // 20:24). The whole quarter is judged: the running hold stays.
+    var snap = Snap("2026-11-19_1930");
+    var input = (snap with { StartTime = snap.StartTime.Date.AddHours(19).AddMinutes(30 + minutesIn).AddSeconds(5), CurrentMode = InverterModes.grid_only }).ToInput();
+    Assert.True(BatteryDpPlanner.HoldOnlyAtFloor(input, input.StartTime));
+    Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input).Slots[0].Mode);
+  }
+
   [Fact]
   public void Fixed_ATieChargeTomorrowNight_WithoutTheLimit_StartsNow()
   {

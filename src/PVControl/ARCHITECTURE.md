@@ -1203,6 +1203,13 @@ with a 216-Wh grid charge, and the price-block rule, the whole flat day being on
 the snapshot: normal down to 21 %, one hold block to the PV, the same cost (1.6912 €); one normal quarter is left inside
 the block (00:00), the last part of a percent the 18:30 quarter's draw would have taken under the floor.
 
+The floor check judges the whole quarter, in the running one too (2026-11-19). 19:24 a top-up left ~1 % above the floor;
+then grid_only at every quarter's start and normal 6–7 minutes in, 19:28–20:24 nine switches: the check took normal's
+draw over the running quarter's rest, which no longer reached the floor, and the keep-mode rule may only keep a hold
+the check allows. Like the hold and charge rules on 2026-11-08, it now reads the quarter's whole forecast
+(`QuarterEnergyWh`) from the energy now: a hold chosen at the quarter's start stays to its end. What's left above the
+floor (under one quarter's draw) stays in the battery.
+
 ### The floor cost a phantom euro (2026-11-15)
 
 Found while banning holds under the fixed tariff — the DP then charged at 66–75 % in the evening at a flat price. 12 %

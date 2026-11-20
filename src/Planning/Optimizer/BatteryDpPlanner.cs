@@ -407,7 +407,7 @@ public static class BatteryDpPlanner
         bestRestOf[0] = bestRestOf[1] = float.MaxValue;
         bestActionOf[0] = bestActionOf[1] = actions[0];
         var normalFlows = Flows(input, actions[0], pv, totalLoad, wh, fractions[i]);
-        bool holdHere = floorOnly[i] ? NormalCrossesFloor(input, wh, normalFlows) : holdOk;
+        bool holdHere = floorOnly[i] ? NormalCrossesFloor(input, times[i], wh, i == 0 ? null : normalFlows) : holdOk;
         // Per path (VPP, bulk): the last charge target's flows, and whether the targets above give the same (see below)
         var lastCharge = new (int, int, int, int)?[2];
         var capped = new bool[2];
@@ -488,7 +488,7 @@ public static class BatteryDpPlanner
         float bestRest = float.MaxValue;
         var actions0 = Actions(input, o, input.BatteryHeldForLoad(times[0], pv0, load0 + extra0), holdOks[0] || floorOnly[0]);
         var normalFlows0 = Flows(input, actions0[0], pv0, load0 + extra0, startEnergy, fractions[0]);
-        bool holdOk = floorOnly[0] ? NormalCrossesFloor(input, startEnergy, normalFlows0) : holdOks[0];
+        bool holdOk = floorOnly[0] ? NormalCrossesFloor(input, times[0], startEnergy) : holdOks[0];
         foreach (var a in actions0)
         {
           if (a.Mode != InverterModes.force_charge || a.Bulk != bulk || a.TargetSocPct <= input.WhToSoc(startEnergy)) continue;
@@ -543,7 +543,7 @@ public static class BatteryDpPlanner
     if (!actions.Contains(keep))
       return planned;
     var normalFlows = Flows(input, actions[0], pv, totalLoad, energy, fraction);
-    if (keep.Mode == InverterModes.grid_only && !held && floorOnly && !NormalCrossesFloor(input, energy, normalFlows))
+    if (keep.Mode == InverterModes.grid_only && !held && floorOnly && !NormalCrossesFloor(input, time, energy))
       return planned;
     float Rest(Action a)
     {
@@ -653,12 +653,30 @@ public static class BatteryDpPlanner
   public static bool HoldOnlyAtFloor(SimulationInput input, DateTime slot) =>
     input.EnforcePreferredSoc && input.FixedImportUntilEnd(slot, HorizonEnd(input));
 
-  /// <summary>Whether normal would end the quarter under the effective floor (<see cref="SimulationInput.GetEffectiveMinSoC"/>).</summary>
+  /// <summary>
+  /// Whether normal would end the quarter under the effective floor (<see cref="SimulationInput.GetEffectiveMinSoC"/>),
+  /// judged on the whole quarter's forecast (<see cref="SimulationInput.QuarterEnergyWh"/>) from the energy given — also
+  /// in the running quarter, never on its rest: the minute's replans judged the rest, at :00 the quarter's load crossed
+  /// the floor (hold), 6–7 minutes in the rest's didn't (normal), and again every quarter while ~1 % above the floor was
+  /// used up in slices (live 2026-11-19 19:28–20:24: 9 switches). Like the hold rule's and the charge rule's (2026-11-08).
+  /// </summary>
   /// <param name="input">Simulation input.</param>
-  /// <param name="energyWh">Energy at the quarter's start, Wh.</param>
-  /// <param name="normalFlows">The quarter's flows in normal.</param>
-  internal static bool NormalCrossesFloor(SimulationInput input, int energyWh, (int Charge, int Discharge, int Import, int Export) normalFlows) =>
-    input.NextEnergyWh(energyWh, normalFlows.Charge, normalFlows.Discharge) < input.SocToWh(input.GetEffectiveMinSoC());
+  /// <param name="slot">Start of the quarter.</param>
+  /// <param name="energyWh">Energy now (the quarter's start, or now in the running quarter), Wh.</param>
+  /// <param name="quarterFlows">The whole quarter's flows in normal from <paramref name="energyWh"/> when the caller has
+  /// them (a later quarter: its flows are the whole quarter's); null: computed.</param>
+  internal static bool NormalCrossesFloor(SimulationInput input, DateTime slot, int energyWh,
+    (int Charge, int Discharge, int Import, int Export)? quarterFlows = null)
+  {
+    var (ch, dis, _, _) = quarterFlows ?? QuarterNormalFlows(input, slot, energyWh);
+    return input.NextEnergyWh(energyWh, ch, dis) < input.SocToWh(input.GetEffectiveMinSoC());
+  }
+
+  private static (int ch, int dis, int imp, int exp) QuarterNormalFlows(SimulationInput input, DateTime slot, int energyWh)
+  {
+    var (pv, load, extra) = input.QuarterEnergyWh(slot);
+    return Flows(input, InverterModes.normal, false, 0, pv, load + extra, energyWh, 1);
+  }
 
   /// <summary>
   /// Whether a grid charge stores under 1 % SoC per quarter — a hold under another name where holds are ruled out
