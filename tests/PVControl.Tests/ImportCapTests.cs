@@ -482,4 +482,24 @@ public class HaFilesTests
       Assert.True(i < 0, $"{file}:{i + 1} has a YAML comment; HA drops it on the next GUI save, use description:");
     }
   }
+
+  [Fact]
+  public void NoHaFile_ReadsAPriceSensorAsZeroWhenUnknown()
+  {
+    // A PVControl price sensor is unknown when there is no valid price (PVControlCommon.UnknownState); `| float(0)`
+    // would turn that into a price of 0 (the mode notification: "Price: 0.0 €/kWh"). Check with is_number instead.
+    var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA")))
+      dir = dir.Parent;
+    Assert.NotNull(dir);
+    var price = new System.Text.RegularExpressions.Regex(@"pv_control_current_\w*price\w*[""']?\s*\)?\s*\|\s*float\(0\)");
+    foreach (var f in System.IO.Directory.GetFiles(System.IO.Path.Combine(dir.FullName, "src", "PVControl", "HA"), "*.yaml"))
+    {
+      var lines = System.IO.File.ReadAllLines(f);
+      int i = Array.FindIndex(lines, l => price.IsMatch(l));
+      Assert.True(i < 0, $"{System.IO.Path.GetFileName(f)}:{i + 1} reads a price sensor with float(0)");
+    }
+    Assert.Matches(price, @"{{ states(""sensor.pv_control_current_import_price_brutto"") | float(0) | round(3) }}");   // the old line
+    Assert.Matches(price, "{{ states('sensor.pv_control_current_market_price') | float(0) }}");
+  }
 }
