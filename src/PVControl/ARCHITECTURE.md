@@ -453,7 +453,7 @@ SchedulableLoads:
     EnergyPerLevelUnitKwhDefault: 0.6    # 60 kWh battery / 100% = 0.6 kWh per %
     AvgPowerWDefault: 1800               # fallback power before real measurement
     MinActivePowerW: 500          # below this = standby / noise, ignored
-    CurrentLevelEntity: sensor.byd_atto_2_ladezustand
+    CurrentLevelEntity: sensor.ev_battery_level
     ActualPowerEntity: sensor.esp_ct8_carport   # optional: for running average
     # Mode / TargetLevel omitted → auto-created as HA select / number entities
 ```

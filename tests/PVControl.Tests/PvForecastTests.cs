@@ -130,7 +130,7 @@ public class PvForecastTests : TestBase
   {
     var (id, kwh, sun) = Assert.Single(GeoSphereSource.Stations(Fixture("geosphere_station23_2026-11-01_09.json")));
     Assert.Equal(23, id);
-    Assert.Equal(8.7247, kwh!.Value, 3);   // Enns, 2026-11-01…09
+    Assert.Equal(8.7247, kwh!.Value, 3);   // the valley station, 2026-11-01…09
     Assert.Equal(13.242, sun!.Value, 2);
     Assert.Equal(9.467, GeoSphereSource.DaySum(Fixture("geosphere_inca2_2026-11-01_09.json"), "ssrd", 1.0)!.Value, 3);
   }
@@ -138,7 +138,7 @@ public class PvForecastTests : TestBase
   [Fact]
   public void GeoSphere_InversionSignal_HillsMinusValley()
   {
-    // 2026-11-07: Enns 0.6 h, Bad Zell 4.2 h, Reichenau 6.4 h.
+    // 2026-11-07: the valley 0.6 h, the hills 4.2 h and 6.4 h.
     var v = new Dictionary<string, double> { ["station_23_sun_h"] = 0.6, ["station_3425_sun_h"] = 4.2, ["station_161_sun_h"] = 6.4 };
     Assert.Equal(4.7, GeoSphereSource.InversionSunGap(v, 23, [3425, 161])!.Value, 6);
     Assert.Null(GeoSphereSource.InversionSunGap(v, null, [3425]));

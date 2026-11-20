@@ -136,7 +136,7 @@ NetDeamon.apps.PVControl.PVConfig:
   # Grid import counters (kWh), in priority order: the first is used while it works (unavailable, or
   # frozen while a later one keeps counting = failed), the next ones only as fallback.
   TotalImportEnergyEntities:
-    - sensor.esp_wmbus_0x290340_stromzahler_bezug   # utility meter via wM-Bus (billing meter, 5 s, 10 Wh)
+    - sensor.utility_meter_import_energy   # e.g. the utility meter via wM-Bus (billing meter, 5 s, 10 Wh)
     - sensor.solax_grid_import_total                # inverter (0.1 kWh)
   TotalExportEnergyEntity: sensor.solax_grid_export_total
   # Import cap: the mean grid import (W) the guard steers each 15-min block to. This is a target, not a
@@ -174,7 +174,7 @@ NetDeamon.apps.PVControl.PVConfig:
       TargetLevelMax: 100
       TargetLevelStep: 5
       TargetLevelDefault: 80
-      CurrentLevelEntity: sensor.byd_atto_2_ladezustand
+      CurrentLevelEntity: sensor.ev_battery_level
       ActualPowerEntity: sensor.esp_ct8_carport
       ActualEnergyEntity: sensor.esp_ct8_daily_energy_carport
       # Reflects whether a chargeable car is at home (HA-side; already accounts for the
@@ -288,8 +288,8 @@ NetDeamon.apps.PVControl.PVConfig:
         Name: GeoSphere
         RefreshMinutes: 180
         KwhPerKwhM2: 4.9   # 2026-11-01…09: daily PV ÷ INCA radiation
-        ValleyStation: 23  # Enns
-        HillStations: [3425, 161]   # Bad Zell, Reichenau
+        # ValleyStation: 0          # optional: the nearest klima station in the valley (its id)
+        # HillStations: [0, 0]      # optional: klima stations on the hills around (their ids)
   # DP shadow planner: plans the battery globally (dynamic program) next to the greedy plan every IntervalMinutes,
   # publishes the comparison (sensor.pv_control_dp_shadow) and logs it per quarter (DBLocation, in this plugin's
   # folder) — never steers. BandPenaltyPerPctQuarter: € per % below the preferred minimum per quarter.
