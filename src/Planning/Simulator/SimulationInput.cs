@@ -93,18 +93,45 @@ public class SimulationInput
   /// <summary>Energies of a slot, the running slot only its rest (<see cref="SlotFraction"/>).</summary>
   /// <param name="slotStart">Start of the slot.</param>
   /// <returns>PV, base load and extra loads, Wh.</returns>
-  internal (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart) => SlotEnergyWh(slotStart, SlotFraction(slotStart));
+  internal (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart) => Energies(slotStart, whole: false);
 
-  /// <summary>Energies of a whole slot, the running one too — for rules set per quarter (<c>BatteryDpPlanner.HoldAllowed</c>).</summary>
+  /// <summary>Energies of a whole slot, the running one too — for rules set per quarter (<c>BatteryDpPlanner.HoldAllowed</c>,
+  /// <c>NormalCrossesFloor</c>): a load running now counts over the whole quarter.</summary>
   /// <param name="slotStart">Start of the slot.</param>
   /// <returns>PV, base load and extra loads, Wh.</returns>
-  internal (int PvWh, int LoadWh, int ExtraWh) QuarterEnergyWh(DateTime slotStart) => SlotEnergyWh(slotStart, 1);
+  internal (int PvWh, int LoadWh, int ExtraWh) QuarterEnergyWh(DateTime slotStart) => Energies(slotStart, whole: true);
 
-  private (int PvWh, int LoadWh, int ExtraWh) SlotEnergyWh(DateTime slotStart, double fraction)
+  private (int PvWh, int LoadWh, int ExtraWh) Energies(DateTime slotStart, bool whole)
   {
+    double fraction = whole ? 1 : SlotFraction(slotStart);
     return ((int)(PVPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
             (int)(LoadPredictionWh.GetValueOrDefault(slotStart, 0) * fraction),
-            (int)(ExtraLoadWh(slotStart) * fraction));
+            ExtraWh(slotStart, whole));
+  }
+
+  /// <summary>
+  /// The extra loads' energy in a slot, Wh. A later slot: each load's overlap with it. The running slot: its rest — each
+  /// load from <see cref="StartTime"/> on, not the slot's overlap × the rest's fraction (a session the load search starts
+  /// "now" already lies in the rest only: it was shortened twice, 6 minutes of a 1.8-kW EV counted as 2.4); whole: a load
+  /// running now counts from the slot's start (its start moves with the load search; a whole-quarter rule then saw only
+  /// its last minutes — live 2026-11-21 10:30, EV at the floor: hold at the quarter's start, normal 9–11 minutes in, the
+  /// EV drained the battery under the floor, four grid top-ups in 2 h); a load that already ended counts nothing.
+  /// </summary>
+  /// <param name="slotStart">Start of the slot.</param>
+  /// <param name="whole">The whole quarter (rules per quarter), else the rest from <see cref="StartTime"/>.</param>
+  private int ExtraWh(DateTime slotStart, bool whole)
+  {
+    var slotEnd = slotStart + TimeRange.Slot;
+    if (!(slotStart <= StartTime && StartTime < slotEnd)) return ExtraLoadWh(slotStart);
+    double wh = 0;
+    foreach (var e in ExtraLoads)
+    {
+      if (e.EndTime <= StartTime) continue;
+      var from = whole ? slotStart : StartTime;
+      var start = whole && e.StartTime <= StartTime ? slotStart : e.StartTime;
+      wh += Energy.Wh(e.PowerW, TimeRange.Overlap(from, slotEnd, start, e.EndTime));
+    }
+    return (int)wh;
   }
 
   /// <summary>Simulates with additional loads.</summary>

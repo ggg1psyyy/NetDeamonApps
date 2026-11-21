@@ -41,6 +41,49 @@ public class RunningSlotTests : TestBase
 
   static int SoCAt(SimulationResult sim, DateTime t) => sim.Slots.First(s => s.Time == t).SoC;
 
+  // ── Extra loads in the running quarter ───────────────────────────────────────────────────────
+
+  [Theory]
+  [InlineData(-40, 120)]   // started before the quarter
+  [InlineData(0, 120)]     // at the quarter's start
+  [InlineData(4, 120)]     // in the quarter, before now (the load search ran a few minutes ago)
+  [InlineData(9, 120)]     // now (the load search ran this cycle)
+  [InlineData(12, 120)]    // later in the running quarter
+  [InlineData(-40, 7)]     // ended before now
+  [InlineData(-40, 11)]    // ends in the running quarter, after now
+  public void ExtraLoad_SummedOverTheSlots_IsItsEnergyFromNow(int startMin, int endMin)
+  {
+    // The running quarter counted a load that starts "now" twice short (its rest × the rest's fraction).
+    var quarter = new DateTime(2026, 11, 21, 10, 30, 0);
+    var now = quarter.AddMinutes(9);
+    var ev = new ExtraLoad { Name = "EV", StartTime = quarter.AddMinutes(startMin), EndTime = quarter.AddMinutes(endMin), PowerW = 1823 };
+    var input = Afternoon(now, 21).WithExtraLoads([ev]);
+    int sum = 0;
+    for (var t = quarter; t < quarter.AddHours(3); t = t.AddMinutes(15)) sum += input.SlotEnergyWh(t).ExtraWh;
+    Assert.InRange(sum, ev.EnergyFromWh(now) - 12, ev.EnergyFromWh(now) + 1);   // whole Wh per slot
+  }
+
+  [Fact]
+  public void ExtraLoad_TheWholeRunningQuarter_TheSameAtEveryMinuteWhileItsStartMoves()
+  {
+    // Live 2026-11-21 10:30: the EV's start moved with the load search; the whole-quarter floor check saw only its last
+    // minutes and dropped the hold 9–11 minutes in.
+    var quarter = new DateTime(2026, 11, 21, 10, 30, 0);
+    foreach (int min in new[] { 0, 3, 6, 9, 11, 14 })
+    {
+      var now = quarter.AddMinutes(min).AddSeconds(5);
+      var ev = new ExtraLoad { Name = "EV", StartTime = now, EndTime = quarter.AddHours(3), PowerW = 1823 };
+      var input = Afternoon(now, 21).WithExtraLoads([ev]);
+      Assert.Equal(455, input.QuarterEnergyWh(quarter).ExtraWh);                  // 1823 W × 15 min
+      Assert.Equal((int)Energy.Wh(1823, quarter.AddMinutes(15) - now), input.SlotEnergyWh(quarter).ExtraWh);   // the rest: from now, once
+    }
+    // a load that ended before now isn't in the quarter any more, a later one only from its start
+    var later = quarter.AddMinutes(9);
+    var input2 = Afternoon(later, 21).WithExtraLoads([new ExtraLoad { Name = "x", StartTime = quarter, EndTime = quarter.AddMinutes(5), PowerW = 1200 },
+      new ExtraLoad { Name = "y", StartTime = quarter.AddMinutes(12), EndTime = quarter.AddHours(1), PowerW = 1200 }]);
+    Assert.Equal(60, input2.QuarterEnergyWh(quarter).ExtraWh);                    // y: 3 min × 1.2 kW
+  }
+
   [Fact]
   public void QuarterBoundary_SameSoC_SameFuture()
   {

@@ -1248,6 +1248,15 @@ the check allows. Like the hold and charge rules on 2026-11-08, it now reads the
 (`QuarterEnergyWh`) from the energy now: a hold chosen at the quarter's start stays to its end. What's left above the
 floor (under one quarter's draw) stays in the battery.
 
+A running load counts over the whole quarter (2026-11-21). 09:14–11:30, the EV at 1.8 kW from the battery at the floor:
+20 switches — the hold at each quarter's start, normal 9–11 minutes in, the EV drained the battery under the floor, four
+grid top-ups. The load search starts a running session "now", so the whole-quarter check (`QuarterEnergyWh`) saw only
+the EV's last minutes. A load running now counts from the quarter's start there; and in the rest of the running quarter
+(`SlotEnergyWh`) a load counts from now once — it had been the slot's overlap × the rest's fraction, so a session
+starting now was shortened twice (6 minutes of the EV counted as 2.4). One helper (`SimulationInput.ExtraWh`) for
+both. The load search takes the plan's time (`baseInput.StartTime`), not the clock again: a session it starts "now" must not start a few ms after the plan does, or it doesn't count as running in exactly the cycles the search runs. The live PV correction can still move the running quarter's PV across the line within the quarter (a cloud): a
+single switch, not a flip-flop.
+
 ### The floor cost a phantom euro (2026-11-15)
 
 Found while banning holds under the fixed tariff — the DP then charged at 66–75 % in the evening at a flat price. 12 %

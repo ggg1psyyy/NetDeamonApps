@@ -123,6 +123,31 @@ public class FixedTariffRulesTests
     Assert.Equal(InverterModes.grid_only, BatteryDpPlanner.Plan(input).Slots[0].Mode);
   }
 
+  [Theory]
+  [InlineData(20)]
+  [InlineData(21)]
+  [InlineData(22)]
+  public void Fixed_Enforced_ARunningLoadStartingNow_TheHoldStaysForTheWholeQuarter(int socPct)
+  {
+    // Live 2026-11-21 09:14–11:30 (Fair, enforced 20 %, the EV at 1.8 kW from the battery): the load search starts the
+    // running session "now"; the whole-quarter floor check saw only its last minutes and chose normal 9–11 minutes in —
+    // the EV drained the battery under the floor, four grid top-ups. A load running now counts over the whole quarter.
+    var snap = Snap("2026-11-21_1030");
+    var quarter = new DateTime(2026, 11, 21, 10, 30, 0);
+    foreach (int min in new[] { 0, 6, 9, 11, 13 })
+      foreach (var running in new[] { InverterModes.grid_only, InverterModes.normal, InverterModes.force_charge })
+      {
+        var now = quarter.AddMinutes(min).AddSeconds(5);
+        var loads = snap.ExtraLoads.Select(e => e.End > now && e.Start <= now.AddMinutes(1) ? e with { Start = now } : e).ToList();
+        var input = (snap with { StartTime = now, StartSocPercent = socPct, CurrentMode = running, ExtraLoads = loads }).ToInput();
+        var first = BatteryDpPlanner.Plan(input).Slots[0].Mode;
+        // A running hold (or charge) never turns normal within the quarter; a running normal stays while the quarter's
+        // rest doesn't reach the floor (the keep-mode hysteresis) — at the floor it is held.
+        if (running != InverterModes.normal || socPct <= 20)
+          Assert.True(first is InverterModes.grid_only or InverterModes.force_charge, $"{socPct} % +{min} min running {running}: {first}");
+      }
+  }
+
   [Fact]
   public void Fixed_ATieChargeTomorrowNight_WithoutTheLimit_StartsNow()
   {

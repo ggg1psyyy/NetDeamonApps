@@ -603,7 +603,10 @@ namespace NetDeamon.apps.PVControl
       }
       DecideLoadWindow(load, baseInput, baseResult);
 
-      var now = DateTime.Now;
+      // The plan's time, never the clock again: a session started "now" must not start after the plan does — a load
+      // running at the plan's start counts over the whole quarter (SimulationInput.ExtraWh), one starting a few ms
+      // later only from then.
+      var now = baseInput.StartTime;
 
       // Min-off latch: a restart within MinOffMinutes of the last stop is held back — the planned
       // session moves to the end of the off-time. Only restarts: stops are never delayed.
@@ -692,7 +695,7 @@ namespace NetDeamon.apps.PVControl
       /// <summary>Decides the load: the gates, the ladder, the follow-up preview.</summary>
       public void Run()
       {
-        now = DateTime.Now;
+        now = baseInput.StartTime;   // the plan's time (see FindLoadWindow)
         currentSlot = now.RoundToNearestQuarterHour();
         wasActive = load.ChargeNow;
         // Last cycle's final result. Rulesets lower in the climb may SetResult before the latch or
