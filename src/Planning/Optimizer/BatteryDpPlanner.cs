@@ -449,6 +449,7 @@ public static class BatteryDpPlanner
     // A charge running now continues without a start cost.
     int layer0 = layers > 1 && input.CurrentMode.Mode == InverterModes.force_charge ? 1 : 0;
     float RestAt(int i, Action a, int energyAfter) => StartCost(a, i == 0 ? layer0 : 0) + ValueAt(value[i + 1][LayerAfter(a)], energyAfter);
+    int effectiveFloorWh = input.SocToWh(input.GetEffectiveMinSoC());
     (List<DpSlot> Slots, int End) Forward(Action? first)
     {
       var list = new List<DpSlot>(n);
@@ -460,6 +461,17 @@ public static class BatteryDpPlanner
           : policy[i][layer][StateOf(energy)];
         var (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
         int next = input.NextEnergyWh(energy, ch, dis);
+        // The action comes from the nearest state; at the exact energy it may end the quarter under the floor where it
+        // didn't from the state (2353 Wh → state 2362 Wh: normal ended at 2305 there, at 2296 from 2353) — the plan then
+        // sat a few Wh under the floor for hours and its exact cost carried the floor penalty every quarter (live
+        // 2026-11-21 10:30: 0.625 €). Where a hold is allowed, the hold (not a charge, not a forced first action).
+        if ((i > 0 || first is null) && a.Mode is InverterModes.normal or InverterModes.feedin_priority
+            && energy >= effectiveFloorWh && next < effectiveFloorWh && (floorOnly[i] || holdOks[i]))
+        {
+          a = new Action(InverterModes.grid_only, false, 0);
+          (ch, dis, imp, exp) = Flows(input, a, pv, load + extra, energy, fractions[i]);
+          next = input.NextEnergyWh(energy, ch, dis);
+        }
         list.Add(new DpSlot(times[i], input.WhToSoc(energy), a.Mode, a.Bulk, a.Mode == InverterModes.force_charge ? a.TargetSocPct : 0, imp, exp, ch, dis,
           BatteryValueOf(input, value[i + 1][LayerAfter(a)], next, ValueAt), energy));
         energy = next;

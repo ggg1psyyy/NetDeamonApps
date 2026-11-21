@@ -148,6 +148,36 @@ public class FixedTariffRulesTests
       }
   }
 
+  [Theory]
+  [InlineData("2026-11-17_0730")]
+  [InlineData("2026-11-17_1800")]
+  [InlineData("2026-11-19_1930")]
+  [InlineData("2026-11-21_1030")]
+  public void Fixed_Enforced_ThePlanNeverSitsUnderTheFloor_NoPhantomFloorPenalty(string name)
+  {
+    // The forward pass took each quarter's action from the nearest state: normal ended a few Wh under the floor at the
+    // exact energy (2353 Wh → state 2362, normal 2305 there, 2296 from 2353), the plan held there for hours and its cost
+    // carried the floor penalty every quarter (live 2026-11-21 10:30: 0.625 €). Where a hold is allowed it holds.
+    var snap = Snap(name);
+    Assert.True(snap.EnforcePreferredSoc);
+    var unmodified = BatteryDpPlanner.Plan(snap.ToInput());   // the snapshot as logged, its own start time
+    Assert.True(unmodified.Cost.FloorPenalty == 0, $"{name} as logged: floor penalty {unmodified.Cost.FloorPenalty}");
+    var q = snap.StartTime.RoundToNearestQuarterHour(); if (q > snap.StartTime) q = q.AddMinutes(-15);
+    foreach (int min in new[] { 0, 6, 12 })
+      foreach (var running in new[] { InverterModes.normal, InverterModes.grid_only })
+        foreach (bool moveStart in new[] { false, true })
+        {
+          var now = q.AddMinutes(min).AddSeconds(5);
+          var loads = moveStart ? snap.ExtraLoads.Select(e => e.End > now && e.Start <= now.AddMinutes(1) ? e with { Start = now } : e).ToList() : snap.ExtraLoads;
+          var input = (snap with { StartTime = now, CurrentMode = running, ExtraLoads = loads }).ToInput();
+          var plan = BatteryDpPlanner.Plan(input);
+          int floorWh = input.SocToWh(input.GetEffectiveMinSoC());
+          string at = $"{name} +{min} {running} move={moveStart}";
+          Assert.True(plan.Cost.FloorPenalty == 0, $"{at}: floor penalty {plan.Cost.FloorPenalty}");
+          Assert.All(plan.Slots, s => Assert.True(s.EnergyWh >= floorWh - 1, $"{at}: {s.Time:dd HH:mm} {s.EnergyWh} Wh"));
+        }
+  }
+
   [Fact]
   public void Fixed_ATieChargeTomorrowNight_WithoutTheLimit_StartsNow()
   {

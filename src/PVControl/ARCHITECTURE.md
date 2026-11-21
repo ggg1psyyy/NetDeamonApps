@@ -1275,6 +1275,17 @@ starting now was shortened twice (6 minutes of the EV counted as 2.4). One helpe
 both. The load search takes the plan's time (`baseInput.StartTime`), not the clock again: a session it starts "now" must not start a few ms after the plan does, or it doesn't count as running in exactly the cycles the search runs. The live PV correction can still move the running quarter's PV across the line within the quarter (a cloud): a
 single switch, not a flip-flop.
 
+**The phantom floor penalty (2026-11-21).** On the 17th a plan's floor penalty (0.156 €, 3 ct a quarter) looked like
+harmless rounding; at 10:30 on the 21st one carried 0.625 €, and the 17th's 18:00 snapshot replayed before this fix
+2.16 €. The forward pass takes each later quarter's action from the nearest DP state:
+2353 Wh lies at state 2362 Wh, from where normal ends at 2305 — above the floor, so the table says normal; at the exact
+2353 Wh it ends at 2296, 8 Wh under. The plan then held there for hours, and the exact evaluation charged the floor
+penalty every quarter (the DP itself, on its states, saw none). The plan totals feed the charge-now comparison and the
+tariff advisor. Now the forward pass holds where the action would end under the effective floor at the exact energy and
+a hold is allowed (not a charge, not a forced first action); the flows and the cost table are unchanged. Of 240 snapshot
+plans (all enforced ones under the fixed tariff — market + enforced wasn't among them) only those two changed: the penalty to 0, the grid cost identical (the 49 Wh above the floor used later). Loosening
+the evaluation's tolerance instead would have hidden the check that found it, and left the plan under the floor.
+
 ### The floor cost a phantom euro (2026-11-15)
 
 Found while banning holds under the fixed tariff — the DP then charged at 66–75 % in the evening at a flat price. 12 %
