@@ -27,15 +27,16 @@ Deployed, PVControl lies in `apps/plugins/PVControl/` with `PVControl.yaml` and 
 | `normal` | Normal self-consumption operation |
 | `force_charge` | Charge battery from grid — scheduled cheap window |
 | `force_charge_grid_only` | Negative import price: PV disconnected, grid charges the battery and powers the house |
-| `grid_only` | Grid powers the house, battery idle — holds the battery at its minimum until the scheduled charge window, or while a PriorityPlus session that needs grid runs without enough PV (`charge_Reason` `LoadFromGrid`; only while that load really draws power — otherwise `normal`) |
+| `grid_only` | The battery never discharges: the grid covers a deficit, a PV surplus charges the battery (the rest is exported) — holds the battery at its minimum until the scheduled charge window, or while a PriorityPlus session that needs grid runs without enough PV (`charge_Reason` `LoadFromGrid`; only while that load really draws power — otherwise `normal`) |
 | `force_discharge` | Opportunistic export to grid during high-price periods |
 | `feedin_priority` | Feed all available energy to grid |
 
 Whether the battery may charge from PV and whether PV surplus may be exported are separate decisions —
 `binary_sensor.pv_control_battery_charging_enabled` / `binary_sensor.pv_control_export_allowed` below, and the
 attributes `charge_enabled` / `export_allowed` of `sensor.pv_control_mode` (part of the command's version). In
-`normal` and `feedin_priority` HA applies them as the integration's mode-8 loops (table below); in the grid-charge,
-grid_only and discharge modes they have no effect on the inverter.
+`normal`, `feedin_priority` and `grid_only` HA applies them as the integration's mode-8 loops (table below; `grid_only`
+with export not allowed as mode 8 with the battery at 0 W); in the grid-charge and discharge modes they have no effect on
+the inverter.
 
 Before negative export prices later the same day, PV surplus is fed in while the price is still
 positive (battery charging off, reason `RoomForNegativeExport`) as long as 70 % of the PV surplus
@@ -198,8 +199,10 @@ PVControl only publishes `sensor.pv_control_mode` (state = mode, attributes = ho
 | `force_charge`, `bulk` | Manual Mode + Force Charge (30 A), VPP off |
 | `force_charge` | Self Use + mode 8: PV unlimited, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
 | `force_charge_grid_only` | Self Use + mode 8: PV 0 W, battery charges at `battery_power_w` (the inverter limits it by the SoC) |
-| `grid_only` | Self Use + mode 8: PV unlimited, battery 0 W (held) |
+| `grid_only` | Self Use + the mode-8 loop "Enabled No Discharge": the battery never discharges, a PV surplus charges it (charge limit 100 %, 0 % with charging off), the rest is exported; with export not allowed mode 8 with battery 0 W (PV curtailed to the house) |
 | `force_discharge` | Self Use + mode 8: battery discharges at `battery_power_w` |
+
+**The mode-8 loops need** the inverter's `select.solax_parallel_setting` = `Free` (a single inverter; as `Master` the integration computes them from the parallel system's totals — all 0 here) and the integration's disabled-by-default entity "House Load Alt" enabled (with `Free` a required input; without it the integration stops the loop).
 
 ## Price entities
 

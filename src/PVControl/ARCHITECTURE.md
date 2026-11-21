@@ -286,6 +286,24 @@ subtracted from the house load (`avg_house_load_now` down to −1.2 kW) until th
 
 ---
 
+### grid_only on the inverter: the loop "Enabled No Discharge" (2026-11-20)
+
+grid_only ran as VPP mode 8 with a fixed battery power of 0 W: the inverter then curtailed PV to the house load (live
+2026-11-20 08:15–10:30: PV = load to the watt, grid 0, battery 0) — the model counted the surplus as exported, and a hold
+(the Fixed rules hold at the floor in every quarter) threw away free PV. It runs as the solax-modbus mode-8 loop "Enabled
+No Discharge" now (`HA/ApplyMode.yaml`; with export not allowed still VPP push 0, curtailing is wanted then): the battery
+never discharges, a surplus charges it, the rest is exported; the simulation's grid_only does the same (`Normal` with
+`allowDischarge: false`, the state's charge and export flags) — no plan changed (120 snapshot plans compared: grid_only is
+planned in deficit quarters only). Measured 2026-11-21 08:37–09:00: PV 375–488 W, load 245–326 W, grid 0, battery
++103…+186 W.
+
+Two inverter-side prerequisites, found on the way: the inverter's parallel setting was `Master` (a single inverter) — the
+integration then computes every mode-8 loop from the parallel totals, all 0 here (`[Mode8 No-Discharge] inputs pv=0W
+hl=0W … charge=0W`), so "No Discharge" charged nothing and "Enabled Feedin Priority" never saw a deficit; and with
+`Free` the loop requires the entity "House Load Alt", disabled by default in the integration — without it the
+integration stops the loop ("a required control input is invalid: ['house_load_alt']") and the inverter runs plain Self
+Use (the battery discharged under the floor until the sync gave up after 5 tries).
+
 ### PV forecast correction (`PvForecast/`, shadow; steering)
 
 **Why — the forecast was 2× too high every day of 2026-11-01…09** (Open-Meteo, noted the evening before: 6.0–14.0

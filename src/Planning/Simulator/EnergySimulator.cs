@@ -888,9 +888,8 @@ public static class EnergySimulator
       // Not yet at the cheapest window — hold the battery at the effective floor.
       // Only use grid_only when PV cannot cover house load (pvWh < loadWh): in that case
       // normal mode would discharge the battery below the floor, so grid must cover instead.
-      // When there IS a PV surplus (pvWh >= loadWh), fall through to normal so the battery
-      // can charge from PV — grid_only would block all battery charging and cause PV to be
-      // exported while the battery sits idle until the next grid charge window.
+      // When there IS a PV surplus (pvWh >= loadWh), fall through to normal: the battery charges from PV either way
+      // (grid_only too, since it runs as "Enabled No Discharge"), and normal needs no mode-8 loop.
       // Once holding, release only HoldReleasePct above the floor: at the bare floor the live SoC's 1-% steps
       // switched normal/grid_only every cycle (live 2026-10-30 07:44).
       bool holding = currentMode.Mode == InverterModes.grid_only
@@ -963,9 +962,13 @@ public static class EnergySimulator
       InverterModes.force_discharge
         => ForceDischarge(pvWh, totalLoadWh, availEnergy, minEnergy, maxChargeWh, input),
 
-      // Battery idle (no charge/discharge rate): PV covers load, grid any shortfall, surplus exported
+      // The battery never discharges (the grid covers a deficit); a PV surplus charges it, the rest is exported — the
+      // inverter's mode-8 loop "Enabled No Discharge" (HA/ApplyMode.yaml). Charging off: exported; export not allowed:
+      // VPP with push 0, nothing charged or exported (curtailed). Before 2026-11-20 grid_only ran as VPP push 0 and PV
+      // was curtailed to the house load.
       InverterModes.grid_only
-        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh: 0, minEnergy, input),
+        => Normal(pvWh, totalLoadWh, availEnergy, maxCapacity, maxChargeWh, minEnergy, input,
+             state.BatteryChargeEnable && state.ExportAllowed, state.ExportAllowed, allowDischarge: false),
 
       // PV surplus straight to the grid instead of the battery; the battery still covers a deficit
       InverterModes.feedin_priority
@@ -981,14 +984,15 @@ public static class EnergySimulator
   /// <param name="totalLoadWh">Load, Wh.</param>
   /// <param name="availEnergy">Energy in the battery, Wh.</param>
   /// <param name="maxCapacity">Battery capacity, Wh.</param>
-  /// <param name="maxChargeWh">Charge/discharge limit of the slot, Wh; 0 = battery idle (grid_only).</param>
+  /// <param name="maxChargeWh">Charge/discharge limit of the slot, Wh.</param>
   /// <param name="minEnergy">Floor, Wh.</param>
   /// <param name="batteryChargeEnable">False: surplus is not charged (feedin_priority, waiting for a negative price).</param>
   /// <param name="exportAllowed">False: surplus is curtailed (negative export price).</param>
+  /// <param name="allowDischarge">False: a deficit comes from the grid only (grid_only, the battery held).</param>
   /// <returns>Battery charge, battery discharge, grid import, grid export, Wh.</returns>
   private static (int battChargeWh, int battDischargeWh, int gridImportWh, int gridExportWh) Normal(
     int pvWh, int totalLoadWh, int availEnergy, int maxCapacity, int maxChargeWh, int minEnergy, SimulationInput input,
-    bool batteryChargeEnable = true, bool exportAllowed = true)
+    bool batteryChargeEnable = true, bool exportAllowed = true, bool allowDischarge = true)
   {
     int net = pvWh - totalLoadWh;
     if (net >= 0)
@@ -1001,7 +1005,7 @@ public static class EnergySimulator
     }
     // PV deficit: discharge battery down to the absolute minimum, up to the rate limit; grid covers the rest
     int deficit = -net;
-    int battDischarge = Math.Min(deficit, Math.Min(maxChargeWh, input.DischargeAcForWh(availEnergy - minEnergy)));
+    int battDischarge = allowDischarge ? Math.Min(deficit, Math.Min(maxChargeWh, input.DischargeAcForWh(availEnergy - minEnergy))) : 0;
     return (0, battDischarge, deficit - battDischarge, 0);
   }
 

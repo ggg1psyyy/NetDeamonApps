@@ -41,6 +41,38 @@ public class RunningSlotTests : TestBase
 
   static int SoCAt(SimulationResult sim, DateTime t) => sim.Slots.First(s => s.Time == t).SoC;
 
+  // ── grid_only: the battery never discharges, a PV surplus charges it ─────────────────────────
+
+  [Theory]
+  [InlineData(true, true)]     // the loop "Enabled No Discharge": the surplus into the battery up to its limit, the rest exported
+  [InlineData(false, true)]    // charging off: all exported
+  [InlineData(true, false)]    // export not allowed: VPP push 0, curtailed
+  public void GridOnly_Surplus_LikeTheInverter(bool chargeEnable, bool exportAllowed)
+  {
+    // 2.5 kWh PV, 280 Wh load: more surplus than the battery takes in a quarter (30 A), so the rest shows.
+    var input = Afternoon(new DateTime(2026, 11, 21, 12, 0, 0), 21);
+    int surplus = 2500 - 280, limit = input.MaxChargeWhPerSlot(1);
+    Assert.True(surplus > limit);
+    var state = new InverterState(InverterModes.grid_only, ForceChargeReasons.PreferredMinimum, chargeEnable, exportAllowed);
+    var (c, d, i, e) = EnergySimulator.ComputeEnergyFlows(state, 2500, 280, input.SocToWh(21), input, 0);
+    int charged = chargeEnable && exportAllowed ? limit : 0;
+    Assert.Equal((charged, 0, 0), (c, d, i));
+    Assert.Equal(exportAllowed ? surplus - charged : 0, e);
+    // the DP's own action (BatteryDpPlanner.Flows: new InverterState(grid_only), the default flags) charges like the loop
+    if (chargeEnable && exportAllowed)
+      Assert.Equal((c, e), (EnergySimulator.ComputeEnergyFlows(new InverterState(InverterModes.grid_only), 2500, 280, input.SocToWh(21), input, 0) is var dp ? (dp.battChargeWh, dp.gridExportWh) : default));
+  }
+
+  [Fact]
+  public void GridOnly_Deficit_TheGridCoversIt_TheBatteryHeld()
+  {
+    var input = Afternoon(new DateTime(2026, 11, 21, 12, 0, 0), 60);
+    var (c, d, i, e) = EnergySimulator.ComputeEnergyFlows(new InverterState(InverterModes.grid_only), 200, 900, input.SocToWh(60), input, 0);
+    Assert.Equal((0, 0, 700, 0), (c, d, i, e));
+    // normal in the same quarter discharges
+    Assert.True(EnergySimulator.ComputeEnergyFlows(new InverterState(InverterModes.normal), 200, 900, input.SocToWh(60), input, 0).battDischargeWh > 0);
+  }
+
   // ── Extra loads in the running quarter ───────────────────────────────────────────────────────
 
   [Theory]
