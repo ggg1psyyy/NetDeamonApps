@@ -372,7 +372,7 @@ namespace NetDeamon.apps.PVControl
     private readonly Dictionary<DateTime, int> _actualSoCHistory = new();
     /// <summary>The plan's decision for the running slot last cycle, fed back into the simulation as the previous
     /// slot's mode (hysteresis: a running charge continues, its path stays). Only the plan writes it — the user
-    /// override and the bug-fix kick change what's published (<see cref="ProposedState"/>), not the plan.</summary>
+    /// override and the bug-fix kick change what's published (<see cref="ProposedStateAt"/>), not the plan.</summary>
     private InverterState _planMode = new InverterState(InverterModes.normal, ForceChargeReasons.None, true);
     private SimulationResult? _simulationResult;
 
@@ -409,13 +409,15 @@ namespace NetDeamon.apps.PVControl
     }
 
     /// <summary>One cycle: updates the predictions, simulates, replans warm water and the loads when due, then simulates with all extra loads.</summary>
+    /// <param name="now">The cycle's time — one time per cycle (the inverter command looks its slot up with it,
+    /// <see cref="ProposedStateAt"/>: a simulation started after a quarter boundary under a cycle stamped before it
+    /// lacked that slot and the command fell back to the next one).</param>
     /// <param name="extraLoads">Additional fixed loads; null = none.</param>
-    public void RunSimulation(List<ExtraLoad>? extraLoads = null)
+    public void RunSimulation(DateTime now, List<ExtraLoad>? extraLoads = null)
     {
-      // Update upstream predictions first — all with this one clock read: around midnight a second
+      // Update upstream predictions first — all with this one time: around midnight a second
       // read can be the next day, and the load and PV windows then covered different days
       // (live 2026-10-20 00:00:00: "Could not find SolarForeCast" for every 19.10. slot).
-      var now = DateTime.Now;
       // Check the START of the 48h window, not Today.First().
       // After midnight, Today still returns the second half of yesterday's window (e.g. 03/18 entries
       // from a 03/17–03/18 dataset), so Today.First().Key.Date == now.Date is true and load never
@@ -1376,55 +1378,53 @@ namespace NetDeamon.apps.PVControl
     /// <summary>Inverter command now: the simulation's running slot, or the user override. Neither the override nor
     /// the bug-fix kick below changes the plan's own state (<see cref="_planMode"/>): the simulation always continues
     /// from what it decided itself.</summary>
-    public InverterState ProposedState
+    /// <param name="now">The cycle's time — never the clock again: read a moment later, at a quarter boundary it took the
+    /// next quarter's slot of a plan made for the one before (live 2026-11-22 13:29:59: feedin_priority for 14 s).</param>
+    public InverterState ProposedStateAt(DateTime now)
     {
-      get
+      if (_simulationResult is null || _simulationResult.Slots.Count == 0)
+        return _planMode;
+
+      var planned = SteeredState(now) ?? _planMode;
+
+      // ── User override ──────────────────────────────────────────────────────────────────
+      // Only affects the command sent to the inverter right now.
+      if (OverrideMode != InverterModes.automatic)
+        return new InverterState(OverrideMode, ForceChargeReasons.UserMode);
+
+      // ── No price at all: plain normal, never a plan priced at 0 € (it would charge as if the grid were free) ──
+      planned = WithoutPrices(planned, Prices.HasImportPriceAt(now));
+
+      // ── Battery held for a load from the grid: only while it really draws (live 2026-11-02 06:06) ──
+      planned = LoadSchedulingDecision.LiveLoadHold(planned,
+        SchedulableLoads.Any(l => l.IsDrawingPower && l.ExtraLoads.Any(e => e.FromGrid && e.Covers(now))));
+
+      // ── Inverter bug fix ──────────────────────────────────────────────────────────────
+      // An inverter that fails to switch to the battery in "normal" mode at low house loads
+      // (50–300 W) and draws from the grid instead. This can't be predicted or simulated —
+      // it's detected live by watching the running-average grid power.
+      // After ~1 min of the condition (4 consecutive ticks), briefly force-discharge to
+      // kick the inverter back into battery mode.
+      if (planned.Mode == InverterModes.normal
+          && CurrentAverageGridPower is > 50 and < 300
+          && Battery.BatterySoc > Math.Max(Battery.PreferredMinimalSoC, Battery.AbsoluteMinimalSoC))
       {
-        var now = DateTime.Now;
-        if (_simulationResult is null || _simulationResult.Slots.Count == 0)
-          return _planMode;
-
-        var planned = SteeredState(now) ?? _planMode;
-
-        // ── User override ──────────────────────────────────────────────────────────────────
-        // Only affects the command sent to the inverter right now.
-        if (OverrideMode != InverterModes.automatic)
-          return new InverterState(OverrideMode, ForceChargeReasons.UserMode);
-
-        // ── No price at all: plain normal, never a plan priced at 0 € (it would charge as if the grid were free) ──
-        planned = WithoutPrices(planned, Prices.HasImportPriceAt(now));
-
-        // ── Battery held for a load from the grid: only while it really draws (live 2026-11-02 06:06) ──
-        planned = LoadSchedulingDecision.LiveLoadHold(planned,
-          SchedulableLoads.Any(l => l.IsDrawingPower && l.ExtraLoads.Any(e => e.FromGrid && e.Covers(now))));
-
-        // ── Inverter bug fix ──────────────────────────────────────────────────────────────
-        // An inverter that fails to switch to the battery in "normal" mode at low house loads
-        // (50–300 W) and draws from the grid instead. This can't be predicted or simulated —
-        // it's detected live by watching the running-average grid power.
-        // After ~1 min of the condition (4 consecutive ticks), briefly force-discharge to
-        // kick the inverter back into battery mode.
-        if (planned.Mode == InverterModes.normal
-            && CurrentAverageGridPower is > 50 and < 300
-            && Battery.BatterySoc > Math.Max(Battery.PreferredMinimalSoC, Battery.AbsoluteMinimalSoC))
+        if (_bugFixCounter <= 4)
         {
-          if (_bugFixCounter <= 4)
-          {
-            _bugFixCounter++;
-          }
-          else
-          {
-            _bugFixCounter = 0;
-            return new InverterState(InverterModes.force_discharge, ForceChargeReasons.BugFixMode);
-          }
+          _bugFixCounter++;
         }
         else
         {
           _bugFixCounter = 0;
+          return new InverterState(InverterModes.force_discharge, ForceChargeReasons.BugFixMode);
         }
-
-        return planned;
       }
+      else
+      {
+        _bugFixCounter = 0;
+      }
+
+      return planned;
     }
 
     /// <summary>Base house load (without active schedulable loads), 5-min average, W.</summary>
@@ -1493,7 +1493,7 @@ namespace NetDeamon.apps.PVControl
     public SimulationResult? SimulationState => _simulationResult;
 
     /// <summary>Same as <see cref="RunSimulation"/>.</summary>
-    public void UpdatePredictions() => RunSimulation();
+    public void UpdatePredictions(DateTime now) => RunSimulation(now);
 
     /// <summary>Whether the load prediction's window must be rebuilt for a new day.</summary>
     /// <param name="window">The prediction's 48-h window.</param>

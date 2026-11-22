@@ -126,6 +126,28 @@ public class DpShadowTests : TestBase, IDisposable
   }
 
   [Fact]
+  public async Task Steering_ANewQuarter_DueAtOnceOnce()
+  {
+    // The steering keeps the running mode until the DP has planned the new quarter (DpSteering.KeepRunningUntilReplanned):
+    // due in the new quarter's first cycle, not a minute later; once per quarter.
+    var shadow = new DpShadow(new DpShadowConfig { IntervalMinutes = 5 }, _db);
+    var before = Day.AddHours(22).AddMinutes(14).AddSeconds(50);
+    await shadow.RunAsync(EnergySimulator.Simulate(Input(before, 29)), before);
+    Assert.False(shadow.Due(before.AddSeconds(5), steering: true));                  // same quarter, interval not passed
+    Assert.True(shadow.Due(before.AddSeconds(15), steering: true));                  // 22:15:05: the plan is from 22:00
+    Assert.False(shadow.Due(before.AddSeconds(15), steering: false));                // only while it steers
+    var after = before.AddSeconds(15);
+    await shadow.RunAsync(EnergySimulator.Simulate(Input(after, 29)), after);
+    Assert.False(shadow.Due(after.AddSeconds(15), steering: true));                  // planned this quarter
+    // a run in the new quarter whose plan is still from the quarter before (its simulation started before the
+    // boundary): not retried every cycle — once per quarter
+    var stale = new DpShadow(new DpShadowConfig { IntervalMinutes = 5 }, _db);
+    await stale.RunAsync(EnergySimulator.Simulate(Input(before, 29)), after);
+    Assert.True(DpShadow.PlanFromAnEarlierQuarter(stale.LastPlan, after.AddSeconds(15)));
+    Assert.False(stale.Due(after.AddSeconds(15), steering: true));
+  }
+
+  [Fact]
   public async Task RequestRun_DueAtOnce_ClearedByTheRun()
   {
     // A user change asks for a run: due before the interval has passed, cleared when the run starts.

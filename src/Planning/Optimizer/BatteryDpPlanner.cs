@@ -537,6 +537,11 @@ public static class BatteryDpPlanner
     return (float)(v[lo] * (1 - w) + v[hi] * w);
   }
 
+  /// <summary>The modes the running quarter's keep-mode hysteresis keeps (<see cref="DpOptions.KeepModeEur"/>; also
+  /// <see cref="DpSteering.KeepRunningUntilReplanned"/>).</summary>
+  /// <param name="mode">A mode.</param>
+  internal static bool KeepsMode(InverterModes mode) => mode is InverterModes.normal or InverterModes.feedin_priority or InverterModes.grid_only;
+
   /// <summary>
   /// The current quarter's action at the exact energy now: the best one, except that the mode running now (normal,
   /// feedin_priority, grid_only) stays while the best is cheaper by no more than <see cref="DpOptions.KeepModeEur"/> — a
@@ -546,7 +551,7 @@ public static class BatteryDpPlanner
     int energy, double fraction, Func<Action, int, float> restValue)
   {
     var current = input.CurrentMode.Mode;
-    if (current is not (InverterModes.normal or InverterModes.feedin_priority or InverterModes.grid_only) || planned.Mode == current)
+    if (!KeepsMode(current) || planned.Mode == current)
       return planned;
     var keep = new Action(current, false, 0);
     bool held = input.BatteryHeldForLoad(time, pv, totalLoad);

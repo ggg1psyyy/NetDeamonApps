@@ -87,12 +87,23 @@ namespace NetDeamon.apps.PVControl.Optimizer
     /// <summary>A run was asked for (<see cref="RequestRun"/>) and hasn't started yet.</summary>
     public bool RunRequested => Volatile.Read(ref _requested) == 1;
 
-    /// <summary>Whether a run is due: asked for (<see cref="RequestRun"/>) or the interval passed (every minute while the DP
-    /// steers), and none is running.</summary>
+    /// <summary>Whether a run is due: asked for (<see cref="RequestRun"/>), the interval passed (every minute while the DP
+    /// steers), or — while it steers — its plan is from an earlier quarter (<see cref="PlanFromAnEarlierQuarter"/>) and the
+    /// last run started in an earlier quarter too (once per quarter: a failed run isn't retried every cycle); and none is
+    /// running.</summary>
     /// <param name="now">Current time.</param>
     /// <param name="steering">The DP plan is selected to steer.</param>
     public bool Due(DateTime now, bool steering = false) => config.Enabled && Volatile.Read(ref _running) == 0
-      && (RunRequested || now - _lastRun >= TimeSpan.FromMinutes(steering ? SteeringIntervalMinutes : config.IntervalMinutes));
+      && (RunRequested || now - _lastRun >= TimeSpan.FromMinutes(steering ? SteeringIntervalMinutes : config.IntervalMinutes)
+          || steering && PlanFromAnEarlierQuarter(LastPlan, now) && _lastRun.RoundToNearestQuarterHour() < now.RoundToNearestQuarterHour());
+
+    /// <summary>Whether the plan's running quarter lies before now's — the steering keeps the running mode until the DP has
+    /// planned the new quarter (<see cref="DpSteering.KeepRunningUntilReplanned"/>), so it runs at once, not up to a
+    /// minute later.</summary>
+    /// <param name="plan">The last plan; null: none.</param>
+    /// <param name="now">Current time.</param>
+    public static bool PlanFromAnEarlierQuarter(DpPlan? plan, DateTime now) =>
+      plan is { Slots.Count: > 0 } p && p.Slots[0].Time < now.RoundToNearestQuarterHour();
 
     /// <summary>Runs the DP in the background on the greedy run's input and compares; logs the quarter's row.</summary>
     /// <param name="greedy">The greedy simulation of this cycle.</param>

@@ -303,8 +303,8 @@ namespace NetDeamon.apps.PVControl
 #endif
 
 #if DEBUG
-      var x = _house.ProposedState;
-      _house.UpdatePredictions();
+      var x = _house.ProposedStateAt(DateTime.Now);
+      _house.UpdatePredictions(DateTime.Now);
 #endif
     }
     /// <summary>Applies a change of a PVControl control entity (mode, SoC limits, load settings, …) and requests a replan.</summary>
@@ -1366,7 +1366,7 @@ namespace NetDeamon.apps.PVControl
       // Includes the day rollover of the load prediction after midnight (HouseEnergy.RunSimulation).
       _house.LoadMargin = LoadModel.NightForecastTracker.LoadMargin(_nightTracker.Nights) ?? PVCC_Config.LoadMarginPct / 100;
       await WaitForFirstPvSteeringAsync(now);
-      _house.UpdatePredictions();
+      _house.UpdatePredictions(now);
       PVCC_Logger.LogTrace("Finished Updating Predictions");
       // The plan that steers: the DP's while selected and fresh, else the greedy simulation's (the command chain is the same).
       await WaitForFirstDpPlanAsync(now);
@@ -1390,7 +1390,7 @@ namespace NetDeamon.apps.PVControl
       // update Grid Values for Inverter Check, as it won't update if it stays the same
       if (PVCC_Config.CurrentGridPowerEntity.TryGetStateValue(out int grid))
         _house.AddAverageGridPowerValue(grid);
-      var inverterState = InverterCommand.HoldMinimumRun(_house.ProposedState, _publishedState, _publishedStateSince, now);
+      var inverterState = InverterCommand.HoldMinimumRun(_house.ProposedStateAt(now), _publishedState, _publishedStateSince, now);
       if (inverterState.Mode != _publishedState.Mode)
         _publishedStateSince = now;
       _publishedState = inverterState;

@@ -88,6 +88,53 @@ public class DpSteeringTests : TestBase
     Assert.False(stale);
   }
 
+  static List<SimulationSlot> Timeline(DateTime from, params InverterModes[] modes) =>
+    modes.Select((m, i) => new SimulationSlot(from.AddMinutes(15 * i), 22, new InverterState(m), 0, 0, 0, 0, 0, 0, 0)).ToList();
+
+  [Fact]
+  public void KeepRunningUntilReplanned_APlanFromTheQuarterBefore_KeepsTheRunningModeInTheNewQuarter()
+  {
+    // Live 2026-11-22 13:30: the plan of 13:29 had 13:30 as a future quarter (feedin_priority at a near-tie, no keep-mode
+    // hysteresis); the first cycle of 13:30 steered by it — 14 s of feedin_priority until the fresh plan said normal.
+    var q = new DateTime(2026, 11, 22, 13, 30, 0);
+    var plan = Timeline(q.AddMinutes(-15), InverterModes.normal, InverterModes.feedin_priority, InverterModes.normal);
+    var running = new InverterState(InverterModes.normal);
+    var kept = DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(1), running);   // the plan's running quarter: 13:15
+    Assert.Equal(InverterModes.normal, kept.Single(s => s.Time == q).State.Mode);
+    Assert.Equal(InverterModes.feedin_priority, plan.Single(s => s.Time == q).State.Mode);   // the plan itself untouched
+    // at most a minute into the quarter: a DP run that failed or is slow doesn't freeze the running mode
+    Assert.Equal(InverterModes.normal, DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(59), running).Single(s => s.Time == q).State.Mode);
+    Assert.Same(plan, DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(61), running));
+    // a plan of this quarter steers as it is (the fresh plan's change follows once)
+    Assert.Same(plan, DpSteering.KeepRunningUntilReplanned(plan, q, q.AddSeconds(15), running));
+    // no running mode known (after a start): as it is
+    Assert.Same(plan, DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(1), null));
+    // the running quarter already in the running mode: nothing to change
+    Assert.Same(plan, DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(1), new InverterState(InverterModes.feedin_priority)));
+    // only the modes the hysteresis keeps: a planned charge starts at the boundary, a running charge ends as planned
+    var charge = Timeline(q.AddMinutes(-15), InverterModes.normal, InverterModes.force_charge);
+    Assert.Same(charge, DpSteering.KeepRunningUntilReplanned(charge, q.AddMinutes(-15), q.AddSeconds(1), running));
+    Assert.Same(plan, DpSteering.KeepRunningUntilReplanned(plan, q.AddMinutes(-15), q.AddSeconds(1), new InverterState(InverterModes.force_charge)));
+    // the DP is due at once while its plan is from an earlier quarter (not up to a minute later)
+    var dp = new NetDeamon.apps.PVControl.Optimizer.DpPlan([new(q.AddMinutes(-15), 22, InverterModes.normal, false, 0, 0, 0, 0, 0)], new(0, 0, 0, 0), 22, null!, 0);
+    Assert.True(NetDeamon.apps.PVControl.Optimizer.DpShadow.PlanFromAnEarlierQuarter(dp, q.AddSeconds(1)));
+    Assert.False(NetDeamon.apps.PVControl.Optimizer.DpShadow.PlanFromAnEarlierQuarter(dp, q.AddSeconds(-1)));
+  }
+
+  [Fact]
+  public void Choose_APlanFromTheQuarterBefore_TheRunningModeStaysInTheNewQuarter()
+  {
+    var input = Input();
+    var plan = BatteryDpPlanner.Plan(input);
+    var greedy = EnergySimulator.Simulate(input);
+    var next = Day.AddHours(22).AddMinutes(15);   // the quarter after the plan's
+    var planned = DpSteering.ToTimeline(plan, greedy).First(s => s.Time == next).State.Mode;
+    var other = planned == InverterModes.normal ? InverterModes.grid_only : InverterModes.normal;
+    var (timeline, effective, _) = DpSteering.Choose(Planner.dp, plan, next.AddSeconds(1), next.AddSeconds(2), greedy, new InverterState(other));   // computed after the boundary, planned before it
+    Assert.Equal(Planner.dp, effective);
+    Assert.Equal(other, timeline!.First(s => s.Time == next).State.Mode);
+  }
+
   [Fact]
   public void Choose_DpSelectedAndFresh_DpSteers()
   {

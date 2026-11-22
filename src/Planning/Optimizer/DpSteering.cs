@@ -188,6 +188,38 @@ public static class DpSteering
     if (selected != Planner.dp) return (null, Planner.greedy, false);
     if (plan is null || greedy is null || computedAt is not { } at || now - at > MaxPlanAge)
       return (null, Planner.greedy, true);
-    return (ToTimeline(plan, greedy, running), Planner.dp, false);
+    var timeline = ToTimeline(plan, greedy, running);
+    return (KeepRunningUntilReplanned(timeline, plan.Slots[0].Time, now, running), Planner.dp, false);
   }
+
+  /// <summary>
+  /// A plan computed in an earlier quarter planned the running quarter as a future one — freely, without the keep-mode
+  /// hysteresis that only the running quarter gets (<c>DpOptions.KeepModeEur</c>): until the DP has planned this quarter
+  /// (its next run, ≤ a cycle or so) the running mode stays in it (live 2026-11-22 13:30: normal → feedin_priority for
+  /// 14 s on the old plan's slot at a near-tie, back to normal with the fresh plan). A real change follows once, with the
+  /// fresh plan (the DP is due at once then, <c>DpShadow.Due</c>). Only between the modes the hysteresis keeps (normal,
+  /// feedin_priority, grid_only): a charge planned at the boundary starts, a running one ends, as planned.
+  /// </summary>
+  /// <param name="timeline">The DP timeline.</param>
+  /// <param name="planStart">The plan's first slot — its running quarter (not when it was computed: a run started just
+  /// before the boundary and finished after it still planned the new quarter as a future one).</param>
+  /// <param name="now">The cycle's time.</param>
+  /// <param name="running">The mode running now; null: none known (the timeline as it is).</param>
+  /// <returns>The timeline, its running quarter in the running mode when the plan is from an earlier quarter.</returns>
+  public static List<SimulationSlot> KeepRunningUntilReplanned(List<SimulationSlot> timeline, DateTime planStart, DateTime now, InverterState? running)
+  {
+    var quarter = now.RoundToNearestQuarterHour();
+    if (running is not { } keep || planStart.RoundToNearestQuarterHour() >= quarter || !BatteryDpPlanner.KeepsMode(keep.Mode)
+        || now - quarter > KeepAtBoundary)
+      return timeline;
+    int i = timeline.FindIndex(s => s.Time == quarter);
+    if (i < 0 || timeline[i].State.Mode == keep.Mode || !BatteryDpPlanner.KeepsMode(timeline[i].State.Mode)) return timeline;
+    var result = new List<SimulationSlot>(timeline);
+    result[i] = result[i] with { State = keep };
+    return result;
+  }
+
+  /// <summary>How long into a quarter the running mode waits for the DP's plan of it; after that (a DP run failed or is
+  /// slow) the plan steers as it is, not the running mode frozen until the plan is stale.</summary>
+  public static readonly TimeSpan KeepAtBoundary = TimeSpan.FromMinutes(1);
 }

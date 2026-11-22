@@ -3,7 +3,7 @@
 ## Big picture
 
 Every **15 seconds** (cron `*/15 * * * * *`), `PVControl.cs` runs `ScheduledOperations()`,
-which calls `RunSimulation()` in `HouseEnergy.cs`, then reads `ProposedState` and sends the
+which calls `RunSimulation()` in `HouseEnergy.cs`, then reads `ProposedStateAt(now)` and sends the
 resulting inverter command to the Solax inverter via MQTT.
 The 15-second cadence keeps inverter commands responsive, but the simulation is expensive
 (multiple `PVSimulator.Simulate()` calls). Caching to avoid redundant recalculations within
@@ -19,7 +19,7 @@ the same 15-minute slot is a known future improvement.
                                             SimulationResult
                                          (slots + pre-computed derived values)
                                                    │
-                                        ProposedState  ──► Inverter command
+                                        ProposedStateAt ─► Inverter command
                                         ChargeNow      ──► Schedulable load outputs
 ```
 
@@ -402,7 +402,7 @@ A day is scored from DataLogger's whole hourly table (~19k rows, read like the l
        cheap quarters — review 2026-10-28; with one EV it changes nothing)
 
 6. _simulationResult = the last baseline (the base with every load)
-   → this is what ProposedState reads from
+   → this is what ProposedStateAt reads from
    → its running slot's state is the plan's own previous mode for the next cycle
    → also used to update Prediction_BatterySoC
 ```
@@ -410,7 +410,7 @@ A day is scored from DataLogger's whole hourly table (~19k rows, read like the l
 **The plan's state is its own.** The simulation gets the previous slot's mode (`CurrentMode`) for
 hysteresis — a running charge continues to its target, its path stays, the margin rules differ
 while charging. That mode is what the plan decided last cycle (`_planMode`), never what was
-published: the user override and the bug-fix kick only change `ProposedState`'s result. Before
+published: the user override and the bug-fix kick only change `ProposedStateAt`'s result. Before
 the review 2026-10-28 one field served both, so under an override `force_charge` the next
 simulation started as if it had chosen that charge (slot 0 with the continue rules and `Bulk`
 copied from the override) and the dashboard's plan drifted from the autonomous one.
@@ -1275,6 +1275,17 @@ starting now was shortened twice (6 minutes of the EV counted as 2.4). One helpe
 both. The load search takes the plan's time (`baseInput.StartTime`), not the clock again: a session it starts "now" must not start a few ms after the plan does, or it doesn't count as running in exactly the cycles the search runs. The live PV correction can still move the running quarter's PV across the line within the quarter (a cloud): a
 single switch, not a flip-flop.
 
+**A new quarter keeps the running mode until the DP has planned it (2026-11-22).** 13:30:01–13:30:15 feedin_priority
+between two normal quarters, nothing else changing: the DP runs in the background after the cycle, about once a minute,
+so the first cycle of a quarter steers by a plan computed in the quarter before — where the new quarter was a future one,
+planned freely (feedin_priority a fraction of a cent ahead of normal at PV ≈ load), without the keep-mode hysteresis
+only the running quarter gets — and the command's slot was looked up with a second clock read (`ProposedState`, now
+`ProposedStateAt(now)` with the cycle's time): the cycle of 13:29:59 took 13:30's slot. The fresh plan, 14 s later, kept
+normal. Now the running quarter keeps the running mode while the plan's running quarter (its first slot — not when it
+was computed) is an earlier one (`DpSteering.KeepRunningUntilReplanned`), only between normal, feedin_priority and
+grid_only (a charge starts and ends as planned), and the DP is due at once then (`DpShadow.PlanFromAnEarlierQuarter`):
+the keep lasts until the next cycle's plan, not up to a minute. With one time per cycle a cycle stamped just before a boundary (13:29:59) stays in the quarter before, so any planned change at a boundary — a charge too — can come one cycle (~15 s) later; the keep adds at most another cycle for normal/feedin_priority/grid_only — and at most a minute into the quarter (`KeepAtBoundary`: a failed DP run doesn't freeze the mode). One time per cycle: the simulation takes the cycle's time too (`RunSimulation(now)`) — started after a boundary under a cycle stamped before it, it lacked the cycle's slot and `SteeredState` fell back to its first slot, the next quarter's.
+
 **The phantom floor penalty (2026-11-21).** On the 17th a plan's floor penalty (0.156 €, 3 ct a quarter) looked like
 harmless rounding; at 10:30 on the 21st one carried 0.625 €, and the 17th's 18:00 snapshot replayed before this fix
 2.16 €. The forward pass takes each later quarter's action from the nearest DP state:
@@ -1478,7 +1489,7 @@ the forecast to the last %, so its value has to show over weeks of real days. Ch
 
 From 2026-10-31 the DP plan can steer (the user preferred its plans to the greedy ones after a day of the shadow,
 before the planned evaluation). The command chain derives everything from one list of slots — the current quarter
-(`HouseEnergy.ProposedState`) and the next grid charge (`InverterCommand.NextCharge`) — so the DP plan is handed over as
+(`HouseEnergy.ProposedStateAt`) and the next grid charge (`InverterCommand.NextCharge`) — so the DP plan is handed over as
 such slots (`DpSteering.ToTimeline`) and override, minimum run, import cap guard, bulk/VPP path and
 the HA reconciler stay exactly as they are. The greedy simulation keeps running every cycle: the EV and warm-water
 planning, the predicted-SoC sensor and the comparison need it, and it is the fallback — a DP plan older than 10 min
