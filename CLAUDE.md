@@ -20,15 +20,22 @@ dotnet build                          # Debug build
 dotnet build -c Release               # Release build
 dotnet publish src/Host -c Release    # Publish host + plugins (src/Host/bin/Release/net10.0/publish)
 python deploy/deploy.py apps          # Publish, copy to the add-on, restart, verify (deploy/README.md)
-dotnet test                          # Run all unit tests (from repo root; one project: dotnet test tests/PVControl.Tests)
+dotnet test                          # Run all unit tests (not on a small machine, see below; one project: dotnet test tests/PVControl.Tests)
 ```
 
-**Running all tests on a small machine (≤ 4 GB RAM): one project at a time, 2 xUnit threads** — a plain `dotnet test`
-runs every test project in parallel (the DP scenario tests on live snapshots are heavy) and ran the dev container out of
-memory twice (OOM kills, the container hung):
+**Running all tests on a small machine (≤ 4 GB RAM): build once without resident build servers, then one project at
+a time with `--no-build`, 1 xUnit thread for the big ones** — a plain `dotnet test` runs every test project in parallel
+(the DP scenario tests on live snapshots are heavy) and ran the dev container out of memory (OOM kills); the container
+hung once more with the one-project loop (the cause wasn't logged — other processes held ~2.5 GB, and the
+compiler/MSBuild servers stay resident across runs, which this procedure stops). Check the free memory first
+(`free -m`: about 2 GB available, or swap configured). `--no-build` tests what was built last — build again after
+changing a source file (also for a "fails on the old code" check):
 
 ```bash
-for p in tests/*.Tests; do echo "== $p"; timeout 900 dotnet test $p -m:1 -- xUnit.MaxParallelThreads=2 2>&1 | grep -E " error |Failed |Passed!|Failed!"; done
+dotnet build-server shutdown
+dotnet build NetDeamon.sln -m:1 -nodeReuse:false -p:UseSharedCompilation=false
+dotnet build-server shutdown
+for p in tests/*.Tests; do t=2; case $p in *PVControl*|*Planning*) t=1;; esac; echo "== $p"; r=$(timeout 900 dotnet test $p --no-build -m:1 -- xUnit.MaxParallelThreads=$t 2>&1 | grep -E " error |Failed |Passed!|Failed!"); echo "${r:-NO RESULT}"; done
 ```
 
 One test project per project lives at `tests/<Project>.Tests/` (shared settings in `tests/Tests.props`, all in `NetDeamon.sln`). Most testing is done against a live Home Assistant instance. To run locally, set `ASPNETCORE_ENVIRONMENT=Development` and configure `src/Host/appsettings.json` with valid HA host/token.
