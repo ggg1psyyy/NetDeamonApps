@@ -148,6 +148,71 @@ public class WarmWaterPlannerTests : TestBase
     Assert.Equal(Start, running.Runs.First().Start);
   }
 
+  // ── The control's minimum off time (MinOffQuarters, NoStartBefore) ─────────────────────────
+
+  [Theory]
+  [InlineData(31.2)]
+  [InlineData(38)]
+  [InlineData(44)]
+  public void OffTime_RunsAreNeverCloserThanAnHour(double temp)
+  {
+    // Live 2026-11-23 16:45: the plan split one heating into 16:45 → 37.7 °C and 17:15 → 45.3 °C; the heat pump stopped
+    // at 38 °C, the control refused the second start for an hour (MinOffTime) and the 17:30 comfort was missed.
+    var prices = new Func<DateTime, float>[] { _ => 0.30f, t => t.Hour is 12 or 13 ? 0.10f : 0.40f,
+      t => t >= Start.AddMinutes(30) && t < Start.AddMinutes(45) ? 0.90f : 0.20f };   // one dear quarter mid-heating
+    var comforts = new[] { EveningWindow, new List<ComfortWindow>([new(Start.AddHours(1), Start.AddHours(3), 43), new(Evening, Evening.AddHours(1), 46)]) };
+    foreach (var price in prices)
+      foreach (var comfort in comforts)
+      {
+        var plan = WarmWaterPlanner.Plan(Request(temp, price, comfort) with { StartHysteresisK = H, MinOffQuarters = 4 });
+        for (int i = 1; i < plan.Runs.Count; i++)
+          Assert.True(plan.Runs[i].Start - plan.Runs[i - 1].End >= TimeSpan.FromMinutes(60) - TimeSpan.FromSeconds(1),
+            $"{plan.Runs[i - 1].Start:HH:mm}–{plan.Runs[i - 1].End:HH:mm} then {plan.Runs[i].Start:HH:mm}");
+      }
+  }
+
+  [Fact]
+  public void OffTime_ADearQuarterMidHeating_NoSplitAroundIt()
+  {
+    // One quarter much dearer while the window from 11:00 needs heating: without the off time the plan heats around it
+    // (10:00–10:26, then 10:45 again — the shape of 2026-11-23); with it the runs are at least an hour apart.
+    static float Price(DateTime t) => t >= Start.AddMinutes(30) && t < Start.AddMinutes(45) ? 0.90f : 0.20f;
+    var window = new List<ComfortWindow>([new(Start.AddHours(1), Start.AddHours(3), 43), new(Evening, Evening.AddHours(1), 46)]);
+    var free = WarmWaterPlanner.Plan(Request(31.2, Price, window) with { StartHysteresisK = H });
+    var kept = WarmWaterPlanner.Plan(Request(31.2, Price, window) with { StartHysteresisK = H, MinOffQuarters = 4 });
+    Assert.Contains(free.Runs.Zip(free.Runs.Skip(1)), p => p.Second.Start - p.First.End < TimeSpan.FromMinutes(60));   // it splits
+    Assert.All(kept.Runs.Zip(kept.Runs.Skip(1)), p => Assert.True(p.Second.Start - p.First.End >= TimeSpan.FromMinutes(60)));
+    Assert.Equal(0, kept.ComfortDeficitK);
+    Assert.True(kept.Runs[0].TargetTemp >= 43, $"{kept.Runs[0].TargetTemp:F1}");   // the first run's setpoint covers the window
+  }
+
+  [Fact]
+  public void OffTime_ARunningHeatingThatEnds_CountsAsAStop()
+  {
+    // A heating already running with too low a setpoint (live 2026-11-23 16:52: 38 °C, the window at 17:30 wanted 43):
+    // it's planned to its setpoint, then the off time — no new run within the hour; the deficit is shown.
+    var window = new List<ComfortWindow>([new(Start.AddMinutes(30), Start.AddHours(2.5), 43)]);
+    var plan = WarmWaterPlanner.Plan(Request(33, _ => 0.30f, window, forced: 38) with
+      { StartHysteresisK = H, MinOffQuarters = 4, HeatingNow = true });
+    var first = plan.Runs[0];
+    Assert.Equal(Start, first.Start);
+    Assert.True(first.TargetTemp <= 38 + WarmWaterPlanner.Resolution);
+    Assert.All(plan.Runs.Skip(1), r => Assert.True(r.Start - first.End >= TimeSpan.FromMinutes(60), $"{r.Start:HH:mm}"));
+    Assert.True(plan.ComfortDeficitK > 0);
+  }
+
+  [Fact]
+  public void OffTime_TheLastRealStop_NoStartBeforeItsEnd()
+  {
+    // Live 2026-11-23 17:19: the heating stopped at 38 °C — no start before 18:19, the plan knows it.
+    var stop = Start.AddMinutes(-5);
+    var plan = WarmWaterPlanner.Plan(Request(38, _ => 0.30f, [new(Start.AddMinutes(15), Start.AddHours(2), 43)])
+      with { StartHysteresisK = H, MinOffQuarters = 4, NoStartBefore = stop.AddMinutes(60) });
+    // the quarter the off time ends in may start (the control holds the exact minute); none before
+    Assert.All(plan.Runs, r => Assert.True(r.Start + TimeSpan.FromMinutes(15) > stop.AddMinutes(60), $"{r.Start:HH:mm}"));
+    Assert.True(plan.ComfortDeficitK > 0);   // the window can't be met in time — shown, not hidden
+  }
+
   [Fact]
   public void RunInProgress_ContinuesToItsTarget()
   {

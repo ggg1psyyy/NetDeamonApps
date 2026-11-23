@@ -749,6 +749,12 @@ the heat pump stops heating at the setpoint, but the switch stays on until switc
   runs: the same morning a setpoint of 54 °C at 47.5 °C (6.5 K) heated within 7 minutes — it is the gap to the tank
   that counts, not to the last run. The tank then gets a few K more than the boost asked for; waiting hours for the
   boost was the worse choice.
+- **The off time in the plan (2026-11-23).** Evening comfort from 17:30: between 16:00 and 16:45 the plan alternated each
+  replan between one run (16:45 → 45.4 °C) and two back to back (16:45 → 37.7 °C, 17:15 → 45.3 °C); the 16:45 start
+  caught the split one, the heat pump stopped at its 38 °C setpoint at 17:19, the control refused the second run for its
+  60-min off time (`MinOffTime`, unknown to the planner) and the comfort was missed until ~18:40. The DP now counts the
+  complete off quarters since a stop in its state (no start before `MinOffQuarters` = 4; a stop within a quarter leaves it
+  incomplete) and takes the last real stop (`NoStartBefore`: no quarter that ends before the off time does — the control starts at the exact minute); without it a test scenario split 10:00–10:26 / 10:45. Open: a heating already running with too low a setpoint (the comfort changed mid-run, a restart, armed by hand) is planned to its setpoint and then waits the off time — the plan shows the deficit; extending it would mean taking a running heating's setpoint as a minimum, not as the target.
   Each state keeps its path's exact temperature, so bucket rounding never accumulates. A run that
   can't be stopped is first heated to its target (`ForcedTarget`, see below). Heating early only wins
   when the price difference beats the extra standby loss at the higher temperature.

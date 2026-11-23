@@ -43,6 +43,9 @@ public sealed record WarmWaterPlan(IReadOnlyList<PlannedRun> Runs, IReadOnlyList
 /// its setpoint (<see cref="WarmWaterConfig.OneTimeHysteresisK"/>): a planned run rises at least this much, and a forced
 /// target that isn't heating yet waits until the tank has cooled to it minus this. 0 = starts at once.</param>
 /// <param name="HeatingNow">The heat pump heats warm water now (a forced target then continues without waiting).</param>
+/// <param name="MinOffQuarters">After a run stops, this many whole quarters without heating before the next start (the
+/// control's <see cref="WarmWaterControl.MinOffTime"/>: 4); 0 = none.</param>
+/// <param name="NoStartBefore">No start before this time (the last real stop plus the off time); null = none.</param>
 public sealed record PlanRequest(
   DateTime Now,
   double StartTemp,
@@ -54,7 +57,9 @@ public sealed record PlanRequest(
   double? ForcedTarget = null,
   float RunStartCostEur = 0.02f,
   double StartHysteresisK = 0,
-  bool HeatingNow = false);
+  bool HeatingNow = false,
+  int MinOffQuarters = 0,
+  DateTime? NoStartBefore = null);
 
 /// <summary>
 /// Plans warm-water heating at the lowest cost that keeps the comfort windows warm: a dynamic
@@ -144,46 +149,62 @@ public static class WarmWaterPlanner
     bool heating = first > 0 && actions[first - 1] >= 1 - 1e-9;
 
     int buckets = Bucket(r.MaxTemp) + 2;
-    // State = (temperature bucket, phase): 0 off, 1 heating and free to stop, 2 heating that may not stop yet — a run
-    // must rise at least StartHysteresisK above its start (the heat pump doesn't start a smaller one). Each state keeps the
-    // cheapest path reaching it, that path's exact temperature and, in phase 2, its run's start temperature; a path that
-    // may stop is never displaced by one that may not (separate phases). A run already going (forced) is free.
+    // State = (temperature bucket, phase): 0 off and free to start, 1 heating and free to stop, 2 heating that may not
+    // stop yet — a run must rise at least StartHysteresisK above its start (the heat pump doesn't start a smaller one) —,
+    // and 3 … 3+gap−1 off since a stop for 0 … gap−1 complete quarters: no start before MinOffQuarters off-quarters
+    // (the control's minimum off time, WarmWaterControl.MinOffTime — live 2026-11-23 16:45: the plan split one heating
+    // into 16:45 → 37.7 °C and 17:15 → 45.3 °C, the heat pump stopped at 38 °C, the second run was refused for an hour
+    // and the 17:30 comfort missed). A stop within a quarter (heated part of it) leaves that quarter incomplete. Each
+    // state keeps the cheapest path reaching it, that path's exact temperature and, in phase 2, its run's start
+    // temperature; a path that may stop or start is never displaced by one that may not (separate phases).
     double h = Math.Max(0, r.StartHysteresisK);
+    int gap = Math.Max(0, r.MinOffQuarters);
+    int phases = 3 + gap;
     bool CanStop(double t, double runStart) => t >= runStart + h - 1e-9 || t >= r.MaxTemp - Resolution / 2;
     int Idx(int bucket, int phase) => Math.Min(bucket, buckets - 1) + phase * buckets;
-    var cost = new double[3 * buckets];
-    var exact = new double[3 * buckets];
-    var runStart = new double[3 * buckets];
+    int OffPhase(int completeQuarters) => completeQuarters >= gap ? 0 : 3 + completeQuarters;
+    var cost = new double[phases * buckets];
+    var exact = new double[phases * buckets];
+    var runStart = new double[phases * buckets];
     var back = new int[n][];
     var level = new byte[n][];
     Array.Fill(cost, double.PositiveInfinity);
-    int s0 = Idx(Bucket(temp), heating ? 1 : 0);
+    // Where the plan starts: a heating that runs on (forced, free to stop), a forced run that just ended (a stop: the
+    // off time counts from it), otherwise off — free, unless the last real stop was less than the off time ago.
+    bool forcedEnded = first > 0 && !heating;
+    int phase0 = heating ? 1 : forcedEnded ? OffPhase(0) : 0;
+    int s0 = Idx(Bucket(temp), phase0);
     cost[s0] = 0;
     exact[s0] = temp;
 
     for (int i = first; i < n; i++)
     {
-      var nextCost = new double[3 * buckets];
-      var nextExact = new double[3 * buckets];
-      var nextRunStart = new double[3 * buckets];
-      var prev = back[i] = new int[3 * buckets];
-      var lvl = level[i] = new byte[3 * buckets];
+      var nextCost = new double[phases * buckets];
+      var nextExact = new double[phases * buckets];
+      var nextRunStart = new double[phases * buckets];
+      var prev = back[i] = new int[phases * buckets];
+      var lvl = level[i] = new byte[phases * buckets];
       Array.Fill(nextCost, double.PositiveInfinity);
       var slotTime = SlotStart(r, i);
       double hours = SlotHours(r, i);
+      // the last real stop's off time: quarters that end before it (the one it ends in may start — the control holds
+      // the exact minute, the plan's start isn't a quarter later)
+      bool startBlocked = r.NoStartBefore is { } nsb && r.Slots[i] + TimeRange.Slot <= nsb;
 
       for (int s = 0; s < cost.Length; s++)
       {
         if (double.IsPositiveInfinity(cost[s])) continue;
         double t = exact[s];
         int phase = s / buckets;
-        bool wasHeating = phase > 0;
+        bool wasHeating = phase is 1 or 2;
+        int offQuarters = phase >= 3 ? phase - 3 : -1;   // complete off quarters since a stop; -1: free (or heating)
         double baseCost = cost[s] + Penalty(r.Comfort, slotTime, t);
         for (int a = 0; a <= HeatLevels; a++)
         {
           bool heat = a > 0;
           if (!heat && phase == 2 && !CanStop(t, runStart[s])) continue;   // a run too small to stop
           if (heat && t >= r.MaxTemp - Resolution / 2) break;
+          if (heat && !wasHeating && (offQuarters >= 0 || startBlocked)) break;   // within the off time: no start
           if (heat && !wasHeating && t > r.MaxTemp - h + 1e-9) break;      // no target the hysteresis lets start
           double next = Step(r, i, t, (double)a / HeatLevels, out double heatCost, out double heated, out _);
           double rs = !heat ? 0 : wasHeating && phase == 2 ? runStart[s] : wasHeating ? double.NegativeInfinity : t;
@@ -191,7 +212,12 @@ public static class WarmWaterPlanner
           // stopped within it is over, and heating again is a new start.
           bool running = heated >= hours - 1e-9;
           if (heat && !running && !CanStop(next, rs)) continue;           // stopping within the slot below the rise
-          int nextPhase = !heat || !running ? 0 : CanStop(next, rs) ? 1 : 2;
+          int nextPhase =
+            heat && running ? (CanStop(next, rs) ? 1 : 2)
+            : heat ? OffPhase(0)                                         // stopped within this quarter: incomplete
+            : wasHeating ? OffPhase(1)                                   // stopped at its start: one whole quarter off
+            : offQuarters >= 0 ? OffPhase(offQuarters + 1)
+            : 0;
           double c = baseCost + heatCost + (heat && !wasHeating ? r.RunStartCostEur : 0);
           int ns = Idx(Bucket(next), nextPhase);
           if (c < nextCost[ns] - 1e-12 || (Math.Abs(c - nextCost[ns]) <= 1e-12 && next > nextExact[ns]))

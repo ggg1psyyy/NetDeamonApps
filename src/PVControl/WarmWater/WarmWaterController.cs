@@ -182,7 +182,9 @@ public sealed class WarmWaterController
     else if (Heating && !oneTime && AutomaticSetpoint is { } auto) forced = auto;
 
     var request = new PlanRequest(now, temp, slots, prices, Model, comfort, Config.MaxTemp, forced, Config.RunStartCostEur,
-      Config.OneTimeHysteresisK, Heating || _runSawHeating);   // a pause in a running heating (11-14 23:11) isn't a wait
+      Config.OneTimeHysteresisK, Heating || _runSawHeating,   // a pause in a running heating (11-14 23:11) isn't a wait
+      // the control's minimum off time: no plan with runs closer than it, nor a start before it ends after the last stop
+      (int)Math.Ceiling(WarmWaterControl.MinOffTime.TotalMinutes / TimeRange.SlotMinutes), _lastStop + WarmWaterControl.MinOffTime);
     Plan = WarmWaterPlanner.Plan(request);
     Automatic = AutomaticSetpoint is { } setpoint
       ? WarmWaterPlanner.PredictAutomatic(request, setpoint, Config.AutomaticHysteresisK, Heating)
