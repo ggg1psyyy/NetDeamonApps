@@ -817,6 +817,37 @@ namespace NetDeamon.apps.PVControl
     }
     #endregion
 
+    #region Off-grid
+    private readonly OffGrid.OffGridTracker _offGrid = new();
+    private bool _offGridSeeded;
+
+    /// <summary>The inverter's grid status this cycle (<see cref="OffGrid.OffGridTracker"/>): off-grid for
+    /// <c>OffGridLoadPauseMinutes</c> pauses the EV and planned warm-water runs until it is on-grid that long again.</summary>
+    /// <param name="now">The cycle's time.</param>
+    private void ObserveOffGrid(DateTime now)
+    {
+      if (PVCC_Config.GridStatusEntity is not { } entity) return;
+      string? state = entity.State;
+      bool? off = OffGrid.OffGridTracker.IsOffGrid(state, PVCC_Config.OffGridStates);
+      if (!_offGridSeeded && off is { } known)
+      {
+        PVCC_Logger.LogInformation("Off-grid watch: {Entity} = {State} ({Meaning})", entity.EntityId, state, known ? "off-grid" : "on-grid");
+        // After a start an off-grid phase counts from its real start, not from the first cycle.
+        _offGrid.Seed(known, entity.EntityState?.LastChanged?.ToLocalTime());
+        _offGridSeeded = true;
+      }
+      bool wasOff = _offGrid.OffGridSince is not null;
+      bool changed = _offGrid.Observe(now, off, TimeSpan.FromMinutes(PVCC_Config.OffGridLoadPauseMinutes));
+      if (!wasOff && _offGrid.OffGridSince is not null)
+        PVCC_Logger.LogWarning("Inverter off-grid ({State}): the house runs from the battery", state);
+      else if (wasOff && _offGrid.OffGridSince is null)
+        PVCC_Logger.LogInformation("Inverter back on-grid ({State})", state);
+      if (changed)
+        PVCC_Logger.LogWarning(_offGrid.Paused ? "Off-grid for {Minutes} min: the EV and planned warm-water runs paused ({Reason})"
+          : "On-grid again for {Minutes} min: the EV and planned warm-water runs resume", PVCC_Config.OffGridLoadPauseMinutes, _offGrid.Reason);
+    }
+    #endregion
+
     #region Import cap
     private Entity? _importQuarterEntity, _importMonthPeakEntity;
     private ImportCap.QuarterImport? _quarterImportField;
@@ -928,7 +959,9 @@ namespace NetDeamon.apps.PVControl
       ["import_cap_reason"] = _importCap.Reason,
       ["cap_kw"] = PVCC_Config.MaxGridImportW / 1000.0,
       ["allowed_kw"] = Math.Round(_importCap.AllowedW / 1000.0, 2),
-      ["extra_loads_paused"] = _importCap.PauseExtraLoads,
+      ["extra_loads_paused"] = _importCap.PauseExtraLoads,   // the import cap's (restored after a restart); off-grid below
+      ["off_grid_since"] = _offGrid.OffGridSince?.ToISO8601(),
+      ["off_grid_pause"] = _offGrid.Reason,
       ["headroom_w"] = _importCap.HeadroomW,
       ["voltage_v"] = PVCC_Config.BatteryVoltageV,
       ["battery_current_a"] = command.CurrentA,
@@ -1259,6 +1292,7 @@ namespace NetDeamon.apps.PVControl
       issues.AddRange(HealthChecks.InverterSync(sync is not null, _inverterOutOfSyncSince, blocked, now));
       issues.AddRange(HealthChecks.ImportCap(PVCC_Config.MaxGridImportW, PVCC_Config.ImportCapWarnW, _quarterImport.Counter.ActiveIndex,
         PVCC_Config.TotalImportEnergyEntities.Select(e => e.EntityId).ToList(), _lastOverCap, now));
+      issues.AddRange(HealthChecks.OffGrid(_offGrid.OffGridSince, _offGrid.Reason));
       issues.AddRange(HealthChecks.WarmWater(_house.WarmWater is not null, _house.WarmWater?.HeatPumpAvailable ?? true));
       issues.AddRange(HealthChecks.WeatherForecast(_house.Weather is not null, _house.Weather?.LastUpdate, now, LoadModel.WeatherForecast.MaxAge));
       issues.AddRange(HealthChecks.LoadForecast(_house.WeatherLoad is not null && ReferenceEquals(_house.Prediction_Load, _house.WeatherLoad), _house.WeatherLoad?.Source));
@@ -1348,6 +1382,7 @@ namespace NetDeamon.apps.PVControl
       DateTime now = DateTime.Now;
       // Independent of the battery SoC: the cap holds even while PVControl doesn't plan.
       await ImportCapCycleAsync(now);
+      ObserveOffGrid(now);
       // Short SoC dropouts are bridged with the last good value (BatteryState.BatterySoc); after
       // SoCMaxHold nothing is decided from the battery — the inverter runs in its own normal mode.
       if (_house.Battery.IsSoCUnavailable(now))
@@ -1458,8 +1493,9 @@ namespace NetDeamon.apps.PVControl
     {
       foreach (var load in _house.SchedulableLoads)
       {
-        // The import cap pauses a running load on top of its plan (the plan itself stays).
-        bool capPaused = load.ChargeNow && _importCap.PauseExtraLoads;
+        // The import cap — or an off-grid phase (OffGridTracker) — pauses a running load on top of its plan (the plan itself stays).
+        bool capPaused = load.ChargeNow && (_importCap.PauseExtraLoads || _offGrid.Paused);
+        string? pausedBy = !capPaused ? null : _offGrid.Paused ? $"Off-grid: paused ({_offGrid.Reason})" : $"Import cap: paused ({_importCap.Reason})";
         await PVCC_EntityManager.SetStateAsync(load.ChargeNowEntity.EntityId, load.ChargeNow && !capPaused ? "ON" : "OFF");
         int powerAvgW = load.PowerAverage?.GetAverage() ?? 0;
         int netPvW = _house.CurrentAveragePVPower - Math.Max(0, _house.CurrentAverageHouseLoad - powerAvgW);
@@ -1482,7 +1518,7 @@ namespace NetDeamon.apps.PVControl
         var chargeEndPredicted = load.PlannedSessions.Count > 0 ? load.PlannedSessions[^1].EndTime : load.PredictedEnd;
         var attr_load = new
         {
-          charge_status_reason = capPaused ? $"Import cap: paused ({_importCap.Reason}) — plan: {load.ChargeReasonAt(now)}" : load.ChargeReasonAt(now),
+          charge_status_reason = pausedBy is not null ? $"{pausedBy} — plan: {load.ChargeReasonAt(now)}" : load.ChargeReasonAt(now),
           mode = load.Mode.ToString(),
           target_level = load.TargetLevel,
           current_level = load.CurrentLevel,
@@ -1515,6 +1551,7 @@ namespace NetDeamon.apps.PVControl
         // Not the cycle's `now`: the plan was just made (up to ~1 s later) and its current run
         // starts at that time — an earlier `now` found no current run and stopped the heating.
         warmWater.ImportHeadroomW = PVCC_Config.MaxGridImportW > 0 ? _importCap.HeadroomW : null;
+        warmWater.OffGridReason = _offGrid.Reason;
         await warmWater.ActAsync(DateTime.Now);
         await warmWater.PublishAsync(now);
       }

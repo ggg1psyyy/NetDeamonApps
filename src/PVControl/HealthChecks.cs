@@ -93,6 +93,19 @@ public static class HealthChecks
       yield return new HealthIssue("pv_forecast_steering", HealthLevel.degraded, $"PV forecast steered by {steering.Source} — {steering.Reason}");
   }
 
+  /// <summary>The inverter off-grid (<see cref="OffGrid.OffGridTracker"/>): degraded while it lasts (the monitor's 30-s
+  /// debounce skips a dip like 2026-11-23's 8 s), with the loads' pause when it applies.</summary>
+  /// <param name="offGridSince">Start of the off-grid phase; null: on-grid.</param>
+  /// <param name="pause">The loads' pause reason; null: not paused.</param>
+  public static IEnumerable<HealthIssue> OffGrid(DateTime? offGridSince, string? pause)
+  {
+    if (offGridSince is { } since)
+      yield return new HealthIssue("off_grid", HealthLevel.degraded,
+        $"Inverter off-grid since {since:HH:mm} — the house runs from the battery" + (pause is null ? "" : "; EV and planned warm water paused"));
+    else if (pause is not null)
+      yield return new HealthIssue("off_grid", HealthLevel.degraded, $"Back on-grid; EV and planned warm water stay paused until it is stable ({pause})");
+  }
+
   /// <summary>Failed 15-s cycles in a row: one = degraded, three or more = error.</summary>
   /// <param name="consecutiveFailures">Failures in a row.</param>
   /// <param name="lastError">Message of the last failure.</param>

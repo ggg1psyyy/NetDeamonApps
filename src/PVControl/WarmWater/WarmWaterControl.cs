@@ -37,11 +37,13 @@ public enum WarmWaterMode
 /// <param name="RunSawHeating">The heat pump heated (warm water) since the one-time heating went active.</param>
 /// <param name="StartHysteresisK">The heat pump starts only this far below the setpoint, K (<see cref="WarmWaterConfig.OneTimeHysteresisK"/>).</param>
 /// <param name="OwnStart">The active one-time heating is PVControl's own start (not armed by hand or at the heat pump).</param>
+/// <param name="OffGridReason">The inverter has been off-grid long enough to pause loads (<c>OffGridTracker</c>): no planned
+/// start (the heat pump would run from the battery); a running heating finishes, the boost stays allowed. Null: on-grid.</param>
 public readonly record struct ControlInput(
   DateTime Now, double Temp, bool SwitchOn, bool OneTimeActive, double? Setpoint, DateTime? LastCommand, DateTime? LastStart,
   WarmWaterMode Mode, IReadOnlyList<PlannedRun> Runs, double MaxTemp,
   bool BoostOn, double BoostTemp, DateTime? BoostSince, bool BoostSawRunning, int BoostTimeoutMinutes,
-  DateTime? LastStop = null, int? ImportHeadroomW = null, int StartPowerW = 0, bool RunSawHeating = true, double StartHysteresisK = 0, bool OwnStart = false);
+  DateTime? LastStop = null, int? ImportHeadroomW = null, int StartPowerW = 0, bool RunSawHeating = true, double StartHysteresisK = 0, bool OwnStart = false, string? OffGridReason = null);
 
 /// <summary>
 /// The controller's bookkeeping of a one-time heating, cycle by cycle (pure, so it is tested): whether it is active,
@@ -199,6 +201,8 @@ public static class WarmWaterControl
     double minRun = Math.Max(MinRunK, c.StartHysteresisK);
     if (c.Temp > run.TargetTemp - minRun)
       return With(ControlDecision.Wait($"Planned run too small ({c.Temp:F1} → {run.TargetTemp:F1} °C, < {minRun:F1} K)"));
+    if (c.OffGridReason is { } offGrid)
+      return With(ControlDecision.Wait($"Plan: {offGrid} — no planned start"));
     if (c.LastStop is { } stopped && c.Now - stopped < MinOffTime)
       return With(ControlDecision.Wait($"Off-time: no start before {stopped + MinOffTime:HH:mm}"));
     if (capFull is not null)

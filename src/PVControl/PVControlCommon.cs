@@ -247,6 +247,12 @@ namespace NetDeamon.apps.PVControl
     /// <summary>HA's feedback whether the inverter runs the published inverter command (on = in sync; attribute
     /// <c>blocked</c> = the reconciler gave up); null = not checked.</summary>
     public Entity? InverterSyncEntity { get; set; }
+    /// <summary>The inverter's grid status (e.g. <c>sensor.solax_grid_status</c>); null: off-grid phases aren't watched.</summary>
+    public Entity? GridStatusEntity { get; set; }
+    /// <summary>States of <see cref="GridStatusEntity"/> that mean off-grid (the house on the battery via EPS).</summary>
+    public List<string> OffGridStates { get; set; } = ["OffGrid"];
+    /// <summary>Off-grid this long → the EV and planned warm-water runs pause; on-grid this long again → they resume, minutes.</summary>
+    public int OffGridLoadPauseMinutes { get; set; } = 5;
     /// <summary>Battery voltage while charging (W per A of the charge current); 230 V without it.</summary>
     public Entity? BatteryVoltageEntity { get; set; }
     /// <summary>Battery voltage, V: <see cref="BatteryVoltageEntity"/> in 5-V steps (the plan shouldn't follow every fluctuation), else 230.</summary>

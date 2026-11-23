@@ -304,6 +304,18 @@ hl=0W … charge=0W`), so "No Discharge" charged nothing and "Enabled Feedin Pri
 integration stops the loop ("a required control input is invalid: ['house_load_alt']") and the inverter runs plain Self
 Use (the battery discharged under the floor until the sync gave up after 5 tries).
 
+### Off-grid: pause the loads that would drain the battery (2026-11-23)
+
+03:34:56 the inverter reported OffGrid for 8 s: a grid voltage dip (L1 233 → 217.6 V in the 2-s sample, then ~4 V
+higher than before on all phases — a switching operation in the grid), the inverter tripped as its protection must,
+fed the EPS output (almost the whole house) from the battery (up to 598 W) and reconnected after its 5-minute check.
+The utility meter kept counting and nothing in the house restarted: the grid was weak for a moment, not gone. A real
+outage of minutes would run the EV (1.8 kW) and a planned warm-water run (up to 3 kW, the compressor is on EPS) from the
+battery. So after 5 minutes off-grid both pause (`OffGrid/OffGridTracker`, the same `charge_now` path as the import
+cap's pause; the warm-water control waits like for the import cap) and resume only after 5 minutes on-grid again, so a
+flickering grid doesn't restart them; a running heating finishes and the boost stays allowed (the user's choice). Health
+degraded meanwhile — its 30-s debounce skips a dip like this one.
+
 ### PV forecast correction (`PvForecast/`, shadow; steering)
 
 **Why — the forecast was 2× too high every day of 2026-11-01…09** (Open-Meteo, noted the evening before: 6.0–14.0
