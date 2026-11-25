@@ -1671,6 +1671,20 @@ first quarter's smallest target, +1 % in a minute, then normal, replanned, again
 each under the 1 ct. The late charge itself stays (dropping the end margin would change the cost model the comparison
 and the tariff advisor use); 30 h away it is never run — the horizon moves on.
 
+The 4 h weren't enough: 2026-11-24 14:27–16:07 (Fair, enforced 20 %, 22–36 %) force_charge and normal alternated ~20
+times, often every 1–2 minutes. The first quarter's decision followed the whole percent of the SoC sensor — 22 %: charge
+to 24, 23–24 %: normal, 25 %: charge to 26 — so charging 1 % turned the plan off and the drain turned it on again. At
+one price, charging later and charging now are ties of the whole day; pulled to now the charge cost its round trip
+(0.77 ct at 25 %), under the rule's 1 ct. A block now has to end within the look-ahead: one price throughout it is no
+block, the rule doesn't apply. Of 1487 logged snapshots (2026-11-10 … 11-25) only the two affected plans changed (12:30,
+14:30; the same or lower cost, no penalty), none with varying prices — the snapshots are quarter starts, the switching
+inside the quarters shows only in a replay: from normal or grid_only no charge above the floor at 21–31 % in any quarter
+of 14:30–16:00. Open: a charge already running continues on a tie without its start cost (`ChargeStartEur`), at times
+in steps (29 → 32 → 34 % in the 15:15 replay) — the live 15:03–16:07 targets of 27–31 %. Since a charge above the floor
+no longer starts, it only happens after one started at the floor (19–20 % → 22 %, which mostly stops there). Also
+still: a flat stretch that ends within the 4 h (a tariff switch at midnight, the network rate periods from 2027-10) is
+a block, the rule applies there with its 1 ct.
+
 ### The battery value in the graph (`DpSlot.BatteryValue`)
 
 2026-11-05: the plan held at 40 % through the night (0.45–0.47) and ran the battery in the morning (0.50–0.56) —

@@ -179,13 +179,35 @@ public class FixedTariffRulesTests
   }
 
   [Fact]
-  public void Fixed_ATieChargeTomorrowNight_WithoutTheLimit_StartsNow()
+  public void Fixed_ATieChargeTomorrowNight_EvenWithoutTheLimit_NotPulledToNow()
   {
     // The snapshot's own flip: looking over the whole horizon, the charge-now rule started tomorrow's 23:30 charge at once.
+    // One price throughout is no price block — the rule doesn't apply, however far it looks.
     var input = Live("2026-11-17_1800");
     var plan = BatteryDpPlanner.Plan(input, new DpOptions(ChargeNowWithinQuarters: 1000));
-    Assert.Equal(InverterModes.force_charge, plan.Slots[0].Mode);
+    Assert.NotEqual(InverterModes.force_charge, plan.Slots[0].Mode);
     Assert.Contains(BatteryDpPlanner.Plan(input).Slots, s => s.Mode == InverterModes.force_charge && s.Time >= input.StartTime.AddHours(24));
+  }
+
+  [Theory]
+  [InlineData("2026-11-24_1430", InverterModes.normal)]
+  [InlineData("2026-11-24_1430", InverterModes.grid_only)]
+  [InlineData("2026-11-24_1230", InverterModes.grid_only)]
+  [InlineData("2026-11-24_1230", InverterModes.normal)]
+  public void Fixed_AFlatPrice_NoChargeAboveTheFloor_AtAnyPercentOrMinute(string name, InverterModes running)
+  {
+    // Live 2026-11-24 14:27–16:07 (Fair, enforced 20 %, 22–36 %): force_charge ↔ normal ~20 times. The decision flipped with
+    // the whole percent (22: charge to 24, 23–24: normal, 25: charge to 26) — at one price the charge-now rule pulled a
+    // tie charge of the day to now, 0.77 ct dearer (its round trip) and within its 1 ct. No charge above the floor now.
+    var snap = Snap(name);
+    var q = snap.StartTime.RoundToNearestQuarterHour(); if (q > snap.StartTime) q = q.AddMinutes(-15);
+    foreach (int soc in Enumerable.Range(snap.PreferredMinSocPercent + 1, 6))
+      foreach (int min in new[] { 0, 5, 10 })
+      {
+        var input = (snap with { StartTime = q.AddMinutes(min).AddSeconds(15), StartSocPercent = soc, CurrentMode = running }).ToInput();
+        var first = BatteryDpPlanner.Plan(input).Slots[0];
+        Assert.True(first.Mode != InverterModes.force_charge, $"{name} {soc} % +{min} min running {running}: charge to {first.TargetSocPct} %");
+      }
   }
 
   [Fact]

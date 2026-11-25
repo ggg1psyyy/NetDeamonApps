@@ -21,11 +21,13 @@ namespace NetDeamon.apps.PVControl.Optimizer;
 /// for the whole night as an extra charge quarter came and went — 4 switches at 0.1 ct, none at 1 ct).</param>
 /// <param name="ChargeNowEur">A grid charge the plan has later in the current price block starts (or keeps running) now
 /// while that costs no more than this, € — within one price block the start is a tie, and the minute's replans moved it
-/// (2026-11-04 12:00–12:08: VPP, normal, bulk, normal).</param>
+/// (2026-11-04 12:00–12:08: VPP, normal, bulk, normal). Only a block that ends within <see cref="ChargeNowWithinQuarters"/>:
+/// one price throughout it (a flat or fixed tariff) is no block (live 2026-11-24: a tie charge pulled to now at its round
+/// trip's 0.77 ct, flipping with each 1 %).</param>
 /// <param name="ChargeNowWithinQuarters">How far ahead the charge-now rule looks, quarters: a later charge further away
-/// than this stays where the plan put it, even within one price block (16 = 4 h). Under a fixed tariff the whole horizon
-/// is one block — a tie charge at tomorrow 23:30 was pulled to now, +1 % in a minute, then normal, and again every 1–3 min
-/// (live 2026-11-17 18:00–19:25: 40 starts, 45 → 59 % bought at 0.2654).</param>
+/// than this stays where the plan put it, even within one price block (16 = 4 h) — a block that ends within it is one the
+/// rule applies to at all (one price throughout the look-ahead isn't; live 2026-11-17 18:00–19:25 under the fixed tariff a
+/// tie charge at tomorrow 23:30 was pulled to now: 40 starts, 45 → 59 % bought at 0.2654).</param>
 /// <param name="ChargeStartEur">Cost of starting a grid charge after a quarter without one, €: one long charge beats a
 /// block plus top-ups in quarters a fraction of a cent dearer (2026-11-07: 11:00 bulk, then five VPP top-ups at
 /// +0.1 ct/kWh). A running charge (the current mode) continues without it. It also drops a whole charge that saves less
@@ -493,7 +495,11 @@ public static class BatteryDpPlanner
       int blockEnd = 1;
       int lookEnd = Math.Min(n, o.ChargeNowWithinQuarters);
       while (blockEnd < lookEnd && input.ImportPrices.GetPriceOrMean(times[blockEnd]) == price0) blockEnd++;
-      if (plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
+      // Only a block that ends within the look-ahead: one price throughout it (a flat or fixed tariff) is no block — a
+      // later charge there is a tie of the whole day, and pulled to now it cost its round trip and flipped with each
+      // 1 % (live 2026-11-24 14:27–16:07: force_charge ↔ normal ~20 times, 22 → 36 % bought at the flat 0.2654).
+      bool blockEnds = blockEnd < lookEnd || (blockEnd < n && input.ImportPrices.GetPriceOrMean(times[blockEnd]) != price0);
+      if (blockEnds && plan.Slots.Take(blockEnd).Skip(1).Any(s => s.Mode == InverterModes.force_charge))
       {
         bool bulk = input.CurrentMode is { Mode: InverterModes.force_charge, Bulk: true };
         Action? best = null;
