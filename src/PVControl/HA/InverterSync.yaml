@@ -8,7 +8,7 @@ description: |-
 
   Applies when PV Control published a new version and when the inverter left the commanded state, and refreshes the mode-8 run time (and a mode-8 loop's autorepeat: feedin_priority, grid_only) before it ends: both run 1200 s, refreshed after 600 s.
   Not while PV Control is down (its last cycle older than 2 min): then the mode-8 run time lapses and the inverter returns to its base work mode by itself. Manual Mode (bulk charge) has no run time, so after 5 min without PV Control the inverter is put back to Self Use here.
-  More than 5 re-applies of the same version: stop, flag, notify (PV Control health → error).
+  More than 5 re-applies of the same version: stop, flag, notify (PV Control health → error). The count starts again once the inverter has been in sync for 10 min (separate incidents don't add up — 2026-11-24 09:26: retries from 06:49 and 07:31 blocked after two).
 mode: queued
 max: 3
 triggers:
@@ -55,7 +55,19 @@ variables:
   fell_back: "{{ command_ok and seq == applied_seq and is_state('binary_sensor.pv_control_inverter_in_sync', 'off') }}"
   loop: "{{ (mode == 'grid_only' and export_allowed) or (mode in ['normal', 'feedin_priority'] and (mode == 'feedin_priority' or not charge_enabled or not export_allowed)) }}"
   refresh_due: "{{ command_ok and seq == applied_seq and (vpp or loop) and not fell_back and applied_age_s > 600 }}"
+  settled: >-
+    {{ is_state('binary_sensor.pv_control_inverter_in_sync', 'on') and states('input_number.pv_control_reapply_count') | int(0) > 0
+       and (now() - states.binary_sensor.pv_control_inverter_in_sync.last_changed).total_seconds() > 600 }}
 actions:
+  - if:
+      - condition: template
+        value_template: "{{ settled }}"
+    then:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.pv_control_reapply_count
+        data:
+          value: 0
   - choose:
       - conditions:
           - condition: template

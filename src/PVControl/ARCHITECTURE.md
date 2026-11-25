@@ -1018,7 +1018,11 @@ a target PVControl raised meanwhile). So PVControl alone decides when a mode end
 (1200 s, refreshed after 600 s while PVControl runs, NextMotion back to the base mode) only makes
 the inverter fall back to Self Use by itself if HA or PVControl stop. The command carries a version
 (`seq`); the script stores the version it applied, so the reconciler can tell a new command from a
-fallback (re-applied at most 5 times per version, then blocked, notified, health error). The
+fallback (re-applied at most 5 times per version, then blocked, notified, health error; the count starts again
+after 10 min in sync — 2026-11-24 09:26 it blocked after two tries, retries from 06:49 and 07:31 of the same
+version still counted, and three trigger entities back from the Solax restart at the same second (09:26:13) queued three
+runs at once — the first re-apply already took; at once instead of after 10 min would let an inverter that keeps
+falling back retry forever). The
 writes go through the integration's `*_direct` entities, not its autorepeat loops (solax-modbus
 2026.10.1 broke those, issue #2394). PVControl stays manufacturer-independent: it publishes the
 command and reads the in-sync feedback; the register writes live in HA. The command is the
